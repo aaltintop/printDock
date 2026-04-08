@@ -1,0 +1,26 @@
+<div
+  id="printdock-upload-root"
+  data-product-id="{{ product.id }}"
+  data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+  data-required="{{ block.settings.required }}"
+>
+  <div class="printdock-loading">Loading upload field...</div>
+</div>
+
+<link rel="stylesheet" href="{{ 'upload.css' | asset_url }}">
+<script src="{{ 'upload.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "PrintDock Upload",
+  "target": "section",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "required",
+      "label": "Require upload before add to cart",
+      "default": true
+    }
+  ]
+}
+{% endschema %}
