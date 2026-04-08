@@ -22,6 +22,11 @@ firebase-debug.*.log
 *service-account*.json
 *firebase-adminsdk*.json
 google-credentials.json
+firebase-credentials.json
+
+# Local secrets (never commit)
+.secrets/
+secrets/
 
 
 
