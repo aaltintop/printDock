@@ -15,7 +15,8 @@
     "shopify": "shopify",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "migrate:firestore": "node scripts/migrate-firestore-hierarchy.mjs"
   },
   "type": "module",
   "engines": {

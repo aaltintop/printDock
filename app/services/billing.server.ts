@@ -1,9 +1,9 @@
 import { db } from "../firebase.server";
+import { billableLinesCollection, getBillingPlan, jobsCollection } from "./shop-data.server";
 
 const PLANS = {
-  starter: { monthlyFee: 19, percentageBps: 75, cap: 200 },  // 0.75%
-  growth:  { monthlyFee: 49, percentageBps: 50, cap: 500 },  // 0.50%
-  pro:     { monthlyFee: 99, percentageBps: 30, cap: 1000 }, // 0.30%
+  basic_plus: { monthlyFee: 19, percentageBps: 75, cap: 200 }, // 0.75%
+  pro_plus: { monthlyFee: 49, percentageBps: 50, cap: 500 }, // 0.50%
 } as const;
 
 // Create a Shopify app subscription (recurring + usage) via GraphQL
@@ -56,10 +56,16 @@ export async function processBillableOrder(
   shopDomain: string,
   order: any // Shopify order payload
 ) {
-  const billingPlanDoc = await db.collection("billingPlans").doc(shopDomain).get();
-  if (!billingPlanDoc.exists) return;
-  const billingPlan = billingPlanDoc.data();
-  if (!billingPlan || billingPlan.status !== "active") return;
+  const billingPlan = await getBillingPlan(shopDomain);
+  if (billingPlan.status !== "active") return;
+
+  const percentageRateBps =
+    billingPlan.planCode === "pro_plus"
+      ? 50
+      : billingPlan.planCode === "basic_plus"
+        ? 75
+        : 0;
+  if (percentageRateBps <= 0) return;
 
   for (const line of order.line_items) {
     const sessionToken = line.properties?.find(
@@ -70,22 +76,25 @@ export async function processBillableOrder(
 
     // Find the job created for this line
     const jobId = `${order.id}_${line.id}`;
-    const jobDoc = await db.collection("jobs").doc(jobId).get();
+    let jobDoc = await jobsCollection(shopDomain).doc(jobId).get();
+    if (!jobDoc.exists) {
+      jobDoc = await db.collection("jobs").doc(jobId).get();
+    }
 
     if (!jobDoc.exists) continue;
 
     // Idempotency: don't double-bill
     const billableLineId = `${jobId}_billing`;
-    const existing = await db.collection("billableLines").doc(billableLineId).get();
+    const existing = await billableLinesCollection(shopDomain).doc(billableLineId).get();
     if (existing.exists) continue;
 
-    const amount = parseFloat(line.price) * line.quantity;
-    const computedFee = amount * (billingPlan.percentageRateBps / 10000);
+    const amount = Number(line.price ?? 0) * Number(line.quantity ?? 1);
+    const computedFee = amount * (percentageRateBps / 10000);
 
-    await db.collection("billableLines").doc(billableLineId).set({
+    await billableLinesCollection(shopDomain).doc(billableLineId).set({
       shopDomain,
       jobId,
-      billingPlanId: billingPlan.subscriptionId,
+      billingPlanId: billingPlan.subscriptionId ?? null,
       shopifyOrderId: String(order.id),
       lineItemId: String(line.id),
       recognizedAmount: amount,
@@ -94,6 +103,6 @@ export async function processBillableOrder(
       roundedFee: Math.round(computedFee * 100) / 100,
       recognitionStatus: "recognized",
       recognizedAt: new Date().toISOString(),
-    });
+    }, { merge: true });
   }
 }

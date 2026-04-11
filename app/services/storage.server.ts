@@ -54,3 +54,11 @@ export async function deleteFile(storagePath: string): Promise<void> {
   const file = bucket.file(storagePath);
   await file.delete({ ignoreNotFound: true });
 }
+
+// Copy a file to another path in the same bucket.
+export async function copyFile(sourcePath: string, targetPath: string): Promise<void> {
+  const bucket = storage.bucket();
+  const sourceFile = bucket.file(sourcePath);
+  const targetFile = bucket.file(targetPath);
+  await sourceFile.copy(targetFile);
+}

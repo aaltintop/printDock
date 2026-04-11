@@ -6,6 +6,8 @@ export interface PricingConfig {
   mode: PricingMode;
   unitPrice: number;
   minPrice: number;
+  roundingEnabled?: boolean;
+  printWidth?: number;
 }
 
 export interface PricingResult {
@@ -21,22 +23,33 @@ export function calculatePrice(
   quantity = 1,
   currency = "USD"
 ): PricingResult {
-  const { mode, unitPrice, minPrice } = config;
+  const { mode, unitPrice, minPrice, roundingEnabled = false, printWidth = 0 } = config;
   let rawPrice = 0;
   let explanation = "";
+
+  const roundDimension = (value: number) => (roundingEnabled ? Math.ceil(value) : value);
 
   switch (mode) {
     case "inch_height":
       if (metadata.heightInch) {
-        rawPrice = metadata.heightInch * unitPrice;
-        explanation = `${metadata.heightInch.toFixed(2)}" height × $${unitPrice}/inch`;
+        const height = roundDimension(metadata.heightInch);
+        rawPrice = height * unitPrice;
+        explanation = `${height.toFixed(2)}" height × $${unitPrice}/inch`;
+        if (roundingEnabled) {
+          explanation += " (rounded up)";
+        }
       }
       break;
     case "inch_square":
-      if (metadata.widthInch && metadata.heightInch) {
-        const area = metadata.widthInch * metadata.heightInch;
+      if ((metadata.widthInch || printWidth > 0) && metadata.heightInch) {
+        const width = roundDimension(printWidth > 0 ? printWidth : (metadata.widthInch as number));
+        const height = roundDimension(metadata.heightInch);
+        const area = width * height;
         rawPrice = area * unitPrice;
-        explanation = `${metadata.widthInch.toFixed(2)}" × ${metadata.heightInch.toFixed(2)}" = ${area.toFixed(2)} in² × $${unitPrice}/in²`;
+        explanation = `${width.toFixed(2)}" × ${height.toFixed(2)}" = ${area.toFixed(2)} in² × $${unitPrice}/in²`;
+        if (roundingEnabled) {
+          explanation += " (rounded up)";
+        }
       }
       break;
     case "per_file":

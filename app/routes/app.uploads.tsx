@@ -3,27 +3,21 @@ import { data } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
-import { db } from "../firebase.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
+import { listUploadSessions } from "../services/shop-data.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  // Fetch sessions for this shop
-  const sessionsSnapshot = await db
-    .collection("sessions")
-    .where("shopDomain", "==", session.shop)
-    .get();
-
-  const uploads = sessionsSnapshot.docs
-    .map((doc) => {
-      const docData = doc.data();
+  const uploads = (await listUploadSessions(session.shop))
+    .map((uploadSession) => {
+      const asset = uploadSession.asset ?? uploadSession.assets[0] ?? null;
       return {
-        id: doc.id,
-        status: docData.status,
-        createdAt: docData.expiresAt ? new Date(new Date(docData.expiresAt).getTime() - 2 * 60 * 60 * 1000).toISOString() : new Date().toISOString(),
-        asset: docData.asset || null,
-        productId: docData.productId,
+        id: uploadSession.id,
+        status: uploadSession.status,
+        createdAt: uploadSession.createdAt || new Date().toISOString(),
+        asset,
+        productId: uploadSession.productId,
       };
     })
     .filter((u) => u.asset !== null)

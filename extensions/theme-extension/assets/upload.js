@@ -5,25 +5,115 @@
   if (!root) return;
 
   const PRODUCT_ID = root.dataset.productId;
-  const IS_REQUIRED = root.dataset.required === "true";
+  const BLOCK_REQUIRED = root.dataset.required === "true";
   const SESSION_STORAGE_KEY = `printdock_session_${PRODUCT_ID}`;
   const PROXY_URL = "/apps/printdock"; // Configured in shopify.app.toml
 
-  let sessionToken = null;
-  let uploadedFile = null; // Strict 1-file limit for Firebase MVP
+  const DEFAULT_CONFIG = {
+    id: null,
+    isRequired: BLOCK_REQUIRED,
+    storefrontTitle: "Upload your artwork",
+    storefrontDescription: "Supported files: PNG, JPG, JPEG, PDF",
+    allowedExtensions: ["png", "jpg", "jpeg", "pdf"],
+    maxFileMB: 50,
+    minFiles: 1,
+    maxFiles: 1,
+    fileQuantityManagement: {
+      enabled: false,
+      mode: "product_quantity",
+    },
+  };
+
+  let fieldConfig = { ...DEFAULT_CONFIG };
+  let billingPlan = null;
+  let isRequired = BLOCK_REQUIRED;
+  let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || null;
+  let uploadedFiles = [];
+  let isUploading = false;
   let isBlocked = false;
 
   // ─── INIT ────────────────────────────────────────────────────────────
   async function init() {
+    await loadFieldConfig();
     renderUI();
     setupAddToCartGuard();
+    updateCartState();
+  }
+
+  async function loadFieldConfig() {
+    const variantId = root.dataset.variantId || "";
+    const configUrl = `${PROXY_URL}/api/proxy/upload/config?productId=${encodeURIComponent(
+      PRODUCT_ID,
+    )}&variantId=${encodeURIComponent(variantId)}`;
+
+    try {
+      const res = await fetch(configUrl);
+      if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
+      const payload = await res.json();
+      billingPlan = payload.billingPlan || null;
+      if (payload.field) {
+        fieldConfig = Object.assign({}, DEFAULT_CONFIG, payload.field);
+      }
+    } catch (error) {
+      console.error("PrintDock config fetch error:", error);
+      fieldConfig = { ...DEFAULT_CONFIG };
+    }
+
+    // If no field is configured, don't block checkout by default.
+    isRequired = Boolean(fieldConfig.id) && Boolean(fieldConfig.isRequired);
   }
 
   // ─── FILE UPLOAD ──────────────────────────────────────────────────────
   async function handleFiles(files) {
     if (files.length === 0) return;
-    // We only take the first file due to the single-file constraint
-    await uploadFile(files[0]);
+    if (
+      billingPlan &&
+      Number(billingPlan.monthlyUploadsLimit || 0) > 0 &&
+      Number(billingPlan.usageThisMonth || 0) >= Number(billingPlan.monthlyUploadsLimit || 0)
+    ) {
+      showError("Monthly upload limit reached. Please contact the merchant to upgrade plan.");
+      return;
+    }
+
+    const slotsLeft = Math.max(fieldConfig.maxFiles - uploadedFiles.length, 0);
+    if (slotsLeft <= 0) {
+      showError(`Maximum file count reached (${fieldConfig.maxFiles}).`);
+      return;
+    }
+    const selectedFiles = files.slice(0, slotsLeft);
+
+    if (isUploading) {
+      showError("Please wait until current upload finishes.");
+      return;
+    }
+
+    isUploading = true;
+    for (const selected of selectedFiles) {
+      if (!isValidExtension(selected.name)) {
+        showError(
+          `File type not allowed. Supported: ${fieldConfig.allowedExtensions.join(", ").toUpperCase()}`,
+        );
+        continue;
+      }
+
+      const maxBytes = fieldConfig.maxFileMB * 1024 * 1024;
+      if (selected.size > maxBytes) {
+        showError(`File is too large. Max size is ${fieldConfig.maxFileMB}MB.`);
+        continue;
+      }
+      await uploadFile(selected);
+    }
+    isUploading = false;
+  }
+
+  function isValidExtension(fileName) {
+    const ext = fileName.split(".").pop();
+    if (!ext) return false;
+    return fieldConfig.allowedExtensions.includes(ext.toLowerCase());
+  }
+
+  function inputAccept() {
+    return fieldConfig.allowedExtensions.map((ext) => `.${ext}`).join(",");
   }
 
   async function uploadFile(file) {
@@ -37,10 +127,13 @@
       pricing: null,
       validationResults: [],
       blocked: false,
+      quantity: defaultFileQuantity(),
+      storagePath: null,
     };
 
-    uploadedFile = fileEntry;
+    uploadedFiles.push(fileEntry);
     renderFileList();
+    updateCartState();
 
     try {
       // Step 1: Get presigned URL from our App Proxy
@@ -50,6 +143,8 @@
         body: JSON.stringify({
           productId: PRODUCT_ID,
           variantId: root.dataset.variantId || "",
+          fieldId: fieldConfig.id || "",
+          sessionToken: sessionToken || undefined,
           fileName: file.name,
           mimeType: file.type,
         }),
@@ -61,6 +156,7 @@
       sessionToken = sessionData.sessionToken;
       localStorage.setItem(SESSION_STORAGE_KEY, sessionToken);
       const { presignedUrl, storagePath } = sessionData;
+      fileEntry.storagePath = storagePath;
 
       // Step 2: Upload directly to Firebase Storage
       await uploadToFirebase(file, presignedUrl, (progress) => {
@@ -81,6 +177,7 @@
           originalName: file.name,
           mimeType: file.type,
           sizeBytes: file.size,
+          quantity: fileEntry.quantity || 1,
         }),
       });
       
@@ -93,6 +190,7 @@
       fileEntry.pricing = confirmData.pricing;
       fileEntry.validationResults = confirmData.validationResults;
       fileEntry.blocked = confirmData.blocked;
+      fileEntry.assetId = confirmData.asset?.id || null;
 
     } catch (err) {
       fileEntry.status = "error";
@@ -127,9 +225,10 @@
     if (!form) return;
 
     form.addEventListener("submit", (e) => {
-      if (IS_REQUIRED && (!uploadedFile || uploadedFile.status !== "success")) {
+      const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+      if (isRequired && successfulFiles.length < Math.max(1, fieldConfig.minFiles)) {
         e.preventDefault();
-        showError("Please upload your artwork before adding to cart.");
+        showError(`Please upload at least ${Math.max(1, fieldConfig.minFiles)} file(s) before adding to cart.`);
         return;
       }
       if (isBlocked) {
@@ -142,17 +241,41 @@
   }
 
   function injectCartProperties(form) {
-    if (!sessionToken || !uploadedFile || uploadedFile.status !== "success") return;
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    if (!sessionToken || successfulFiles.length === 0) return;
 
     setHiddenInput(form, "properties[_uc_session]", sessionToken);
+    setHiddenInput(form, "properties[_pd_session]", sessionToken);
+    if (fieldConfig.id) setHiddenInput(form, "properties[_pd_field_id]", fieldConfig.id);
+    setHiddenInput(form, "properties[_pd_asset_count]", String(successfulFiles.length));
+    setHiddenInput(
+      form,
+      "properties[_pd_asset_ids]",
+      successfulFiles.map((entry) => entry.assetId || entry.id).join(","),
+    );
 
-    const m = uploadedFile.metadata;
-    if (m?.widthInch && m?.heightInch) {
-      const dims = `${m.widthInch.toFixed(1)}" × ${m.heightInch.toFixed(1)}"`;
-      setHiddenInput(form, "properties[Artwork size]", dims);
-    } else {
-      setHiddenInput(form, "properties[Artwork]", uploadedFile.name);
+    const calculatedTotal = successfulFiles.reduce((sum, entry) => {
+      if (!entry.pricing) return sum;
+      const fileUnitPrice =
+        entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
+      return sum + fileUnitPrice * Math.max(1, Number(entry.quantity || 1));
+    }, 0);
+    if (Number.isFinite(calculatedTotal) && calculatedTotal > 0) {
+      setHiddenInput(form, "properties[_pd_calculated_price]", calculatedTotal.toFixed(2));
     }
+
+    const artworkNames = successfulFiles.map((entry) => entry.name).join(", ");
+    setHiddenInput(form, "properties[Artwork]", artworkNames);
+    setHiddenInput(
+      form,
+      "properties[_pd_file_quantities]",
+      JSON.stringify(
+        successfulFiles.map((entry) => ({
+          fileName: entry.name,
+          quantity: Number(entry.quantity || 1),
+        })),
+      ),
+    );
   }
 
   function setHiddenInput(form, name, value) {
@@ -167,11 +290,12 @@
   }
 
   function updateCartState() {
-    isBlocked = uploadedFile ? uploadedFile.blocked : false;
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    isBlocked = uploadedFiles.some((entry) => entry.blocked);
     const btn = document.querySelector('[name="add"], [id*="add-to-cart"], .product-form__submit');
     if (!btn) return;
 
-    if (IS_REQUIRED && (!uploadedFile || uploadedFile.status !== "success")) {
+    if (isRequired && successfulFiles.length < Math.max(1, fieldConfig.minFiles)) {
       btn.disabled = true;
       btn.title = "Upload your artwork to continue";
     } else if (isBlocked) {
@@ -185,14 +309,18 @@
 
   // ─── PRICE DISPLAY ────────────────────────────────────────────────────
   function updatePriceDisplay() {
-    if (!uploadedFile || uploadedFile.status !== "success" || !uploadedFile.pricing) {
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success" && entry.pricing);
+    if (successfulFiles.length === 0) {
       const el = document.getElementById("printdock-price");
       if (el) el.remove();
       return;
     }
 
-    const total = uploadedFile.pricing.total;
-    const explanation = uploadedFile.pricing.explanation;
+    const total = successfulFiles.reduce((sum, entry) => {
+      const fileUnitPrice =
+        entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
+      return sum + fileUnitPrice * Math.max(1, Number(entry.quantity || 1));
+    }, 0);
 
     let priceEl = document.getElementById("printdock-price");
     if (!priceEl) {
@@ -203,19 +331,68 @@
 
     priceEl.innerHTML = `
       <div class="printdock-price-display">
-        <span class="printdock-price-label">Upload price:</span>
+        <span class="printdock-price-label">Calculated upload price:</span>
         <span class="printdock-price-amount">$${total.toFixed(2)}</span>
-        <span class="printdock-price-explanation">${explanation}</span>
+        <span class="printdock-price-explanation">${successfulFiles.length} file(s) in session</span>
       </div>
     `;
   }
 
+  function getProductQuantity() {
+    const form = document.querySelector('form[action*="/cart/add"]');
+    const quantityInput = form ? form.querySelector('input[name="quantity"]') : null;
+    const quantity = quantityInput ? Number(quantityInput.value) : 1;
+    return Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+  }
+
+  function defaultFileQuantity() {
+    if (
+      fieldConfig.fileQuantityManagement &&
+      fieldConfig.fileQuantityManagement.enabled &&
+      fieldConfig.fileQuantityManagement.mode === "per_file"
+    ) {
+      return 1;
+    }
+    return getProductQuantity();
+  }
+
+  function updateFileQuantity(fileId, quantity) {
+    const file = uploadedFiles.find((entry) => entry.id === fileId);
+    if (!file) return;
+    file.quantity = Math.max(1, quantity);
+    updatePriceDisplay();
+    updateCartState();
+  }
+
+  function removeFile(fileId) {
+    uploadedFiles = uploadedFiles.filter((entry) => entry.id !== fileId);
+    if (uploadedFiles.length === 0) {
+      sessionToken = null;
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+    renderFileList();
+    updateCartState();
+    updatePriceDisplay();
+  }
+
   // ─── RENDER ──────────────────────────────────────────────────────────
   function renderUI() {
+    const title = fieldConfig.storefrontTitle || "Upload your artwork";
+    const description = fieldConfig.storefrontDescription || "";
+    const supported = fieldConfig.allowedExtensions.map((ext) => ext.toUpperCase()).join(", ");
+    const usageSummary = billingPlan
+      ? `${billingPlan.usageThisMonth}/${billingPlan.monthlyUploadsLimit} uploads used this month`
+      : "";
+
     root.innerHTML = `
       <div class="printdock-upload">
+        <div class="printdock-copy">
+          <p class="printdock-drop-title">${escapeHtml(title)}</p>
+          ${description ? `<p class="printdock-drop-sub">${escapeHtml(description)}</p>` : ""}
+          ${usageSummary ? `<p class="printdock-drop-sub">${escapeHtml(usageSummary)}</p>` : ""}
+        </div>
         <div class="printdock-dropzone" id="printdock-dropzone">
-          <input type="file" id="printdock-file-input" accept=".png,.jpg,.jpeg,.pdf" hidden>
+          <input type="file" id="printdock-file-input" accept="${escapeHtml(inputAccept())}" ${fieldConfig.maxFiles > 1 ? "multiple" : ""} hidden>
           <div class="printdock-drop-content">
             <div class="printdock-drop-icon">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -223,7 +400,7 @@
               </svg>
             </div>
             <p class="printdock-drop-title">Drop your artwork here</p>
-            <p class="printdock-drop-sub">PNG, PDF, JPG — up to 500MB</p>
+            <p class="printdock-drop-sub">${supported} — up to ${fieldConfig.maxFileMB}MB · max ${fieldConfig.maxFiles} file(s)</p>
             <button type="button" class="printdock-choose-btn" id="printdock-choose-btn">Choose file</button>
           </div>
         </div>
@@ -238,7 +415,7 @@
     const chooseBtn = document.getElementById("printdock-choose-btn");
 
     chooseBtn.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", (e) => handleFiles(Array.from(e.target.files)));
+    fileInput.addEventListener("change", (e) => handleFiles(Array.from(e.target.files || [])));
 
     dropzone.addEventListener("dragover", (e) => {
       e.preventDefault();
@@ -248,7 +425,7 @@
     dropzone.addEventListener("drop", (e) => {
       e.preventDefault();
       dropzone.classList.remove("printdock-dragover");
-      handleFiles(Array.from(e.dataTransfer.files));
+      handleFiles(Array.from(e.dataTransfer.files || []));
     });
   }
 
@@ -256,48 +433,80 @@
     const list = document.getElementById("printdock-file-list");
     if (!list) return;
 
-    if (!uploadedFile) {
+    if (uploadedFiles.length === 0) {
       list.innerHTML = "";
       return;
     }
 
-    const file = uploadedFile;
+    list.innerHTML = uploadedFiles
+      .map((file) => {
+        const warningHtml = (file.validationResults || [])
+          .filter((rule) => rule.severity === "warning")
+          .map((rule) => `<div class="printdock-warning">${escapeHtml(rule.message)}</div>`)
+          .join("");
+        const blockingMessages = (file.validationResults || [])
+          .filter((rule) => rule.severity === "blocking")
+          .map((rule) => rule.message)
+          .join(", ");
+        const showQuantity =
+          file.status === "success" &&
+          fieldConfig.fileQuantityManagement &&
+          fieldConfig.fileQuantityManagement.enabled &&
+          fieldConfig.fileQuantityManagement.mode === "per_file";
 
-    list.innerHTML = `
-      <div class="printdock-file-card printdock-file-${file.status}">
-        <div class="printdock-file-info">
-          <span class="printdock-file-name">${escapeHtml(file.name)}</span>
-          <span class="printdock-file-size">${formatBytes(file.size)}</span>
-        </div>
-        ${file.status === "uploading" ? `
-          <div class="printdock-progress-bar">
-            <div class="printdock-progress-fill" style="width:${file.progress}%"></div>
+        return `
+          <div class="printdock-file-card printdock-file-${file.status}">
+            <div class="printdock-file-info">
+              <span class="printdock-file-name">${escapeHtml(file.name)}</span>
+              <span class="printdock-file-size">${formatBytes(file.size)}</span>
+            </div>
+            ${file.status === "uploading" ? `
+              <div class="printdock-progress-bar">
+                <div class="printdock-progress-fill" style="width:${file.progress}%"></div>
+              </div>
+              <span class="printdock-status">${file.progress}%</span>
+            ` : ""}
+            ${file.status === "validating" ? `<span class="printdock-status">Checking file...</span>` : ""}
+            ${file.status === "success" ? `
+              <span class="printdock-status printdock-status-ok">
+                ${file.metadata?.widthInch ? `${file.metadata.widthInch.toFixed(1)}" × ${file.metadata.heightInch.toFixed(1)}"` : ""}
+                ${file.metadata?.dpi ? `· ${file.metadata.dpi} DPI` : ""}
+              </span>
+            ` : ""}
+            ${warningHtml}
+            ${file.blocked ? `<div class="printdock-error">${escapeHtml(blockingMessages)}</div>` : ""}
+            ${file.status === "error" ? `<div class="printdock-error">${escapeHtml(file.error || "Upload failed")}</div>` : ""}
+            ${showQuantity ? `
+              <label class="printdock-status">
+                Quantity:
+                <input
+                  type="number"
+                  min="1"
+                  class="printdock-qty-input"
+                  data-file-id="${file.id}"
+                  value="${Number(file.quantity || 1)}"
+                />
+              </label>
+            ` : ""}
+            <button type="button" class="printdock-remove-btn" data-file-id="${file.id}">Remove</button>
           </div>
-          <span class="printdock-status">${file.progress}%</span>
-        ` : ""}
-        ${file.status === "validating" ? `<span class="printdock-status">Checking file...</span>` : ""}
-        ${file.status === "success" ? `
-          <span class="printdock-status printdock-status-ok">
-            ${file.metadata?.widthInch ? `${file.metadata.widthInch.toFixed(1)}" × ${file.metadata.heightInch.toFixed(1)}"` : ""}
-            ${file.metadata?.dpi ? `· ${file.metadata.dpi} DPI` : ""}
-          </span>
-        ` : ""}
-        ${file.validationResults?.filter(r => r.severity === "warning").map(r => `
-          <div class="printdock-warning">${escapeHtml(r.message)}</div>
-        `).join("") ?? ""}
-        ${file.blocked ? `<div class="printdock-error">${file.validationResults.filter(r => r.severity === "blocking").map(r => r.message).join(", ")}</div>` : ""}
-        ${file.status === "error" ? `<div class="printdock-error">${escapeHtml(file.error)}</div>` : ""}
-        <button type="button" class="printdock-remove-btn">Remove</button>
-      </div>
-    `;
+        `;
+      })
+      .join("");
 
-    // Wire remove buttons
-    list.querySelector(".printdock-remove-btn").addEventListener("click", () => {
-      uploadedFile = null;
-      sessionToken = null;
-      renderFileList();
-      updateCartState();
-      updatePriceDisplay();
+    list.querySelectorAll(".printdock-remove-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        const fileId = button.getAttribute("data-file-id");
+        if (fileId) removeFile(fileId);
+      });
+    });
+
+    list.querySelectorAll(".printdock-qty-input").forEach((input) => {
+      input.addEventListener("change", () => {
+        const fileId = input.getAttribute("data-file-id");
+        const quantity = Number(input.value || 1);
+        if (fileId) updateFileQuantity(fileId, quantity);
+      });
     });
   }
 
