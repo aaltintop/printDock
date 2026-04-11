@@ -6,7 +6,23 @@ This document explains how merchants install, configure, and use PrintDock in th
 
 ## 1. Installation and Setup
 
-After installing PrintDock from the Shopify App Store (or via a development link), open the app from the Shopify Admin sidebar. You will land on the **Setup** page (`/app/onboarding`), which walks through four steps:
+### Install path A: Shopify App Store (production merchants)
+
+1. Open the PrintDock listing in the Shopify App Store.
+2. Click **Install app**.
+3. Select the target store and approve permissions.
+4. After install, open **Shopify Admin > Apps > PrintDock**.
+
+### Install path B: Development store (for testing)
+
+1. In your project, run `npm run dev` (or `shopify app dev`).
+2. In the Shopify CLI prompt, connect to the existing app (do not create a new app if this project already has one).
+3. Select the target development store.
+4. Accept URL updates for dev when prompted (`Yes, automatically update`).
+5. In the `npm run dev` terminal output, copy/open the Shopify CLI **installation/preview URL** (the `app-preview` link), then click **Install app** and approve permissions in your development store.
+6. After install, open **Shopify Admin > Apps > PrintDock**.
+
+You will land on the **Setup** page (`/app/onboarding`), which walks through four steps:
 
 ### Step 1: Add the theme block to your product page
 
@@ -115,6 +131,7 @@ When a customer visits a product page that has PrintDock configured:
    - `_pd_session` — links the cart item to the upload session.
    - `_pd_calculated_price` — the server-calculated price (used by the Cart Transform function).
    - `Artwork` — a customer-visible note showing the uploaded file name.
+   - Additional merchant/support fields are documented in `docs/MERCHANT_FIELDS.md`.
 
 ### Dynamic Pricing at Checkout
 
@@ -131,6 +148,8 @@ When a customer completes checkout, the `orders/create` webhook fires and PrintD
 3. Renames and copies the file in storage using the field's renaming pattern.
 4. Records the calculated price, quantity, and customer details.
 5. Optionally auto-assigns the job to a team member (based on Settings).
+
+For the full order-line metadata contract (merchant-facing and internal fields), see `docs/MERCHANT_FIELDS.md`.
 
 ### Order Jobs Page
 
