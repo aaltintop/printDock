@@ -40,6 +40,29 @@ export async function getSignedDownloadUrl(
   return url;
 }
 
+/** Signed read URL that asks the browser to download (not inline-open). */
+export async function getSignedDownloadUrlAttachment(
+  storagePath: string,
+  downloadFileName: string,
+  expiresInSeconds = 600,
+): Promise<string> {
+  const bucket = storage.bucket();
+  const file = bucket.file(storagePath);
+  const safe =
+    downloadFileName.replace(/[\r\n"]/g, "_").slice(0, 200) || "download";
+
+  const [url] = await file.getSignedUrl({
+    version: "v4",
+    action: "read",
+    expires: Date.now() + expiresInSeconds * 1000,
+    queryParams: {
+      "response-content-disposition": `attachment; filename="${safe}"`,
+    },
+  });
+
+  return url;
+}
+
 // Get file as Buffer — used only server-side for validation
 export async function getFileBuffer(storagePath: string): Promise<Buffer> {
   const bucket = storage.bucket();

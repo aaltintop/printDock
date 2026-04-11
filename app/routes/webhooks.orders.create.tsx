@@ -120,11 +120,47 @@ export async function action({ request }: ActionFunctionArgs) {
   for (const line of order.line_items ?? []) {
     const props = line.properties ?? [];
     const sessionToken = props.find((p: any) => p.name === "_uc_session")?.value;
-    if (!sessionToken) continue;
+    if (!sessionToken) {
+      const hasPrintDockHints = props.some((p: any) =>
+        [
+          "_pd_session",
+          "_pd_asset_ids",
+          "_pd_asset_count",
+          "Artwork",
+          "_Artwork",
+          "_Print Ready File",
+          "_View uploads",
+          "__ucToken",
+        ].includes(String(p?.name || "")),
+      );
+      if (hasPrintDockHints) {
+        console.warn(
+          JSON.stringify({
+            event: "orders_create_missing_uc_session",
+            shopDomain,
+            orderId: String(order.id),
+            lineItemId: String(line.id),
+            propertyNames: props.map((p: any) => String(p?.name || "")).slice(0, 20),
+          }),
+        );
+      }
+      continue;
+    }
 
     // Find the session
     const sessionData = await getUploadSession(shopDomain, String(sessionToken));
-    if (!sessionData || !sessionData.asset) continue;
+    if (!sessionData || !sessionData.asset) {
+      console.warn(
+        JSON.stringify({
+          event: "orders_create_session_not_found",
+          shopDomain,
+          orderId: String(order.id),
+          lineItemId: String(line.id),
+          sessionToken: String(sessionToken),
+        }),
+      );
+      continue;
+    }
     const sessionAssets = sessionData.assets.length > 0 ? sessionData.assets : [sessionData.asset];
     const perFileQuantities = parsePerFileQuantities(props);
 

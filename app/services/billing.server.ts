@@ -72,7 +72,35 @@ export async function processBillableOrder(
       (p: any) => p.name === "_uc_session"
     )?.value;
 
-    if (!sessionToken) continue;
+    if (!sessionToken) {
+      const hasPrintDockHints = Array.isArray(line.properties)
+        ? line.properties.some((p: any) =>
+            [
+              "_pd_session",
+              "_pd_asset_ids",
+              "_pd_asset_count",
+              "Artwork",
+              "_Artwork",
+              "_Print Ready File",
+              "_View uploads",
+              "__ucToken",
+            ].includes(
+              String(p?.name || ""),
+            ),
+          )
+        : false;
+      if (hasPrintDockHints) {
+        console.warn(
+          JSON.stringify({
+            event: "billing_missing_uc_session",
+            shopDomain,
+            orderId: String(order.id),
+            lineItemId: String(line.id),
+          }),
+        );
+      }
+      continue;
+    }
 
     // Find the job created for this line
     const jobId = `${order.id}_${line.id}`;
@@ -81,7 +109,18 @@ export async function processBillableOrder(
       jobDoc = await db.collection("jobs").doc(jobId).get();
     }
 
-    if (!jobDoc.exists) continue;
+    if (!jobDoc.exists) {
+      console.warn(
+        JSON.stringify({
+          event: "billing_job_not_found",
+          shopDomain,
+          orderId: String(order.id),
+          lineItemId: String(line.id),
+          sessionToken: String(sessionToken),
+        }),
+      );
+      continue;
+    }
 
     // Idempotency: don't double-bill
     const billableLineId = `${jobId}_billing`;

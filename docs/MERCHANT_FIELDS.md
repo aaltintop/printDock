@@ -12,9 +12,10 @@ This document defines the line item properties PrintDock writes so merchants can
 
 | Field | Visibility | Example | Purpose | Stability |
 |---|---|---|---|---|
-| `View uploads` | Merchant-facing | `https://admin.shopify.com/store/{store}/apps/printdock/app/uploads?session={session}` | Direct jump to upload session in PrintDock app. | Stable |
-| `Upload session ID` | Merchant-facing | `8f963f7e-...` | Human-readable session reference for support/debugging. | Stable |
-| `Artwork` | Merchant-facing | `logo-front.png` | Quick visible list of uploaded file names. | Stable |
+| `_Print Ready File` | Merchant (underscore) | `https://{shop}.myshopify.com/apps/printdock/api/proxy/upload/file?token=...` | One-tap download of the stored upload via proxy + short-lived Storage URL (`attachment`). | Stable |
+| `_View uploads` | Merchant (underscore) | `https://admin.shopify.com/store/{store}/apps/printdock/app/uploads?session={session}` | Direct jump to upload session in PrintDock app. | Stable |
+| `_Upload session ID` | Merchant (underscore) | `8f963f7e-...` | Human-readable session reference for support/debugging. | Stable |
+| `_Artwork` | Merchant (underscore) | `logo-front.png` | Quick visible list of uploaded file names. | Stable |
 | `__ucToken` | Merchant-facing (legacy-compatible) | `8f963f7e-...` | Legacy-style token shown on order for parity with prior workflow. | Stable |
 | `__ucExp` | Merchant-facing (legacy-compatible) | `1775671200` | Session expiry as Unix epoch seconds. | Stable |
 | `_pd_asset_count` | Internal/support | `1` | Count of uploaded assets tied to this line. | Stable |
@@ -27,7 +28,8 @@ This document defines the line item properties PrintDock writes so merchants can
 
 ## Operational Notes
 
-- If `View uploads` is present, merchants can handle most routine checks without opening dashboards first.
+- If `_View uploads` or `_Print Ready File` is present, merchants can open the app session or download the file from Shopify Admin line items.
+- Download token in `_Print Ready File` is valid for **7 days** (Storage object lifecycle may differ).
 - `_uc_session` must be present for order webhook linkage and billing recognition.
 - `__ucToken`/`__ucExp` exist for merchant familiarity and migration parity.
 
@@ -42,9 +44,14 @@ This document defines the line item properties PrintDock writes so merchants can
    - `orders_create_missing_uc_session`
    - `orders_create_session_not_found`
    - `billing_missing_uc_session`
+6. If storefront proxy endpoints return 404 (`/apps/printdock/...`):
+   - Run `shopify app deploy` to push latest app config.
+   - Reinstall the app on the target store after proxy/config changes.
+   - Confirm `shopify app dev` output includes an `app_proxy` line with a dev URL.
+   - Verify `/apps/printdock/api/proxy/upload/config?...` returns `200`.
 
 ## Security Guidance
 
 - These fields are order metadata, not authorization grants.
-- Do not expose raw signed file URLs in line item properties.
-- `View uploads` should point to app/admin routes that apply app auth controls.
+- `_Print Ready File` uses an app-proxy URL plus an HMAC-signed token; the response redirects to a **short-lived** signed Storage URL with `Content-Disposition: attachment`.
+- Do not log or share order line properties in untrusted channels; anyone with the token can download until it expires.

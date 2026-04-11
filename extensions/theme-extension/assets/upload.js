@@ -7,6 +7,7 @@
   const PRODUCT_ID = root.dataset.productId;
   const BLOCK_REQUIRED = root.dataset.required === "true";
   const SESSION_STORAGE_KEY = `printdock_session_${PRODUCT_ID}`;
+  const SESSION_EXPIRES_STORAGE_KEY = `${SESSION_STORAGE_KEY}_expires`;
   const PROXY_URL = "/apps/printdock"; // Configured in shopify.app.toml
 
   const DEFAULT_CONFIG = {
@@ -28,15 +29,20 @@
   let billingPlan = null;
   let isRequired = BLOCK_REQUIRED;
   let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || null;
+  let sessionExpiresAt = localStorage.getItem(SESSION_EXPIRES_STORAGE_KEY) || null;
   let uploadedFiles = [];
   let isUploading = false;
   let isBlocked = false;
+  const boundForms = new WeakSet();
+  let formObserver = null;
 
   // ─── INIT ────────────────────────────────────────────────────────────
   async function init() {
     await loadFieldConfig();
     renderUI();
     setupAddToCartGuard();
+    setupCartAddFetchInterceptor();
+    setupCartAddXHRInterceptor();
     updateCartState();
   }
 
@@ -129,6 +135,7 @@
       blocked: false,
       quantity: defaultFileQuantity(),
       storagePath: null,
+      printReadyFileUrl: null,
     };
 
     uploadedFiles.push(fileEntry);
@@ -154,7 +161,13 @@
       
       const sessionData = await sessionRes.json();
       sessionToken = sessionData.sessionToken;
+      sessionExpiresAt = sessionData.expiresAt || null;
       localStorage.setItem(SESSION_STORAGE_KEY, sessionToken);
+      if (sessionExpiresAt) {
+        localStorage.setItem(SESSION_EXPIRES_STORAGE_KEY, sessionExpiresAt);
+      } else {
+        localStorage.removeItem(SESSION_EXPIRES_STORAGE_KEY);
+      }
       const { presignedUrl, storagePath } = sessionData;
       fileEntry.storagePath = storagePath;
 
@@ -191,6 +204,10 @@
       fileEntry.validationResults = confirmData.validationResults;
       fileEntry.blocked = confirmData.blocked;
       fileEntry.assetId = confirmData.asset?.id || null;
+      fileEntry.printReadyFileUrl =
+        !confirmData.blocked && confirmData.printReadyFileUrl
+          ? confirmData.printReadyFileUrl
+          : null;
 
     } catch (err) {
       fileEntry.status = "error";
@@ -221,38 +238,92 @@
 
   // ─── CART MANAGEMENT ─────────────────────────────────────────────────
   function setupAddToCartGuard() {
-    const form = document.querySelector('form[action*="/cart/add"]');
-    if (!form) return;
+    const bindForms = () => {
+      const forms = document.querySelectorAll('form[action*="/cart/add"]');
+      forms.forEach((form) => {
+        if (boundForms.has(form)) return;
+        boundForms.add(form);
 
-    form.addEventListener("submit", (e) => {
-      const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
-      if (isRequired && successfulFiles.length < Math.max(1, fieldConfig.minFiles)) {
-        e.preventDefault();
-        showError(`Please upload at least ${Math.max(1, fieldConfig.minFiles)} file(s) before adding to cart.`);
-        return;
-      }
-      if (isBlocked) {
-        e.preventDefault();
-        showError("Please fix the file issues before adding to cart.");
-        return;
-      }
-      injectCartProperties(form);
-    });
+        form.addEventListener("submit", (e) => {
+          const validationError = getAddToCartValidationError();
+          if (validationError) {
+            e.preventDefault();
+            showError(validationError);
+            return;
+          }
+          injectCartProperties(form);
+        });
+      });
+    };
+
+    bindForms();
+    if (formObserver) formObserver.disconnect();
+    formObserver = new MutationObserver(bindForms);
+    formObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   function injectCartProperties(form) {
-    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
-    if (!sessionToken || successfulFiles.length === 0) return;
+    const properties = getCartProperties();
+    Object.entries(properties).forEach(([key, value]) => {
+      setHiddenInput(form, `properties[${key}]`, value);
+    });
+  }
 
-    setHiddenInput(form, "properties[_uc_session]", sessionToken);
-    setHiddenInput(form, "properties[_pd_session]", sessionToken);
-    if (fieldConfig.id) setHiddenInput(form, "properties[_pd_field_id]", fieldConfig.id);
-    setHiddenInput(form, "properties[_pd_asset_count]", String(successfulFiles.length));
-    setHiddenInput(
-      form,
-      "properties[_pd_asset_ids]",
-      successfulFiles.map((entry) => entry.assetId || entry.id).join(","),
-    );
+  function getAddToCartValidationError() {
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    if (isRequired && successfulFiles.length < Math.max(1, fieldConfig.minFiles)) {
+      return `Please upload at least ${Math.max(1, fieldConfig.minFiles)} file(s) before adding to cart.`;
+    }
+    if (isBlocked) {
+      return "Please fix the file issues before adding to cart.";
+    }
+    return null;
+  }
+
+  function getSessionExpiryEpochSeconds() {
+    if (!sessionExpiresAt) return "";
+    const epochMs = Date.parse(sessionExpiresAt);
+    if (!Number.isFinite(epochMs)) return "";
+    return String(Math.floor(epochMs / 1000));
+  }
+
+  function getMerchantUploadsLink(sessionId) {
+    const shopDomain = root.dataset.shopDomain || "";
+    const appHandle = root.dataset.appHandle || "printdock";
+    const encodedSession = encodeURIComponent(sessionId);
+    if (shopDomain.endsWith(".myshopify.com")) {
+      const storeHandle = shopDomain.replace(/\.myshopify\.com$/i, "");
+      return `https://admin.shopify.com/store/${storeHandle}/apps/${appHandle}/app/uploads?session=${encodedSession}`;
+    }
+    return `/apps/${appHandle}/app/uploads?session=${encodedSession}`;
+  }
+
+  function getCartProperties() {
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    if (!sessionToken || successfulFiles.length === 0) return {};
+
+    const properties = {
+      _uc_session: sessionToken,
+      _pd_session: sessionToken,
+      _pd_asset_count: String(successfulFiles.length),
+      _pd_asset_ids: successfulFiles.map((entry) => entry.assetId || entry.id).join(","),
+      __ucToken: sessionToken,
+      __ucExp: getSessionExpiryEpochSeconds(),
+      "_Upload session ID": sessionToken,
+      "_View uploads": getMerchantUploadsLink(sessionToken),
+      _Artwork: successfulFiles.map((entry) => entry.name).join(", "),
+      _pd_file_quantities: JSON.stringify(
+        successfulFiles.map((entry) => ({
+          fileName: entry.name,
+          quantity: Number(entry.quantity || 1),
+        })),
+      ),
+    };
+    const printUrl = successfulFiles[0]?.printReadyFileUrl;
+    if (printUrl) {
+      properties["_Print Ready File"] = printUrl;
+    }
+    if (fieldConfig.id) properties._pd_field_id = fieldConfig.id;
 
     const calculatedTotal = successfulFiles.reduce((sum, entry) => {
       if (!entry.pricing) return sum;
@@ -261,21 +332,240 @@
       return sum + fileUnitPrice * Math.max(1, Number(entry.quantity || 1));
     }, 0);
     if (Number.isFinite(calculatedTotal) && calculatedTotal > 0) {
-      setHiddenInput(form, "properties[_pd_calculated_price]", calculatedTotal.toFixed(2));
+      properties._pd_calculated_price = calculatedTotal.toFixed(2);
     }
 
-    const artworkNames = successfulFiles.map((entry) => entry.name).join(", ");
-    setHiddenInput(form, "properties[Artwork]", artworkNames);
-    setHiddenInput(
-      form,
-      "properties[_pd_file_quantities]",
-      JSON.stringify(
-        successfulFiles.map((entry) => ({
-          fileName: entry.name,
-          quantity: Number(entry.quantity || 1),
-        })),
-      ),
-    );
+    if (!properties.__ucExp) {
+      delete properties.__ucExp;
+    }
+
+    return properties;
+  }
+
+  function applyPropertiesToFormData(formData, properties) {
+    Object.entries(properties).forEach(([key, value]) => {
+      formData.set(`properties[${key}]`, value);
+    });
+    return formData;
+  }
+
+  function applyPropertiesToSearchParams(searchParams, properties) {
+    Object.entries(properties).forEach(([key, value]) => {
+      searchParams.set(`properties[${key}]`, value);
+    });
+    return searchParams;
+  }
+
+  function mergePropertiesIntoJsonPayload(payload, properties) {
+    if (!payload || typeof payload !== "object") return payload;
+    const clonedPayload = { ...payload };
+    if (Array.isArray(clonedPayload.items)) {
+      clonedPayload.items = clonedPayload.items.map((item) => ({
+        ...item,
+        properties: { ...(item?.properties || {}), ...properties },
+      }));
+      return clonedPayload;
+    }
+    clonedPayload.properties = { ...(clonedPayload.properties || {}), ...properties };
+    return clonedPayload;
+  }
+
+  /** Themes often POST JSON to /cart/add.js without Content-Type: application/json. */
+  function tryParseCartJsonBodyString(str) {
+    if (typeof str !== "string") return null;
+    const t = str.trim();
+    if (!t || (t[0] !== "{" && t[0] !== "[")) return null;
+    try {
+      return JSON.parse(str);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function isCartAddRequest(url, method) {
+    if ((method || "GET").toUpperCase() !== "POST") return false;
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return parsed.pathname === "/cart/add" || parsed.pathname === "/cart/add.js";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function setupCartAddFetchInterceptor() {
+    if (window.__printdockFetchPatched) return;
+    window.__printdockFetchPatched = true;
+    const originalFetch = window.fetch.bind(window);
+
+    window.fetch = async (input, init) => {
+      const requestUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input?.url || "";
+      const method = (init && init.method) || (input instanceof Request ? input.method : "GET");
+      if (!isCartAddRequest(requestUrl, method)) {
+        return originalFetch(input, init);
+      }
+
+      const validationError = getAddToCartValidationError();
+      if (validationError) {
+        showError(validationError);
+        throw new Error(validationError);
+      }
+
+      const properties = getCartProperties();
+      if (Object.keys(properties).length === 0) {
+        return originalFetch(input, init);
+      }
+
+      if (!init && input instanceof Request) {
+        try {
+          const parsed = await input.clone().json();
+          if (parsed && typeof parsed === "object") {
+            const nextPayload = mergePropertiesIntoJsonPayload(parsed, properties);
+            const headers = new Headers(input.headers);
+            headers.set("content-type", "application/json");
+            return originalFetch(input.url, {
+              method: input.method,
+              headers,
+              body: JSON.stringify(nextPayload),
+              credentials: input.credentials,
+              mode: input.mode,
+              redirect: input.redirect,
+              referrer: input.referrer,
+              referrerPolicy: input.referrerPolicy,
+              integrity: input.integrity,
+              keepalive: input.keepalive,
+              signal: input.signal,
+            });
+          }
+        } catch (_error) {
+          /* not JSON — try form body */
+        }
+        const contentType = input.headers.get("content-type") || "";
+        if (
+          contentType.includes("multipart/form-data") ||
+          contentType.includes("application/x-www-form-urlencoded")
+        ) {
+          try {
+            const formData = await input.clone().formData();
+            const nextBody = new FormData();
+            formData.forEach((value, key) => nextBody.append(key, value));
+            applyPropertiesToFormData(nextBody, properties);
+            return originalFetch(input.url, {
+              method: input.method,
+              headers: input.headers,
+              body: nextBody,
+              credentials: input.credentials,
+              mode: input.mode,
+              redirect: input.redirect,
+              referrer: input.referrer,
+              referrerPolicy: input.referrerPolicy,
+              integrity: input.integrity,
+              keepalive: input.keepalive,
+              signal: input.signal,
+            });
+          } catch (_error) {
+            return originalFetch(input, init);
+          }
+        }
+      }
+
+      if (init && init.body instanceof FormData) {
+        const nextBody = new FormData();
+        init.body.forEach((value, key) => nextBody.append(key, value));
+        applyPropertiesToFormData(nextBody, properties);
+        return originalFetch(input, { ...init, body: nextBody });
+      }
+
+      if (init && typeof init.body === "string") {
+        const headers = new Headers(init.headers || {});
+        const contentType = headers.get("content-type") || "";
+        let parsed = null;
+        if (contentType.includes("application/json")) {
+          try {
+            parsed = JSON.parse(init.body);
+          } catch (_error) {
+            parsed = null;
+          }
+        }
+        if (!parsed) {
+          parsed = tryParseCartJsonBodyString(init.body);
+        }
+        if (parsed && typeof parsed === "object") {
+          const nextPayload = mergePropertiesIntoJsonPayload(parsed, properties);
+          headers.set("content-type", "application/json");
+          return originalFetch(input, { ...init, headers, body: JSON.stringify(nextPayload) });
+        }
+      }
+
+      return originalFetch(input, init);
+    };
+  }
+
+  function setupCartAddXHRInterceptor() {
+    if (window.__printdockXHRPatched) return;
+    window.__printdockXHRPatched = true;
+
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this.__printdockMethod = method;
+      this.__printdockUrl = typeof url === "string" ? url : String(url || "");
+      return originalOpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function (body) {
+      const method = this.__printdockMethod || "GET";
+      const url = this.__printdockUrl || "";
+      if (!isCartAddRequest(url, method)) {
+        return originalSend.call(this, body);
+      }
+
+      const validationError = getAddToCartValidationError();
+      if (validationError) {
+        showError(validationError);
+        this.abort();
+        return;
+      }
+
+      const properties = getCartProperties();
+      if (Object.keys(properties).length === 0) {
+        return originalSend.call(this, body);
+      }
+
+      if (body instanceof FormData) {
+        applyPropertiesToFormData(body, properties);
+        return originalSend.call(this, body);
+      }
+
+      if (body instanceof URLSearchParams) {
+        applyPropertiesToSearchParams(body, properties);
+        return originalSend.call(this, body);
+      }
+
+      if (typeof body === "string") {
+        const jsonParsed = tryParseCartJsonBodyString(body);
+        if (jsonParsed && typeof jsonParsed === "object") {
+          const nextPayload = mergePropertiesIntoJsonPayload(jsonParsed, properties);
+          return originalSend.call(this, JSON.stringify(nextPayload));
+        }
+        try {
+          const params = new URLSearchParams(body);
+          if (params.has("id") || params.has("items")) {
+            applyPropertiesToSearchParams(params, properties);
+            return originalSend.call(this, params.toString());
+          }
+        } catch (_error) {
+          return originalSend.call(this, body);
+        }
+      }
+
+      return originalSend.call(this, body);
+    };
   }
 
   function setHiddenInput(form, name, value) {
@@ -368,7 +658,9 @@
     uploadedFiles = uploadedFiles.filter((entry) => entry.id !== fileId);
     if (uploadedFiles.length === 0) {
       sessionToken = null;
+      sessionExpiresAt = null;
       localStorage.removeItem(SESSION_STORAGE_KEY);
+      localStorage.removeItem(SESSION_EXPIRES_STORAGE_KEY);
     }
     renderFileList();
     updateCartState();

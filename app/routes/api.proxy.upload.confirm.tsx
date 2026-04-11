@@ -1,6 +1,7 @@
 import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { z } from "zod";
+import { createPrintReadyFileToken } from "../services/file-download-token.server";
 import { getFileBuffer } from "../services/storage.server";
 import { extractMetadata, runValidationRules, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
@@ -184,6 +185,18 @@ export async function action({ request }: ActionFunctionArgs) {
   });
   const usage = await incrementBillingUsage(shopDomain, 1);
 
+  const downloadSecret = process.env.SHOPIFY_API_SECRET || "";
+  const printReadyToken = createPrintReadyFileToken(
+    shopDomain,
+    storagePath,
+    originalName,
+    downloadSecret,
+  );
+  const printReadyFileUrl =
+    !blocked && printReadyToken
+      ? `https://${shopDomain}/apps/printdock/api/proxy/upload/file?token=${encodeURIComponent(printReadyToken)}`
+      : null;
+
   return data({
     asset,
     metadata,
@@ -192,6 +205,7 @@ export async function action({ request }: ActionFunctionArgs) {
     pricing,
     assetsCount: updatedAssets.length,
     sessionBlocked,
+    printReadyFileUrl,
     usage: {
       current: usage.usageThisMonth,
       limit: usage.monthlyUploadsLimit,

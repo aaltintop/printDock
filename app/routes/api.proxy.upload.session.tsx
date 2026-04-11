@@ -120,6 +120,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   return data({
     sessionToken,
+    expiresAt: expiresAtIso,
     presignedUrl,
     storagePath,
     maxFiles: selectedField?.maxFiles ?? 1,

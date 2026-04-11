@@ -40,6 +40,10 @@ This document lists the main commands used for local development, testing, and d
 - Runs `shopify app deploy`.
 - Use when pushing app config/extensions/functions changes.
 
+### `shopify app dev clean`
+- Cleans dev preview overrides and restores latest released app version behavior.
+- Use if dev preview state gets stale or inconsistent.
+
 ### `npm run config:link`
 - Runs `shopify app config link`.
 - Links your local project to a Shopify app configuration.
@@ -68,3 +72,12 @@ This document lists the main commands used for local development, testing, and d
 ### `npm run migrate:firestore`
 - Runs Firestore hierarchy migration script.
 - Use only when migration is required.
+
+## Proxy 404 Recovery Checklist
+
+If storefront calls like `/apps/printdock/api/proxy/upload/config` return `404`:
+
+1. Run `shopify app deploy`.
+2. Reinstall the app on the target store (especially after proxy path/prefix or config changes).
+3. Run `npm run dev` and confirm CLI shows an `app_proxy` URL line.
+4. Verify `/apps/printdock/api/proxy/upload/config?...` returns `200` before retesting uploads.

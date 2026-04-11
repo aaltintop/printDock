@@ -1,13 +1,15 @@
 import { useEffect } from "react";
-import { data } from "react-router";
+import { data, useLoaderData, useFetcher } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { useLoaderData, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import { listUploadSessions } from "../services/shop-data.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const sessionFilter = (url.searchParams.get("session") || "").trim();
+  const query = (url.searchParams.get("q") || "").trim().toLowerCase();
 
   const uploads = (await listUploadSessions(session.shop))
     .map((uploadSession) => {
@@ -21,9 +23,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       };
     })
     .filter((u) => u.asset !== null)
+    .filter((upload) => {
+      if (sessionFilter && upload.id !== sessionFilter) return false;
+      if (!query) return true;
+      const haystack = `${upload.id} ${upload.asset?.originalName || ""} ${upload.productId}`.toLowerCase();
+      return haystack.includes(query);
+    })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  return data({ uploads });
+  return data({
+    uploads,
+    filters: {
+      session: sessionFilter,
+      q: query,
+    },
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -45,7 +59,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Uploads() {
-  const { uploads } = useLoaderData<typeof loader>();
+  const { uploads, filters } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
 
   useEffect(() => {
@@ -64,6 +78,13 @@ export default function Uploads() {
   return (
     <s-page heading="Customer Uploads">
       <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+        {filters.session ? (
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+            <s-text>
+              Filtered to upload session: <strong>{filters.session}</strong>
+            </s-text>
+          </s-box>
+        ) : null}
         <s-table>
           <s-table-header-row>
             <s-table-header>File Name</s-table-header>

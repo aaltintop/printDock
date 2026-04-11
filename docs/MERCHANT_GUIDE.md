@@ -233,6 +233,7 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 |-------|----------|
 | Upload widget not showing on product page | Ensure the PrintDock Upload block is added to the product page template in the theme editor (not App embeds). |
 | "Upload failed" error | Check browser console for CORS errors. Verify Firebase Storage CORS is configured. |
+| Upload API returns 404 on `/apps/printdock/...` | Run `shopify app deploy`, then reinstall the app on the store. Start `shopify app dev` and confirm an `app_proxy` URL is shown in CLI output. Re-test `/apps/printdock/api/proxy/upload/config`. |
 | Orders not appearing in Order Jobs | Ensure the `orders/create` webhook is active and "Protected customer data" access is granted in the Shopify Partner Dashboard. |
 | Dynamic pricing not applying at checkout | Verify the Cart Transform function is deployed and enabled in Shopify Admin > Settings > Custom data (or via the CLI). |
 | Theme block not detected in onboarding | The `read_themes` scope must be granted. Reinstall the app if prompted. |
