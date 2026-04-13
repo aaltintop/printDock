@@ -192,6 +192,8 @@ function normalizeJob(docId: string, shopDomain: string, raw: unknown): OrderJob
     productId: String(job.productId ?? ""),
     variantId: String(job.variantId ?? ""),
     assetSnapshot: job.assetSnapshot ? normalizeAsset("asset_snapshot", job.assetSnapshot) : null,
+    legacySessionUploadPath:
+      typeof job.legacySessionUploadPath === "string" ? job.legacySessionUploadPath : undefined,
     lineItemPropsSnapshot: Array.isArray(job.lineItemPropsSnapshot)
       ? (job.lineItemPropsSnapshot as Array<{ name: string; value: string }>)
       : [],
@@ -386,6 +388,20 @@ export async function listOrderJobs(shopDomain: string): Promise<OrderJob[]> {
 
   const legacySnapshot = await db.collection("jobs").where("shopDomain", "==", shopDomain).get();
   return legacySnapshot.docs.map((doc) => normalizeJob(doc.id, shopDomain, doc.data()));
+}
+
+export async function findJobByLegacySessionUploadPath(
+  shopDomain: string,
+  legacyPath: string,
+): Promise<OrderJob | null> {
+  if (!legacyPath) return null;
+  const snap = await jobsCollection(shopDomain)
+    .where("legacySessionUploadPath", "==", legacyPath)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const doc = snap.docs[0];
+  return normalizeJob(doc.id, shopDomain, doc.data());
 }
 
 export async function saveOrderJob(shopDomain: string, job: OrderJob): Promise<void> {

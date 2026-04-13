@@ -114,6 +114,8 @@ export interface OrderJob {
   productId: string;
   variantId: string;
   assetSnapshot: UploadAsset | null;
+  /** Pre-rename upload path; used to resolve Print Ready links after copy to orders/… */
+  legacySessionUploadPath?: string;
   lineItemPropsSnapshot: Array<{ name: string; value: string }>;
   calculatedPrice: number;
   warnings: string[];

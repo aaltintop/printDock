@@ -1,8 +1,9 @@
 import { data, redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { findJobByLegacySessionUploadPath } from "../services/shop-data.server";
 import { verifyPrintReadyFileToken } from "../services/file-download-token.server";
-import { getSignedDownloadUrlAttachment } from "../services/storage.server";
+import { fileExists, getSignedDownloadUrlAttachment } from "../services/storage.server";
 
 /**
  * App proxy GET: validates Shopify proxy + HMAC token, then redirects to a
@@ -22,10 +23,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return data({ error: "Invalid or expired link" }, { status: 403 });
   }
 
+  let storagePath = verified.storagePath;
+  let downloadName = verified.originalName;
+
+  if (!(await fileExists(storagePath))) {
+    const job = await findJobByLegacySessionUploadPath(session.shop, storagePath);
+    if (job?.assetSnapshot?.storagePath) {
+      storagePath = job.assetSnapshot.storagePath;
+      downloadName = job.assetSnapshot.originalName || downloadName;
+    }
+  }
+
+  if (!(await fileExists(storagePath))) {
+    return data({ error: "File not found" }, { status: 404 });
+  }
+
   try {
     const signedUrl = await getSignedDownloadUrlAttachment(
-      verified.storagePath,
-      verified.originalName,
+      storagePath,
+      downloadName,
       600,
     );
     return redirect(signedUrl);

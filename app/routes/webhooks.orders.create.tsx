@@ -10,7 +10,7 @@ import {
   saveOrderJob,
   updateUploadSession,
 } from "../services/shop-data.server";
-import { copyFile, deleteFile } from "../services/storage.server";
+import { copyFile } from "../services/storage.server";
 import type { OrderJob } from "../types/printdock";
 
 function sanitizeSegment(value: string): string {
@@ -65,7 +65,8 @@ async function buildRenamedAsset({
 
   if (asset.storagePath !== targetPath) {
     await copyFile(asset.storagePath, targetPath);
-    await deleteFile(asset.storagePath);
+    // Do not delete the session upload: line item "Print Ready" links embed a signed
+    // token for this path; deleting here breaks download with GCS NoSuchKey.
   }
 
   return {
@@ -232,6 +233,7 @@ export async function action({ request }: ActionFunctionArgs) {
         shopifyOrderName: String(order.name ?? ""),
         shopifyLineItemId: String(line.id),
         sessionId: String(sessionToken),
+        legacySessionUploadPath: asset.storagePath,
         customerEmail,
         shippingAddress: order.shipping_address ?? null,
         productId: sessionData.productId,

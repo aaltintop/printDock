@@ -63,6 +63,13 @@ export async function getSignedDownloadUrlAttachment(
   return url;
 }
 
+export async function fileExists(storagePath: string): Promise<boolean> {
+  const bucket = storage.bucket();
+  const file = bucket.file(storagePath);
+  const [exists] = await file.exists();
+  return exists;
+}
+
 // Get file as Buffer — used only server-side for validation
 export async function getFileBuffer(storagePath: string): Promise<Buffer> {
   const bucket = storage.bucket();
