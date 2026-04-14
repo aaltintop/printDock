@@ -39,6 +39,8 @@ This document lists the main commands used for local development, testing, and d
 ### `npm run deploy`
 - Runs `shopify app deploy`.
 - Use when pushing app config/extensions/functions changes.
+- For end-to-end production hosting on Cloud Run, follow `docs/DEPLOY_CLOUD_RUN.md`.
+- For `gcloud` command reference used with Cloud Run, see `docs/GCLOUD_COMMANDS.md`.
 
 ### `shopify app dev clean`
 - Cleans dev preview overrides and restores latest released app version behavior.
