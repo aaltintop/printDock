@@ -159,68 +159,28 @@ value until they restart.
 
 ---
 
-## Step 5 — Deploy to Cloud Run
+## Step 5 — Automated Deployment
 
-### 5a — Choose a Region
+We have created a two-phase deployment script that handles the Cloud Run deployment automatically.
 
-```bash
-# europe-west1 (Belgium) is recommended for EU-based merchants
-export SERVICE_REGION="europe-west1"
-```
+### Why a two-phase deploy?
+1. **Phase 1:** Deploys the code to Cloud Run with a placeholder `SHOPIFY_APP_URL`. This creates the service and generates the real HTTPS URL.
+2. **Phase 2:** Re-deploys the code using the real `SHOPIFY_APP_URL` so the Shopify app package boots correctly.
 
-### 5b — First Deploy (to obtain the service URL)
-
-The goal of this deploy is to create the service and get its stable HTTPS URL.
-The app may not function correctly yet because `SHOPIFY_APP_URL` is not set.
-That is expected.
+### Run the deployment script
 
 ```bash
-gcloud run deploy $SERVICE_NAME \
-  --source . \
-  --region $SERVICE_REGION \
-  --set-secrets="SHOPIFY_API_KEY=shopify-api-key:latest,SHOPIFY_API_SECRET=shopify-api-secret:latest" \
-  --set-env-vars="SCOPES=$SCOPES,NODE_ENV=production,FIREBASE_PROJECT_ID=YOUR_FIREBASE_PROJECT_ID,FIREBASE_STORAGE_BUCKET=YOUR_FIREBASE_BUCKET" \
-  --port 8080 \
-  --min-instances 1 \
-  --allow-unauthenticated
+# 1. Set up your environment variables (interactive prompt)
+source scripts/setup-cloudrun-env.sh
+
+# 2. Load Shopify credentials into your shell
+eval $(shopify app info --web-env)
+
+# 3. Run the deployment script
+./scripts/deploy-cloudrun-two-phase.sh
 ```
 
-> **Port:** PrintDock's Dockerfile uses port `8080`. Do not change this.
->
-> **`--min-instances 1`:** Keeps one instance always warm, eliminating cold
-> starts for baseline traffic (merchant opening the app, background webhooks).
-> Note: this bills for one instance 24/7 even with zero traffic. For very low
-> traffic periods you can set `--min-instances 0` to save cost, but OAuth flows
-> may occasionally experience a 1–3 second cold start delay on scale-out.
-> Shopify's OAuth timeouts are generous enough that this will not cause install
-> failures.
->
-> Replace `YOUR_FIREBASE_PROJECT_ID` and `YOUR_FIREBASE_BUCKET` with real values.
-
-### 5c — Read the Service URL
-
-```bash
-SHOPIFY_APP_URL=$(gcloud run services list \
-  --filter="metadata.name:$SERVICE_NAME" \
-  --format="get(URL)")
-
-echo $SHOPIFY_APP_URL
-```
-
-### 5d — Second Deploy (production-ready)
-
-Re-deploy with `SHOPIFY_APP_URL` now included. This is your real production deploy.
-
-```bash
-gcloud run deploy $SERVICE_NAME \
-  --source . \
-  --region $SERVICE_REGION \
-  --set-secrets="SHOPIFY_API_KEY=shopify-api-key:latest,SHOPIFY_API_SECRET=shopify-api-secret:latest" \
-  --set-env-vars="SCOPES=$SCOPES,SHOPIFY_APP_URL=$SHOPIFY_APP_URL,NODE_ENV=production,FIREBASE_PROJECT_ID=YOUR_FIREBASE_PROJECT_ID,FIREBASE_STORAGE_BUCKET=YOUR_FIREBASE_BUCKET" \
-  --port 8080 \
-  --min-instances 1 \
-  --allow-unauthenticated
-```
+> **Note:** The script will automatically create or rotate the `shopify-api-key` and `shopify-api-secret` in Google Secret Manager.
 
 ---
 
@@ -263,19 +223,18 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ## Step 7 — Connect the Deployed App to Shopify
 
-### 7a — Update shopify.app.toml
+### 7a — Update `shopify.app.toml`
 
-Open `shopify.app.toml` and replace all `example.com` references with the
-Cloud Run service URL. Three values must be updated:
+Open `shopify.app.toml` and replace all references to `example.com` (or your old tunnel URL) with the new Cloud Run service URL output by the script.
 
 ```toml
-application_url = "https://printdock-service-xxxx-ew.a.run.app"
+application_url = "https://printdock-service-xxxx-uc.a.run.app"
 
 [auth]
-redirect_urls = [ "https://printdock-service-xxxx-ew.a.run.app/api/auth" ]
+redirect_urls = [ "https://printdock-service-xxxx-uc.a.run.app/api/auth" ]
 
 [app_proxy]
-url = "https://printdock-service-xxxx-ew.a.run.app"
+url = "https://printdock-service-xxxx-uc.a.run.app"
 ```
 
 > **`/api/auth` not `/auth/callback`.** This repo uses `/api/auth` as the OAuth
@@ -293,9 +252,9 @@ This pushes the updated URLs, webhooks, and extension configuration to Shopify.
 
 Because the app URL changed, the existing install token is invalid.
 
-1. Go to your Shopify development store admin
-2. Uninstall the app
-3. Reinstall via the Shopify Partners dashboard
+1. Go to your Shopify development store admin.
+2. Uninstall the app.
+3. Reinstall via the Shopify Partners dashboard.
 
 ---
 
@@ -311,9 +270,9 @@ gcloud run services logs read $SERVICE_NAME --region $SERVICE_REGION --limit 50
 
 After completing OAuth on your development store:
 
-1. Go to Firebase Console → Firestore
-2. Look for a **top-level collection called `shopify_sessions`**
-3. Confirm a document exists with a key like `offline_yourstore.myshopify.com`
+1. Go to Firebase Console → Firestore.
+2. Look for a **top-level collection called `shopify_sessions`**.
+3. Confirm a document exists with a key like `offline_yourstore.myshopify.com`.
 
 > Sessions are stored in a flat top-level `shopify_sessions` collection — not
 > under `shops/{domain}/sessions/`. This is intentional: the Shopify session
@@ -329,9 +288,11 @@ After completing OAuth on your development store:
 
 ## Ongoing Deployments
 
-Every time you push a code change to production:
+Every time you push a code change to production, you only need to run the standard `gcloud run deploy` command. You do not need to run the two-phase script again unless your `SHOPIFY_APP_URL` changes.
 
 ```bash
+source .cloudrun.env
+
 gcloud run deploy $SERVICE_NAME \
   --source . \
   --region $SERVICE_REGION \
@@ -339,7 +300,6 @@ gcloud run deploy $SERVICE_NAME \
 ```
 
 Secrets and environment variables persist from the previous deploy.
-Only pass `--set-env-vars` or `--set-secrets` again if they changed.
 
 ---
 
@@ -355,24 +315,3 @@ includes a **Step 6: Set up a production database** section covering:
 
 **Skip all of this.** PrintDock uses Firestore (fully managed, no setup required).
 Do not create any Cloud SQL instance or touch any Prisma files.
-
----
-
-## Deployment Checklist
-
-- [ ] `gcloud` CLI installed and authenticated
-- [ ] Shopify CLI installed
-- [ ] GCP / Firebase project identified and set as active
-- [ ] Required APIs enabled (Cloud Run, Cloud Build, Secret Manager, Artifact Registry)
-- [ ] IAM roles granted to your user account
-- [ ] `shopify-api-key` and `shopify-api-secret` stored in Secret Manager
-- [ ] Secret accessor role granted to the Compute Engine service account
-- [ ] First deploy completed (to obtain the service URL)
-- [ ] `SHOPIFY_APP_URL` retrieved and confirmed
-- [ ] Second deploy completed with all env vars including `SHOPIFY_APP_URL`
-- [ ] Cloud Run service account granted `datastore.user` and `storage.objectAdmin`
-- [ ] `shopify.app.toml` updated — `application_url`, `redirect_urls` (`/api/auth`), `app_proxy.url`
-- [ ] `shopify app deploy` run successfully
-- [ ] App reinstalled on development store
-- [ ] `shopify_sessions` collection visible in Firestore Console after OAuth
-- [ ] Cloud Run logs checked — no errors
