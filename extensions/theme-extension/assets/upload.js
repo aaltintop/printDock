@@ -672,16 +672,12 @@
     const title = fieldConfig.storefrontTitle || "Upload your artwork";
     const description = fieldConfig.storefrontDescription || "";
     const supported = fieldConfig.allowedExtensions.map((ext) => ext.toUpperCase()).join(", ");
-    const usageSummary = billingPlan
-      ? `${billingPlan.usageThisMonth}/${billingPlan.monthlyUploadsLimit} uploads used this month`
-      : "";
 
     root.innerHTML = `
       <div class="printdock-upload">
         <div class="printdock-copy">
           <p class="printdock-drop-title">${escapeHtml(title)}</p>
           ${description ? `<p class="printdock-drop-sub">${escapeHtml(description)}</p>` : ""}
-          ${usageSummary ? `<p class="printdock-drop-sub">${escapeHtml(usageSummary)}</p>` : ""}
         </div>
         <div class="printdock-dropzone" id="printdock-dropzone">
           <input type="file" id="printdock-file-input" accept="${escapeHtml(inputAccept())}" ${fieldConfig.maxFiles > 1 ? "multiple" : ""} hidden>

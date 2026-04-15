@@ -238,7 +238,6 @@ model OrderJob {
   sessionId       String?       @unique
   session         UploadSession? @relation(fields: [sessionId], references: [id])
   customerId      String?
-  customerEmail   String?
   productId       String
   variantId       String?
   // Snapshot at time of order
@@ -1065,7 +1064,6 @@ export async function action({ request }: ActionFunctionArgs) {
         shopifyOrderName: order.name,
         shopifyLineItemId: String(line.id),
         sessionId: session.id,
-        customerEmail: order.email,
         productId: session.productId,
         variantId: session.variantId,
         assetsSnapshot: session.assets,

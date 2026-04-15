@@ -57,53 +57,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .map((job) => ({
       id: job.id,
       orderName: job.shopifyOrderName,
-      customerEmail: job.customerEmail ?? "N/A",
       status: job.status,
       createdAt: job.createdAt,
     }));
-
-  const onboardingChecklist = [
-    {
-      id: "setup",
-      label: "Complete setup wizard",
-      done: Boolean(shopData.cartValidationVerified && shopData.cartTransformVerified),
-      href: "/app/onboarding",
-    },
-    {
-      id: "field",
-      label: "Create at least one upload field",
-      done: fields.length > 0,
-      href: "/app/fields/new",
-    },
-    {
-      id: "upload",
-      label: "Receive first customer upload",
-      done: stats.totalUploads > 0,
-      href: "/app/uploads",
-    },
-    {
-      id: "order",
-      label: "Process first order job",
-      done: stats.totalOrders > 0,
-      href: "/app/orders",
-    },
-  ];
 
   return data({
     stats,
     recentUploads,
     recentOrders,
-    onboardingChecklist,
   });
 };
 
 export default function Index() {
   const navigation = useNavigation();
-  const { stats, recentUploads, recentOrders, onboardingChecklist } = useLoaderData<typeof loader>();
-  const completedSteps = onboardingChecklist.filter((item) => item.done).length;
-  const completionPercent = onboardingChecklist.length
-    ? Math.round((completedSteps / onboardingChecklist.length) * 100)
-    : 0;
+  const { stats, recentUploads, recentOrders } = useLoaderData<typeof loader>();
 
   if (navigation.state === "loading") {
     return (
@@ -132,7 +99,6 @@ export default function Index() {
         <Layout.Section>
           <InlineStack gap="400" wrap>
             {[
-              { label: "Uploads", value: stats.totalUploads },
               { label: "Orders", value: stats.totalOrders },
               { label: "Conversion Rate", value: `${stats.estimatedConversionRate}%` },
               { label: "Storage Used", value: `${stats.storageUsedMB}MB` },
@@ -156,33 +122,6 @@ export default function Index() {
         <Layout.Section variant="oneHalf">
           <Card>
             <BlockStack gap="300">
-              <InlineStack align="space-between">
-                <Text as="h2" variant="headingMd">
-                  Onboarding
-                </Text>
-                <Badge tone={completedSteps === onboardingChecklist.length ? "success" : "attention"}>
-                  {`${completedSteps}/${onboardingChecklist.length} complete`}
-                </Badge>
-              </InlineStack>
-              <ProgressBar progress={completionPercent} size="small" />
-              {onboardingChecklist.map((item) => (
-                <InlineStack key={item.id} align="space-between" blockAlign="center">
-                  <InlineStack gap="200" blockAlign="center">
-                    <Icon source={item.done ? CheckCircleIcon : XCircleIcon} tone={item.done ? "success" : "subdued"} />
-                    <Text as="p">{item.label}</Text>
-                  </InlineStack>
-                  <Button url={item.href} variant="plain">
-                    {item.done ? "Review" : "Complete"}
-                  </Button>
-                </InlineStack>
-              ))}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        <Layout.Section variant="oneHalf">
-          <Card>
-            <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
                 Quick actions
               </Text>
@@ -191,8 +130,6 @@ export default function Index() {
                   New Field
                 </Button>
                 <Button url="/app/orders">View Orders</Button>
-                <Button url="/app/uploads">View Uploads</Button>
-                <Button url="/app/settings">Settings</Button>
               </InlineStack>
               <Text as="p" tone="subdued">
                 Recent uploads this month: {recentUploads.length}
@@ -217,9 +154,6 @@ export default function Index() {
                     <BlockStack gap="050">
                       <Text as="p" variant="bodyMd" fontWeight="medium">
                         {order.orderName}
-                      </Text>
-                      <Text as="p" tone="subdued">
-                        {order.customerEmail}
                       </Text>
                     </BlockStack>
                     <InlineStack gap="200" blockAlign="center">

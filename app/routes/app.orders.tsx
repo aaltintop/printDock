@@ -50,7 +50,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         lineItemId: orderJob.shopifyLineItemId,
         status: orderJob.status,
         createdAt: orderJob.createdAt,
-        customerEmail: orderJob.customerEmail,
         shippingAddress: orderJob.shippingAddress || null,
         asset: orderJob.assetSnapshot || null,
         dimensions,
@@ -62,7 +61,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
     .filter((order) => {
       const matchesStatus = status === "all" || order.status === status;
-      const haystack = `${order.orderName} ${order.customerEmail} ${order.asset?.originalName || ""}`.toLowerCase();
+      const haystack = `${order.orderName} ${order.asset?.originalName || ""}`.toLowerCase();
       const matchesQuery = query.length === 0 || haystack.includes(query);
       if (!matchesStatus || !matchesQuery) return false;
       if (!startDate && !endDate) return true;
@@ -79,11 +78,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   if (url.searchParams.get("export") === "csv") {
     const csvRows = [
-      ["Order", "Customer", "File", "Dimensions", "Price", "Status", "Assignee", "Date"].join(","),
+      ["Order", "File", "Dimensions", "Price", "Status", "Assignee", "Date"].join(","),
       ...allOrders.map((order) =>
         [
           order.orderName,
-          order.customerEmail || "N/A",
           order.asset?.originalName || "No File",
           order.dimensions,
           String(order.calculatedPrice || 0),
@@ -136,6 +134,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       endDate,
     },
     availableStatuses,
+    shopDomain: session.shop,
   });
 };
 
@@ -246,7 +245,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Orders() {
-  const { orders, pagination, filters, availableStatuses } = useLoaderData<typeof loader>();
+  const { orders, pagination, filters, availableStatuses, shopDomain } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const fetcher = useFetcher<typeof action>();
   const appBridge = useAppBridge();
@@ -431,15 +430,14 @@ export default function Orders() {
               </p>
             </EmptyState>
           ) : (
-            <IndexTable
+              <IndexTable
               resourceName={{ singular: "order job", plural: "order jobs" }}
               itemCount={orders.length}
               selectedItemsCount={selectedResources.length}
               onSelectionChange={handleSelectionChange}
               promotedBulkActions={promotedBulkActions}
               headings={[
-                { title: "Order #" },
-                { title: "Customer" },
+                { title: "Order" },
                 { title: "Status" },
                 { title: "File" },
                 { title: "Dimensions" },
@@ -450,9 +448,10 @@ export default function Orders() {
               {orders.map((order, index) => (
                 <IndexTable.Row id={order.id} key={order.id} position={index}>
                   <IndexTable.Cell>
-                    <Link url={`/app/orders/${order.id}`}>{order.orderName || "Unknown"}</Link>
+                    <Link url={`https://${shopDomain}/admin/orders/${order.orderId ? order.orderId.replace("gid://shopify/Order/", "") : ""}`} target="_blank">
+                      {order.orderName || "Unknown"}
+                    </Link>
                   </IndexTable.Cell>
-                  <IndexTable.Cell>{order.customerEmail || "N/A"}</IndexTable.Cell>
                   <IndexTable.Cell>
                     <Badge tone={statusTone(order.status)}>
                       {order.status.replaceAll("_", " ")}

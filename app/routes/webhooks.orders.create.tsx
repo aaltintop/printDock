@@ -46,16 +46,11 @@ async function buildRenamedAsset({
 }) {
   const extension = (asset.fileExtension || asset.originalName.split(".").pop() || "bin").toLowerCase();
   const originalNameWithoutExt = asset.originalName.replace(/\.[^/.]+$/, "");
-  const customerName =
-    [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join("_") ||
-    order.email ||
-    "customer";
   const tokens = {
     orderId: String(order.id),
     orderName: String(order.name || ""),
     lineItemId: String(line.id),
     variantName: String(line.variant_title || line.title || "variant"),
-    customerName: customerName,
     originalName: originalNameWithoutExt,
     fileIndex: String(fileIndex + 1),
   };
@@ -206,15 +201,7 @@ export async function action({ request }: ActionFunctionArgs) {
           : renamedAsset.pricing?.total || 0,
       );
       const calculatedPrice = Math.round(fileUnitPrice * Math.max(1, perFileQuantity) * 100) / 100;
-      const customerEmail = String(order.email ?? "N/A");
-      const normalizedDomain = String(appSettings.autoAssignEmailDomain || "")
-        .replace(/^@/, "")
-        .toLowerCase();
-      const canAutoAssign =
-        appSettings.autoAssignEnabled &&
-        normalizedDomain &&
-        customerEmail.toLowerCase().endsWith(`@${normalizedDomain}`);
-      const assignee = canAutoAssign ? `ops@${normalizedDomain}` : null;
+      const assignee = null;
       const tags = [];
       if (sessionAssets.length > 1) tags.push("multi_file");
       if (renamedAsset.blocked) tags.push("blocked_asset");
@@ -224,7 +211,6 @@ export async function action({ request }: ActionFunctionArgs) {
       if ((renamedAsset.widthInch || 0) > 20 || (renamedAsset.heightInch || 0) > 20) {
         tags.push("large_format");
       }
-      if (canAutoAssign) tags.push("auto_assigned");
 
       const job: OrderJob = {
         id: jobId,
@@ -234,7 +220,6 @@ export async function action({ request }: ActionFunctionArgs) {
         shopifyLineItemId: String(line.id),
         sessionId: String(sessionToken),
         legacySessionUploadPath: asset.storagePath,
-        customerEmail,
         shippingAddress: order.shipping_address ?? null,
         productId: sessionData.productId,
         variantId: sessionData.variantId,

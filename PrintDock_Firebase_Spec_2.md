@@ -127,7 +127,7 @@ shops/{shopDomain}/                        ← Tenant root (shopDomain = "mystor
   ├── jobs/{jobId}                         ← Post-order operational record
   │   │   shopifyOrderId, shopifyOrderName
   │   │   shopifyLineItemId, sessionToken
-  │   │   customerEmail, productId, variantId
+  │   │   productId, variantId
   │   │   assetsSnapshot                   ← Copy of asset data at order time
   │   │   pricingSnapshot
   │   │   lineItemPropsSnapshot
@@ -480,7 +480,6 @@ export interface OrderJob {
   shopifyOrderName: string;
   shopifyLineItemId: string;
   sessionToken: string;
-  customerEmail?: string;
   productId: string;
   variantId?: string;
   assetsSnapshot: UploadAsset[];
@@ -1226,7 +1225,6 @@ export async function action({ request }: ActionFunctionArgs) {
       shopifyOrderName: order.name,
       shopifyLineItemId: String(line.id),
       sessionToken,
-      customerEmail: order.email,
       productId: String(line.product_id),
       variantId: line.variant_id ? String(line.variant_id) : undefined,
       assetsSnapshot: [],   // filled from session in real impl

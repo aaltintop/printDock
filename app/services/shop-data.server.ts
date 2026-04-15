@@ -187,7 +187,6 @@ function normalizeJob(docId: string, shopDomain: string, raw: unknown): OrderJob
     shopifyOrderName: String(job.shopifyOrderName ?? ""),
     shopifyLineItemId: String(job.shopifyLineItemId ?? ""),
     sessionId: String(job.sessionId ?? ""),
-    customerEmail: String(job.customerEmail ?? "N/A"),
     shippingAddress: isRecord(job.shippingAddress) ? job.shippingAddress : null,
     productId: String(job.productId ?? ""),
     variantId: String(job.variantId ?? ""),
@@ -234,6 +233,10 @@ export function billableLinesCollection(shopDomain: string) {
 
 export function jobAuditCollection(shopDomain: string, jobId: string) {
   return jobsCollection(shopDomain).doc(jobId).collection("audit");
+}
+
+export function reuploadRequestsCollection(shopDomain: string, jobId: string) {
+  return jobsCollection(shopDomain).doc(jobId).collection("reuploadRequests");
 }
 
 export async function listUploadFields(shopDomain: string): Promise<UploadFieldConfig[]> {
@@ -449,6 +452,17 @@ export async function listOrderJobAuditEvents(
       createdAt: toIsoDate(raw.createdAt),
     };
   });
+}
+
+export async function createReuploadRequest(shopDomain: string, jobId: string): Promise<string> {
+  const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  const nowIso = new Date().toISOString();
+  await reuploadRequestsCollection(shopDomain, jobId).doc(token).set({
+    token,
+    status: "pending",
+    createdAt: nowIso,
+  });
+  return token;
 }
 
 export async function getBillingPlan(shopDomain: string): Promise<BillingPlan> {

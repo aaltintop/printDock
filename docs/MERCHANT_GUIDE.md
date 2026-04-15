@@ -85,7 +85,7 @@ Go to **Fields** (`/app/fields`) and click **Create Field**.
 **Storefront Content:**
 - **Storefront title:** The heading customers see above the upload widget.
 - **Storefront description:** Helper text shown to customers.
-- **File renaming pattern:** How files are renamed after an order is placed. Available tokens: `{orderId}`, `{lineItemId}`, `{originalName}`, `{customerName}`, `{date}`, etc.
+- **File renaming pattern:** How files are renamed after an order is placed. Available tokens: `{orderId}`, `{lineItemId}`, `{originalName}`, `{date}`, etc.
 
 **File Rules:**
 - **Allowed extensions:** Comma-separated list (e.g., `png,jpg,jpeg,pdf`).

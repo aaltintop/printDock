@@ -7,6 +7,7 @@ import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
+  createReuploadRequest,
   listOrderJobAuditEvents,
   listOrderJobs,
   saveOrderJob,
@@ -70,14 +71,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   if (intent === "request_reupload") {
+    const token = await createReuploadRequest(session.shop, jobId);
     await saveOrderJob(session.shop, { ...job, status: "reupload_requested" });
     await appendOrderJobAuditEvent(session.shop, jobId, {
       eventType: "job_updated",
       message: "re-upload requested",
-      metadata: { status: "reupload_requested" },
+      metadata: { status: "reupload_requested", token },
       actor: "admin-ui",
     });
-    return data({ ok: true, message: "Re-upload requested" });
+    
+    // Construct the re-upload URL
+    const url = new URL(request.url);
+    const origin = url.origin;
+    const reuploadUrl = `${origin}/api/reupload/${token}`;
+    
+    return data({ ok: true, message: "Re-upload requested", reuploadUrl });
   }
 
   return data({ error: "Unsupported action" }, { status: 400 });
@@ -90,10 +98,14 @@ export default function OrderJobDetailPage() {
   const [status, setStatus] = useState(job.status);
   const [internalNotes, setInternalNotes] = useState(job.internalNotes || "");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [reuploadUrl, setReuploadUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (fetcher.data && "downloadUrl" in fetcher.data && fetcher.data.downloadUrl) {
       window.open(fetcher.data.downloadUrl as string, "_blank");
+    }
+    if (fetcher.data && "reuploadUrl" in fetcher.data && fetcher.data.reuploadUrl) {
+      setReuploadUrl(fetcher.data.reuploadUrl as string);
     }
     if (fetcher.data && "message" in fetcher.data && fetcher.data.message) {
       appBridge.toast.show(String(fetcher.data.message));
@@ -139,7 +151,6 @@ export default function OrderJobDetailPage() {
                 <Text as="h2" variant="headingMd">
                   Job Details
                 </Text>
-                <Text as="p">Customer: {job.customerEmail || "N/A"}</Text>
                 <Text as="p">Product ID: {job.productId || "N/A"}</Text>
                 <fetcher.Form method="post">
                   <BlockStack gap="200">
@@ -181,9 +192,24 @@ export default function OrderJobDetailPage() {
             </Card>
 
             <Card>
-              <Button tone="critical" onClick={() => setRequestModalOpen(true)}>
-                Request Re-upload
-              </Button>
+              <BlockStack gap="300">
+                <Button tone="critical" onClick={() => setRequestModalOpen(true)}>
+                  Request Re-upload
+                </Button>
+                {reuploadUrl && (
+                  <BlockStack gap="200">
+                    <Text as="p" tone="subdued">Share this link with the customer to re-upload their file:</Text>
+                    <TextField
+                      label="Re-upload URL"
+                      labelHidden
+                      value={reuploadUrl}
+                      autoComplete="off"
+                      readOnly
+                      selectTextOnFocus
+                    />
+                  </BlockStack>
+                )}
+              </BlockStack>
             </Card>
           </BlockStack>
         </Layout.Section>

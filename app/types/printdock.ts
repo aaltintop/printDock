@@ -109,7 +109,6 @@ export interface OrderJob {
   shopifyOrderName: string;
   shopifyLineItemId: string;
   sessionId: string;
-  customerEmail: string;
   shippingAddress: Record<string, unknown> | null;
   productId: string;
   variantId: string;
