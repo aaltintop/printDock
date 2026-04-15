@@ -1,6 +1,18 @@
-import { data } from "react-router";
+import { data, useLoaderData, useNavigation } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigation } from "react-router";
+import { useState } from "react";
+import {
+  Badge,
+  BlockStack,
+  Button,
+  Card,
+  Checkbox,
+  InlineStack,
+  Page,
+  Select,
+  Text,
+  TextField,
+} from "@shopify/polaris";
 import { getAppSettings, saveAppSettings } from "../services/shop-data.server";
 import { authenticate } from "../shopify.server";
 import type { AppSettings } from "../types/printdock";
@@ -140,113 +152,138 @@ export default function SettingsPage() {
   const { settings, blockStatus } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
+  const [form, setForm] = useState({
+    language: settings.language,
+    stylePreset: settings.stylePreset,
+    requireThemeBlock: settings.requireThemeBlock,
+    uploadRetentionDays: String(settings.uploadRetentionDays),
+    defaultOrderStatus: settings.defaultOrderStatus,
+    csvDelimiter: settings.csvDelimiter,
+    autoAssignEnabled: settings.autoAssignEnabled,
+    autoAssignEmailDomain: settings.autoAssignEmailDomain,
+  });
 
   return (
-    <s-page heading="Global Settings">
-      <s-stack direction="block" gap="base">
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="inline" justifyContent="space-between" alignItems="center">
-            <s-heading>Theme Block Health</s-heading>
-            <s-badge tone={blockStatus.enabled ? "success" : "critical"}>
-              {blockStatus.enabled ? "Enabled" : "Not enabled"}
-            </s-badge>
-          </s-stack>
-          <s-paragraph>
-            Keep the PrintDock app block enabled in your product templates.
-          </s-paragraph>
-          {blockStatus.verificationUnavailable && blockStatus.verificationMessage ? (
-            <s-paragraph>{blockStatus.verificationMessage}</s-paragraph>
-          ) : null}
-          <s-button href={blockStatus.themeEditorUrl || "/app/onboarding"} target="_blank">
-            Open Theme Editor
-          </s-button>
-        </s-box>
+    <Page title="Global Settings">
+      <BlockStack gap="400">
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h2" variant="headingMd">
+                Theme Block Health
+              </Text>
+              <Badge tone={blockStatus.enabled ? "success" : "critical"}>
+                {blockStatus.enabled ? "Enabled" : "Not enabled"}
+              </Badge>
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Keep the PrintDock app block enabled in your product templates.
+            </Text>
+            {blockStatus.verificationUnavailable && blockStatus.verificationMessage ? (
+              <Text as="p" tone="critical">
+                {blockStatus.verificationMessage}
+              </Text>
+            ) : null}
+            <Button url={blockStatus.themeEditorUrl || "/app/onboarding"} target="_blank">
+              Open Theme Editor
+            </Button>
+          </BlockStack>
+        </Card>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+        <Card>
           <form method="post">
-            <s-stack direction="block" gap="base">
-              <s-heading>App Defaults</s-heading>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                App Defaults
+              </Text>
 
-              <label>
-                Language
-                <select name="language" defaultValue={settings.language}>
-                  <option value="en">English</option>
-                  <option value="de">German</option>
-                  <option value="tr">Turkish</option>
-                </select>
-              </label>
+              <Select
+                name="language"
+                label="Language"
+                value={form.language}
+                options={[
+                  { label: "English", value: "en" },
+                  { label: "German", value: "de" },
+                  { label: "Turkish", value: "tr" },
+                ]}
+                onChange={(value) => setForm((prev) => ({ ...prev, language: value }))}
+              />
 
-              <label>
-                Style preset
-                <select name="stylePreset" defaultValue={settings.stylePreset}>
-                  <option value="minimal">Minimal</option>
-                  <option value="high_contrast">High contrast</option>
-                </select>
-              </label>
+              <Select
+                name="stylePreset"
+                label="Style preset"
+                value={form.stylePreset}
+                options={[
+                  { label: "Minimal", value: "minimal" },
+                  { label: "High contrast", value: "high_contrast" },
+                ]}
+                onChange={(value) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    stylePreset: value as "minimal" | "high_contrast",
+                  }))
+                }
+              />
 
-              <label>
-                <input
-                  type="checkbox"
-                  name="requireThemeBlock"
-                  defaultChecked={settings.requireThemeBlock}
-                />
-                Require theme block before storefront uploads
-              </label>
+              <Checkbox
+                name="requireThemeBlock"
+                label="Require theme block before storefront uploads"
+                checked={form.requireThemeBlock}
+                onChange={(checked) => setForm((prev) => ({ ...prev, requireThemeBlock: checked }))}
+              />
 
-              <label>
-                Upload retention days
-                <input
-                  type="number"
-                  min="1"
-                  name="uploadRetentionDays"
-                  defaultValue={settings.uploadRetentionDays}
-                />
-              </label>
+              <TextField
+                name="uploadRetentionDays"
+                label="Upload retention days"
+                type="number"
+                autoComplete="off"
+                value={form.uploadRetentionDays}
+                onChange={(value) => setForm((prev) => ({ ...prev, uploadRetentionDays: value }))}
+              />
 
-              <label>
-                Default order status
-                <input
-                  type="text"
-                  name="defaultOrderStatus"
-                  defaultValue={settings.defaultOrderStatus}
-                />
-              </label>
+              <TextField
+                name="defaultOrderStatus"
+                label="Default order status"
+                autoComplete="off"
+                value={form.defaultOrderStatus}
+                onChange={(value) => setForm((prev) => ({ ...prev, defaultOrderStatus: value }))}
+              />
 
-              <label>
-                CSV delimiter
-                <select name="csvDelimiter" defaultValue={settings.csvDelimiter}>
-                  <option value=",">Comma</option>
-                  <option value=";">Semicolon</option>
-                </select>
-              </label>
+              <Select
+                name="csvDelimiter"
+                label="CSV delimiter"
+                value={form.csvDelimiter}
+                options={[
+                  { label: "Comma", value: "," },
+                  { label: "Semicolon", value: ";" },
+                ]}
+                onChange={(value) => setForm((prev) => ({ ...prev, csvDelimiter: value as "," | ";" }))}
+              />
 
-              <label>
-                <input
-                  type="checkbox"
-                  name="autoAssignEnabled"
-                  defaultChecked={settings.autoAssignEnabled}
-                />
-                Enable auto assignment by email domain
-              </label>
+              <Checkbox
+                name="autoAssignEnabled"
+                label="Enable auto assignment by email domain"
+                checked={form.autoAssignEnabled}
+                onChange={(checked) => setForm((prev) => ({ ...prev, autoAssignEnabled: checked }))}
+              />
 
-              <label>
-                Auto assign email domain
-                <input
-                  type="text"
-                  name="autoAssignEmailDomain"
-                  placeholder="@company.com"
-                  defaultValue={settings.autoAssignEmailDomain}
-                />
-              </label>
+              <TextField
+                name="autoAssignEmailDomain"
+                label="Auto assign email domain"
+                autoComplete="off"
+                placeholder="@company.com"
+                value={form.autoAssignEmailDomain}
+                onChange={(value) => setForm((prev) => ({ ...prev, autoAssignEmailDomain: value }))}
+              />
 
-              <s-button type="submit" tone="critical" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : "Save Settings"}
-              </s-button>
-            </s-stack>
+              <Button submit variant="primary" loading={isSubmitting}>
+                Save Settings
+              </Button>
+            </BlockStack>
           </form>
-        </s-box>
-      </s-stack>
-    </s-page>
+        </Card>
+      </BlockStack>
+    </Page>
   );
 }
 

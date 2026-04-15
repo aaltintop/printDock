@@ -1,4 +1,6 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import { AppProvider as PolarisAppProvider, Button, Card, Frame, Page, TextField } from "@shopify/polaris";
+import enTranslations from "@shopify/polaris/locales/en.json";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
@@ -28,22 +30,30 @@ export default function Auth() {
 
   return (
     <AppProvider embedded={false}>
-      <s-page>
-        <Form method="post">
-        <s-section heading="Log in">
-          <s-text-field
-            name="shop"
-            label="Shop domain"
-            details="example.myshopify.com"
-            value={shop}
-            onChange={(e) => setShop(e.currentTarget.value)}
-            autocomplete="on"
-            error={errors.shop}
-          ></s-text-field>
-          <s-button type="submit">Log in</s-button>
-        </s-section>
-        </Form>
-      </s-page>
+      <PolarisAppProvider i18n={enTranslations}>
+        <Frame>
+          <Page title="Log in">
+            <Card>
+              <Form method="post">
+                <TextField
+                  name="shop"
+                  label="Shop domain"
+                  helpText="example.myshopify.com"
+                  value={shop}
+                  onChange={setShop}
+                  autoComplete="on"
+                  error={errors.shop}
+                />
+                <div style={{ marginTop: 12 }}>
+                  <Button submit variant="primary">
+                    Log in
+                  </Button>
+                </div>
+              </Form>
+            </Card>
+          </Page>
+        </Frame>
+      </PolarisAppProvider>
     </AppProvider>
   );
 }

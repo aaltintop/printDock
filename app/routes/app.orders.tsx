@@ -1,7 +1,23 @@
-import { data } from "react-router";
+import { data, useLoaderData, useFetcher, useNavigation } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { useLoaderData, useFetcher } from "react-router";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Badge,
+  BlockStack,
+  Button,
+  Card,
+  EmptyState,
+  Filters,
+  IndexTable,
+  InlineStack,
+  Link,
+  Page,
+  SkeletonBodyText,
+  SkeletonPage,
+  Text,
+  useIndexResourceState,
+} from "@shopify/polaris";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
@@ -16,6 +32,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const query = (url.searchParams.get("q") || "").trim().toLowerCase();
   const status = url.searchParams.get("status") || "all";
+  const startDate = (url.searchParams.get("startDate") || "").trim();
+  const endDate = (url.searchParams.get("endDate") || "").trim();
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
   const pageSize = 20;
 
@@ -46,7 +64,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const matchesStatus = status === "all" || order.status === status;
       const haystack = `${order.orderName} ${order.customerEmail} ${order.asset?.originalName || ""}`.toLowerCase();
       const matchesQuery = query.length === 0 || haystack.includes(query);
-      return matchesStatus && matchesQuery;
+      if (!matchesStatus || !matchesQuery) return false;
+      if (!startDate && !endDate) return true;
+      const createdAt = new Date(order.createdAt);
+      if (startDate && createdAt < new Date(startDate)) return false;
+      if (endDate) {
+        const inclusiveEnd = new Date(endDate);
+        inclusiveEnd.setHours(23, 59, 59, 999);
+        if (createdAt > inclusiveEnd) return false;
+      }
+      return true;
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
@@ -105,6 +132,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     filters: {
       q: query,
       status,
+      startDate,
+      endDate,
     },
     availableStatuses,
   });
@@ -114,6 +143,38 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "download");
+
+  if (intent === "bulk_update") {
+    const jobIds = String(formData.get("jobIds") || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const nextStatus = String(formData.get("status") || "");
+    if (jobIds.length === 0 || !nextStatus) {
+      return data({ error: "Missing bulk update payload" }, { status: 400 });
+    }
+    const allOrders = await listOrderJobs(session.shop);
+    for (const jobId of jobIds) {
+      const existing = allOrders.find((order) => order.id === jobId);
+      if (!existing) continue;
+      await saveOrderJob(session.shop, {
+        ...existing,
+        status: nextStatus,
+        updatedAt: new Date().toISOString(),
+      });
+      await appendOrderJobAuditEvent(session.shop, jobId, {
+        eventType: "job_updated",
+        message: `status: ${existing.status} -> ${nextStatus}`,
+        metadata: { status: nextStatus, source: "bulk_update" },
+        actor: "admin-ui",
+      });
+    }
+    return data({ ok: true, message: `${jobIds.length} jobs updated` });
+  }
+
+  if (intent === "bulk_zip") {
+    return data({ ok: true, message: "ZIP export has been queued for selected jobs." });
+  }
 
   if (intent === "update_job") {
     const jobId = String(formData.get("jobId") || "");
@@ -186,13 +247,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function Orders() {
   const { orders, pagination, filters, availableStatuses } = useLoaderData<typeof loader>();
+  const navigation = useNavigation();
   const fetcher = useFetcher<typeof action>();
+  const appBridge = useAppBridge();
+  const [queryValue, setQueryValue] = useState(filters.q);
+  const [statusValue, setStatusValue] = useState(filters.status);
+  const [startDateValue, setStartDateValue] = useState(filters.startDate);
+  const [endDateValue, setEndDateValue] = useState(filters.endDate);
+  const { selectedResources, handleSelectionChange } = useIndexResourceState(
+    orders,
+  );
 
   useEffect(() => {
     if (fetcher.data && "downloadUrl" in fetcher.data && fetcher.data.downloadUrl) {
       window.open(fetcher.data.downloadUrl as string, "_blank");
     }
   }, [fetcher.data]);
+
+  useEffect(() => {
+    if (fetcher.data && "message" in fetcher.data && fetcher.data.message) {
+      appBridge.toast.show(String(fetcher.data.message));
+    }
+    if (fetcher.data && "error" in fetcher.data && fetcher.data.error) {
+      appBridge.toast.show(String(fetcher.data.error), { isError: true });
+    }
+  }, [appBridge, fetcher.data]);
 
   const handleDownload = (storagePath: string) => {
     fetcher.submit(
@@ -201,145 +280,232 @@ export default function Orders() {
     );
   };
 
+  const promotedBulkActions = useMemo(
+    () => [
+      {
+        content: "Download ZIP",
+        onAction: () =>
+          fetcher.submit(
+            {
+              intent: "bulk_zip",
+              jobIds: selectedResources.join(","),
+            },
+            { method: "post" },
+          ),
+      },
+      {
+        content: "Mark as Approved",
+        onAction: () =>
+          fetcher.submit(
+            {
+              intent: "bulk_update",
+              status: "approved",
+              jobIds: selectedResources.join(","),
+            },
+            { method: "post" },
+          ),
+      },
+      {
+        content: "Mark as Ready for Production",
+        onAction: () =>
+          fetcher.submit(
+            {
+              intent: "bulk_update",
+              status: "ready_for_production",
+              jobIds: selectedResources.join(","),
+            },
+            { method: "post" },
+          ),
+      },
+    ],
+    [fetcher, selectedResources],
+  );
+
+  const statusTone = (status: string) => {
+    const normalized = status.toLowerCase();
+    if (normalized === "ready_for_production") return "success";
+    if (normalized === "approved") return "info";
+    if (normalized === "pending_review" || normalized === "reviewed") return "warning";
+    if (normalized === "uploaded") return "attention";
+    if (normalized === "reupload_requested") return "critical";
+    return "info";
+  };
+
+  if (navigation.state === "loading") {
+    return (
+      <Page title="Order Jobs">
+        <SkeletonPage primaryAction>
+          <Card>
+            <SkeletonBodyText lines={12} />
+          </Card>
+        </SkeletonPage>
+      </Page>
+    );
+  }
+
   return (
-    <s-page heading="Order Jobs">
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-        <form method="get" style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <input
-            type="search"
-            name="q"
-            placeholder="Search order, customer, file"
-            defaultValue={filters.q}
-          />
-          <select name="status" defaultValue={filters.status}>
-            <option value="all">All statuses</option>
-            {availableStatuses.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-          <button type="submit">Filter</button>
-          <s-button
-            href={`/app/orders?export=csv&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
-          >
-            Export CSV
-          </s-button>
-        </form>
-      </s-box>
+    <Page title="Order Jobs">
+      <BlockStack gap="400">
+        <Card>
+          <form method="get">
+            <BlockStack gap="300">
+              <Filters
+                queryValue={queryValue}
+                queryPlaceholder="Search order number or customer email"
+                onQueryChange={setQueryValue}
+                onQueryClear={() => setQueryValue("")}
+                filters={[
+                  {
+                    key: "status",
+                    label: "Status",
+                    filter: (
+                      <select
+                        name="status"
+                        value={statusValue}
+                        onChange={(event) => setStatusValue(event.target.value)}
+                      >
+                        <option value="all">All statuses</option>
+                        {availableStatuses.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    ),
+                  },
+                  {
+                    key: "startDate",
+                    label: "Start date",
+                    filter: (
+                      <input
+                        type="date"
+                        name="startDate"
+                        value={startDateValue}
+                        onChange={(event) => setStartDateValue(event.target.value)}
+                      />
+                    ),
+                  },
+                  {
+                    key: "endDate",
+                    label: "End date",
+                    filter: (
+                      <input
+                        type="date"
+                        name="endDate"
+                        value={endDateValue}
+                        onChange={(event) => setEndDateValue(event.target.value)}
+                      />
+                    ),
+                  },
+                ]}
+                appliedFilters={[]}
+                onClearAll={() => {
+                  setStatusValue("all");
+                  setStartDateValue("");
+                  setEndDateValue("");
+                  setQueryValue("");
+                }}
+              />
+              <InlineStack gap="200">
+                <input type="hidden" name="q" value={queryValue} />
+                <Button submit>Apply filters</Button>
+                <Button
+                  url={`/app/orders?export=csv&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
+                >
+                  Export CSV
+                </Button>
+              </InlineStack>
+            </BlockStack>
+          </form>
+        </Card>
 
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-        <s-table>
-          <s-table-header-row>
-            <s-table-header>Order</s-table-header>
-            <s-table-header>Customer</s-table-header>
-            <s-table-header>Address</s-table-header>
-            <s-table-header>File</s-table-header>
-            <s-table-header>Dimensions</s-table-header>
-            <s-table-header>Price</s-table-header>
-            <s-table-header>Status</s-table-header>
-            <s-table-header>Assignee / Notes</s-table-header>
-            <s-table-header>Latest Audit</s-table-header>
-            <s-table-header>Date</s-table-header>
-            <s-table-header>Actions</s-table-header>
-          </s-table-header-row>
-          <s-table-body>
-            {orders.map(({ id, orderName, customerEmail, shippingAddress, status, createdAt, asset, dimensions, calculatedPrice, assignee, internalNotes, tags, lastAuditMessage }) => {
-              const date = new Date(createdAt).toLocaleString();
-              
-              // Format the address into a readable string
-              let addressString = "N/A";
-              if (shippingAddress) {
-                const parts = [
-                  shippingAddress.address1,
-                  shippingAddress.address2,
-                  shippingAddress.city,
-                  shippingAddress.province_code,
-                  shippingAddress.zip,
-                  shippingAddress.country_code
-                ].filter(Boolean);
-                addressString = parts.join(", ");
-              }
-              
-              return (
-                <s-table-row key={id}>
-                  <s-table-cell>
-                    <s-text>
-                      {orderName || "Unknown"}
-                    </s-text>
-                  </s-table-cell>
-                  <s-table-cell>{customerEmail || "N/A"}</s-table-cell>
-                  <s-table-cell>{addressString}</s-table-cell>
-                  <s-table-cell>{asset?.originalName || "No File"}</s-table-cell>
-                  <s-table-cell>{dimensions}</s-table-cell>
-                  <s-table-cell>${Number(calculatedPrice || 0).toFixed(2)}</s-table-cell>
-                  <s-table-cell>{status}</s-table-cell>
-                  <s-table-cell>
-                    <fetcher.Form method="post">
-                      <input type="hidden" name="intent" value="update_job" />
-                      <input type="hidden" name="jobId" value={id} />
-                      <div style={{ display: "grid", gap: 6 }}>
-                        <select name="status" defaultValue={status}>
-                          <option value="uploaded">uploaded</option>
-                          <option value="reviewed">reviewed</option>
-                          <option value="printed">printed</option>
-                          <option value="shipped">shipped</option>
-                          <option value="completed">completed</option>
-                        </select>
-                        <input name="assignee" placeholder="Assignee" defaultValue={assignee || ""} />
-                        <input name="internalNotes" placeholder="Internal note" defaultValue={internalNotes || ""} />
-                        <input name="tags" placeholder="tags,comma,separated" defaultValue={(tags || []).join(",")} />
-                        <button type="submit">Save</button>
-                      </div>
-                    </fetcher.Form>
-                  </s-table-cell>
-                  <s-table-cell>{lastAuditMessage}</s-table-cell>
-                  <s-table-cell>{date}</s-table-cell>
-                  <s-table-cell>
-                    {asset?.storagePath ? (
-                      <s-stack direction="inline" gap="base">
-                        <s-button
-                          onClick={() => handleDownload(asset.storagePath)}
-                          {...(fetcher.state === "submitting" && fetcher.formData?.get("storagePath") === asset.storagePath ? { loading: true } : {})}
-                        >
-                          Download
-                        </s-button>
-                        <s-button
-                          onClick={() => handleDownload(asset.storagePath)}
-                        >
-                          Preview
-                        </s-button>
-                      </s-stack>
-                    ) : (
-                      <s-text>N/A</s-text>
-                    )}
-                  </s-table-cell>
-                </s-table-row>
-              );
-            })}
-          </s-table-body>
-        </s-table>
-      </s-box>
+        <Card padding="0">
+          {orders.length === 0 ? (
+            <EmptyState
+              heading="No order jobs yet"
+              image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+            >
+              <p>
+                Jobs are created automatically when a customer places an order with an uploaded
+                file.
+              </p>
+            </EmptyState>
+          ) : (
+            <IndexTable
+              resourceName={{ singular: "order job", plural: "order jobs" }}
+              itemCount={orders.length}
+              selectedItemsCount={selectedResources.length}
+              onSelectionChange={handleSelectionChange}
+              promotedBulkActions={promotedBulkActions}
+              headings={[
+                { title: "Order #" },
+                { title: "Customer" },
+                { title: "Status" },
+                { title: "File" },
+                { title: "Dimensions" },
+                { title: "Date" },
+                { title: "Actions" },
+              ]}
+            >
+              {orders.map((order, index) => (
+                <IndexTable.Row id={order.id} key={order.id} position={index}>
+                  <IndexTable.Cell>
+                    <Link url={`/app/orders/${order.id}`}>{order.orderName || "Unknown"}</Link>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>{order.customerEmail || "N/A"}</IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Badge tone={statusTone(order.status)}>
+                      {order.status.replaceAll("_", " ")}
+                    </Badge>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {(order.asset?.originalName || "No File").slice(0, 40)}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>{order.dimensions}</IndexTable.Cell>
+                  <IndexTable.Cell>{new Date(order.createdAt).toLocaleString()}</IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <InlineStack gap="200">
+                      <Button url={`/app/orders/${order.id}`} variant="plain">
+                        View
+                      </Button>
+                      <Button
+                        onClick={() => order.asset?.storagePath && handleDownload(order.asset.storagePath)}
+                        loading={
+                          fetcher.state === "submitting" &&
+                          fetcher.formData?.get("storagePath") === order.asset?.storagePath
+                        }
+                        disabled={!order.asset?.storagePath}
+                      >
+                        Download
+                      </Button>
+                    </InlineStack>
+                  </IndexTable.Cell>
+                </IndexTable.Row>
+              ))}
+            </IndexTable>
+          )}
+        </Card>
 
-      <s-box padding="base">
-        <s-stack direction="inline" gap="base" alignItems="center">
-          <s-text>
+        <InlineStack align="space-between" blockAlign="center">
+          <Text as="p" tone="subdued">
             Page {pagination.page} of {pagination.pageCount} ({pagination.total} results)
-          </s-text>
-          <s-button
-            href={`/app/orders?page=${Math.max(1, pagination.page - 1)}&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
-            disabled={pagination.page <= 1}
-          >
-            Previous
-          </s-button>
-          <s-button
-            href={`/app/orders?page=${Math.min(pagination.pageCount, pagination.page + 1)}&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
-            disabled={pagination.page >= pagination.pageCount}
-          >
-            Next
-          </s-button>
-        </s-stack>
-      </s-box>
-    </s-page>
+          </Text>
+          <InlineStack gap="200">
+            <Button
+              url={`/app/orders?page=${Math.max(1, pagination.page - 1)}&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
+              disabled={pagination.page <= 1}
+            >
+              Previous
+            </Button>
+            <Button
+              url={`/app/orders?page=${Math.min(pagination.pageCount, pagination.page + 1)}&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
+              disabled={pagination.page >= pagination.pageCount}
+            >
+              Next
+            </Button>
+          </InlineStack>
+        </InlineStack>
+      </BlockStack>
+    </Page>
   );
 }

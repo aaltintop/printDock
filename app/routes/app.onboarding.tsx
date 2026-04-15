@@ -1,6 +1,6 @@
-import { data } from "react-router";
+import { data, useLoaderData, useFetcher } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useFetcher } from "react-router";
+import { Badge, BlockStack, Box, Button, Card, InlineStack, Page, Text } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { db } from "../firebase.server";
 
@@ -181,9 +181,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 function StatusBadge({ enabled }: { enabled: boolean }) {
   return (
-    <s-badge tone={enabled ? "success" : "neutral"}>
-      {enabled ? "Setup Verified" : "Waiting for Setup"}
-    </s-badge>
+    <Badge tone={enabled ? "success" : "attention"}>
+      {enabled ? "Setup verified" : "Waiting for setup"}
+    </Badge>
   );
 }
 
@@ -192,88 +192,106 @@ export default function OnboardingPage() {
   const fetcher = useFetcher<typeof action>();
 
   return (
-    <s-page heading="PrintDock Setup">
-      <s-stack direction="block" gap="base">
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="inline" alignItems="center" justifyContent="space-between">
-            <s-heading>1. Theme App Block</s-heading>
-            <StatusBadge enabled={setup.themeBlockEnabled} />
-          </s-stack>
-          <s-paragraph>
-            Add and enable the PrintDock block in your product template.
-          </s-paragraph>
-          {setup.themeVerificationUnavailable && setup.themeVerificationMessage ? (
-            <s-paragraph>{setup.themeVerificationMessage}</s-paragraph>
-          ) : null}
-          <s-button href={setup.themeEditorUrl} target="_blank">
-            Open Theme Editor
-          </s-button>
-        </s-box>
+    <Page title="PrintDock Setup">
+      <BlockStack gap="400">
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between">
+              <Text as="h2" variant="headingMd">
+                1. Theme App Block
+              </Text>
+              <StatusBadge enabled={setup.themeBlockEnabled} />
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Add and enable the PrintDock block in your product template.
+            </Text>
+            {setup.themeVerificationUnavailable && setup.themeVerificationMessage ? (
+              <Text as="p" tone="critical">
+                {setup.themeVerificationMessage}
+              </Text>
+            ) : null}
+            <Button url={setup.themeEditorUrl} target="_blank">
+              Open Theme Editor
+            </Button>
+          </BlockStack>
+        </Card>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="inline" alignItems="center" justifyContent="space-between">
-            <s-heading>2. Cart Validation</s-heading>
-            <StatusBadge enabled={setup.cartValidationVerified} />
-          </s-stack>
-          <s-paragraph>
-            Confirm your cart validation safeguards are configured.
-          </s-paragraph>
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="verify_cart_validation" />
-            <s-button
-              type="submit"
-              {...(fetcher.state === "submitting" ? { loading: true } : {})}
-            >
-              Mark as Verified
-            </s-button>
-          </fetcher.Form>
-        </s-box>
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between">
+              <Text as="h2" variant="headingMd">
+                2. Cart Validation
+              </Text>
+              <StatusBadge enabled={setup.cartValidationVerified} />
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Confirm your cart validation safeguards are configured.
+            </Text>
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="verify_cart_validation" />
+              <Button submit loading={fetcher.state === "submitting"}>
+                Mark as verified
+              </Button>
+            </fetcher.Form>
+          </BlockStack>
+        </Card>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="inline" alignItems="center" justifyContent="space-between">
-            <s-heading>3. Cart Transform</s-heading>
-            <StatusBadge enabled={setup.cartTransformVerified} />
-          </s-stack>
-          <s-paragraph>
-            Confirm cart transform pricing behavior is enabled.
-          </s-paragraph>
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="verify_cart_transform" />
-            <s-button
-              type="submit"
-              {...(fetcher.state === "submitting" ? { loading: true } : {})}
-            >
-              Mark as Verified
-            </s-button>
-          </fetcher.Form>
-        </s-box>
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between">
+              <Text as="h2" variant="headingMd">
+                3. Cart Transform
+              </Text>
+              <StatusBadge enabled={setup.cartTransformVerified} />
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Confirm cart transform pricing behavior is enabled.
+            </Text>
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="verify_cart_transform" />
+              <Button submit loading={fetcher.state === "submitting"}>
+                Mark as verified
+              </Button>
+            </fetcher.Form>
+          </BlockStack>
+        </Card>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="inline" alignItems="center" justifyContent="space-between">
-            <s-heading>4. First Upload Field</s-heading>
-            <StatusBadge enabled={setup.fieldsConfigured} />
-          </s-stack>
-          <s-paragraph>
-            Create at least one active upload field for a product.
-          </s-paragraph>
-          <s-button href="/app/fields/new">Create Field</s-button>
-        </s-box>
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between">
+              <Text as="h2" variant="headingMd">
+                4. First Upload Field
+              </Text>
+              <StatusBadge enabled={setup.fieldsConfigured} />
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Create at least one active upload field for a product.
+            </Text>
+            <Button url="/app/fields/new">Create field</Button>
+          </BlockStack>
+        </Card>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-heading>Next Step</s-heading>
-          <s-paragraph>
-            Continue when all setup checks are verified.
-          </s-paragraph>
-          <s-button
-            href={setupComplete ? "/app/fields" : undefined}
-            disabled={!setupComplete}
-            tone={setupComplete ? "critical" : "neutral"}
-          >
-            {setupComplete ? "Go to Upload Fields" : "Complete Setup First"}
-          </s-button>
-        </s-box>
-      </s-stack>
-    </s-page>
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Next Step
+            </Text>
+            <Text as="p" tone="subdued">
+              Continue when all setup checks are verified.
+            </Text>
+            <Box>
+              <Button
+                url={setupComplete ? "/app/fields" : undefined}
+                disabled={!setupComplete}
+                variant={setupComplete ? "primary" : "secondary"}
+              >
+                {setupComplete ? "Go to Upload Fields" : "Complete Setup First"}
+              </Button>
+            </Box>
+          </BlockStack>
+        </Card>
+      </BlockStack>
+    </Page>
   );
 }
 

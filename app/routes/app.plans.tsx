@@ -1,6 +1,15 @@
-import { data, redirect } from "react-router";
+import { data, redirect, useLoaderData, useNavigation } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigation } from "react-router";
+import {
+  Badge,
+  BlockStack,
+  Box,
+  Button,
+  Card,
+  InlineStack,
+  Page,
+  Text,
+} from "@shopify/polaris";
 import { createSubscription } from "../services/billing.server";
 import { getBillingPlan, saveBillingPlan } from "../services/shop-data.server";
 import { authenticate } from "../shopify.server";
@@ -158,47 +167,55 @@ export default function PlansPage() {
   const isSubmitting = navigation.state === "submitting";
 
   return (
-    <s-page heading="Plans & Billing">
-      <s-stack direction="block" gap="base">
+    <Page title="Plans & Billing">
+      <BlockStack gap="400">
         {plans.map((plan) => (
-          <s-box key={plan.code} padding="base" borderWidth="base" borderRadius="base" background="subdued">
-            <s-stack direction="inline" justifyContent="space-between" alignItems="center">
-              <div>
-                <s-heading>{plan.name}</s-heading>
-                <s-paragraph>{plan.description}</s-paragraph>
-              </div>
-              <s-badge tone={activePlan === plan.code ? "success" : "neutral"}>
-                {activePlan === plan.code ? "Active" : "Available"}
-              </s-badge>
-            </s-stack>
+          <Card key={plan.code}>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <Box>
+                  <Text as="h2" variant="headingMd">
+                    {plan.name}
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    {plan.description}
+                  </Text>
+                </Box>
+                <Badge tone={activePlan === plan.code ? "success" : "attention"}>
+                  {activePlan === plan.code ? "Active" : "Available"}
+                </Badge>
+              </InlineStack>
 
-            <s-stack direction="block" gap="base">
-              <s-text>{plan.monthlyPriceLabel}</s-text>
-              <s-text>Monthly uploads: {plan.uploadsLimit}</s-text>
-              <s-text>Max file size: {plan.fileSizeLimitMB}MB</s-text>
-              <s-text>
-                Advanced rules: {plan.allowAdvancedRules ? "Included" : "Not included"}
-              </s-text>
-              <s-text>
-                Auto pricing: {plan.allowAutoPricing ? "Included" : "Not included"}
-              </s-text>
-            </s-stack>
+              <BlockStack gap="100">
+                <Text as="p" variant="headingMd">
+                  {plan.monthlyPriceLabel}
+                </Text>
+                <Text as="p">Monthly uploads: {plan.uploadsLimit}</Text>
+                <Text as="p">Max file size: {plan.fileSizeLimitMB}MB</Text>
+                <Text as="p">
+                  Advanced rules: {plan.allowAdvancedRules ? "Included" : "Not included"}
+                </Text>
+                <Text as="p">
+                  Auto pricing: {plan.allowAutoPricing ? "Included" : "Not included"}
+                </Text>
+              </BlockStack>
 
-            <form method="post" style={{ marginTop: 12 }}>
-              <input type="hidden" name="intent" value="select_plan" />
-              <input type="hidden" name="planCode" value={plan.code} />
-              <s-button
-                type="submit"
-                disabled={activePlan === plan.code || isSubmitting}
-                tone={activePlan === plan.code ? "neutral" : "critical"}
-              >
-                {activePlan === plan.code ? "Current Plan" : "Choose Plan"}
-              </s-button>
-            </form>
-          </s-box>
+              <form method="post">
+                <input type="hidden" name="intent" value="select_plan" />
+                <input type="hidden" name="planCode" value={plan.code} />
+                <Button
+                  submit
+                  disabled={activePlan === plan.code || isSubmitting}
+                  variant={activePlan === plan.code ? "secondary" : "primary"}
+                >
+                  {activePlan === plan.code ? "Current Plan" : "Choose Plan"}
+                </Button>
+              </form>
+            </BlockStack>
+          </Card>
         ))}
-      </s-stack>
-    </s-page>
+      </BlockStack>
+    </Page>
   );
 }
 

@@ -1,6 +1,6 @@
-import { data } from "react-router";
+import { data, useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { Badge, BlockStack, Card, InlineStack, Page, Text } from "@shopify/polaris";
 import { db } from "../firebase.server";
 import {
   getEffectiveBillingPlan,
@@ -87,37 +87,42 @@ export default function ParityPage() {
   const ready = passedCount === totalChecks;
 
   return (
-    <s-page heading="Parity Sign-off Checklist">
-      <s-stack direction="block" gap="base">
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="inline" justifyContent="space-between" alignItems="center">
-            <s-heading>Launch Gate</s-heading>
-            <s-badge tone={ready ? "success" : "critical"}>
-              {ready ? "Ready for launch validation" : "Action needed"}
-            </s-badge>
-          </s-stack>
-          <s-paragraph>
-            Passed {passedCount}/{totalChecks} checks.
-          </s-paragraph>
-          <s-text>
-            Metrics: fields {metrics.fields}, uploads {metrics.uploads}, order jobs {metrics.jobs}, plan {metrics.activePlan}, usage {metrics.usage}
-          </s-text>
-        </s-box>
+    <Page title="Parity Sign-off Checklist">
+      <BlockStack gap="400">
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h2" variant="headingMd">
+                Launch Gate
+              </Text>
+              <Badge tone={ready ? "success" : "critical"}>
+                {ready ? "Ready for launch validation" : "Action needed"}
+              </Badge>
+            </InlineStack>
+            <Text as="p">
+              Passed {passedCount}/{totalChecks} checks.
+            </Text>
+            <Text as="p" tone="subdued">
+              Metrics: fields {metrics.fields}, uploads {metrics.uploads}, order jobs {metrics.jobs},
+              plan {metrics.activePlan}, usage {metrics.usage}
+            </Text>
+          </BlockStack>
+        </Card>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="block" gap="base">
+        <Card>
+          <BlockStack gap="300">
             {checks.map((check) => (
-              <s-stack key={check.id} direction="inline" justifyContent="space-between" alignItems="center">
-                <s-text>{check.label}</s-text>
-                <s-badge tone={check.pass ? "success" : "critical"}>
+              <InlineStack key={check.id} align="space-between" blockAlign="center">
+                <Text as="p">{check.label}</Text>
+                <Badge tone={check.pass ? "success" : "critical"}>
                   {check.pass ? "Pass" : "Pending"}
-                </s-badge>
-              </s-stack>
+                </Badge>
+              </InlineStack>
             ))}
-          </s-stack>
-        </s-box>
-      </s-stack>
-    </s-page>
+          </BlockStack>
+        </Card>
+      </BlockStack>
+    </Page>
   );
 }
 

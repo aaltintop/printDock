@@ -1,7 +1,24 @@
-import crypto from "crypto";
-import { data, Form, redirect } from "react-router";
+import { data, Form, redirect, useFetcher, useLoaderData, useNavigation, useSearchParams } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useSearchParams } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Badge,
+  BlockStack,
+  Button,
+  Card,
+  EmptyState,
+  IndexTable,
+  InlineStack,
+  Page,
+  Popover,
+  Select,
+  SkeletonBodyText,
+  SkeletonPage,
+  Text,
+  TextField,
+} from "@shopify/polaris";
+import { MenuHorizontalIcon } from "@shopify/polaris-icons";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
 
@@ -71,7 +88,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       createdAt: nowIso,
       updatedAt: nowIso,
     });
-    return redirect(`/app/fields/${duplicateId}`);
+    return redirect(`/app/fields/${duplicateId}?toast=duplicated`);
   }
 
   return data({ error: "Unknown action" }, { status: 400 });
@@ -79,107 +96,188 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function FieldsIndexPage() {
   const { fields, filters, shopDomain } = useLoaderData<typeof loader>();
+  const navigation = useNavigation();
   const fetcher = useFetcher<typeof action>();
+  const appBridge = useAppBridge();
   const [searchParams] = useSearchParams();
-  const saved = searchParams.get("saved") === "1";
+  const [queryText, setQueryText] = useState(filters.q);
+  const [statusFilter, setStatusFilter] = useState(filters.status);
+  const [activePopoverId, setActivePopoverId] = useState<string | null>(null);
+  const toast = searchParams.get("toast");
+
+  useEffect(() => {
+    if (toast === "field_saved") {
+      appBridge.toast.show("Field saved");
+    }
+  }, [appBridge, toast]);
+
+  useEffect(() => {
+    if (fetcher.data && "ok" in fetcher.data && fetcher.data.ok) {
+      appBridge.toast.show("Field updated");
+    }
+  }, [appBridge, fetcher.data]);
+
+  const resourceName = useMemo(
+    () => ({ singular: "upload field", plural: "upload fields" }),
+    [],
+  );
+
+  if (navigation.state === "loading") {
+    return (
+      <Page title="Upload Fields">
+        <SkeletonPage primaryAction>
+          <Card>
+            <SkeletonBodyText lines={10} />
+          </Card>
+        </SkeletonPage>
+      </Page>
+    );
+  }
 
   return (
-    <s-page heading="Upload Fields">
-      {saved ? (
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-text><strong>Field saved successfully.</strong></s-text>
-        </s-box>
-      ) : null}
-
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-        <s-stack direction="inline" justifyContent="space-between" alignItems="center">
-          <Form method="get" style={{ display: "flex", gap: 12 }}>
-            <input
-              type="search"
-              name="q"
-              defaultValue={filters.q}
-              placeholder="Search by title or product ID"
-            />
-            <select name="status" defaultValue={filters.status}>
-              <option value="all">All</option>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </select>
-            <button type="submit">Filter</button>
+    <Page
+      title="Upload Fields"
+      primaryAction={{ content: "Create Field", url: "/app/fields/new" }}
+    >
+      <BlockStack gap="400">
+        <Card>
+          <Form method="get">
+            <InlineStack gap="300" align="start" blockAlign="end">
+              <div style={{ minWidth: 300 }}>
+                <TextField
+                  name="q"
+                  label="Search"
+                  autoComplete="off"
+                  placeholder="Search by title or product ID"
+                  value={queryText}
+                  onChange={setQueryText}
+                />
+              </div>
+              <div style={{ minWidth: 180 }}>
+                <Select
+                  name="status"
+                  label="Status"
+                  value={statusFilter}
+                  options={[
+                    { label: "All", value: "all" },
+                    { label: "Active", value: "active" },
+                    { label: "Inactive", value: "inactive" },
+                  ]}
+                  onChange={setStatusFilter}
+                />
+              </div>
+              <Button submit>Filter</Button>
+            </InlineStack>
           </Form>
-          <s-button href="/app/fields/new" tone="critical">
-            Create Field
-          </s-button>
-        </s-stack>
-      </s-box>
+        </Card>
 
-      <s-box padding="base">
-        <s-table>
-          <s-table-header-row>
-            <s-table-header>Title</s-table-header>
-            <s-table-header>Product</s-table-header>
-            <s-table-header>Limits</s-table-header>
-            <s-table-header>Pricing</s-table-header>
-            <s-table-header>Status</s-table-header>
-            <s-table-header>Updated</s-table-header>
-            <s-table-header>Actions</s-table-header>
-          </s-table-header-row>
-          <s-table-body>
-            {fields.map((field) => {
-              const previewUrl = field.productHandle
-                ? `https://${shopDomain}/products/${field.productHandle}`
-                : null;
-
-              return (
-                <s-table-row key={field.id}>
-                  <s-table-cell>{field.adminTitle}</s-table-cell>
-                  <s-table-cell>{field.productId}</s-table-cell>
-                  <s-table-cell>
-                    1 file, {field.maxFileMB}MB max
-                  </s-table-cell>
-                  <s-table-cell>
-                    {field.pricing.enabled
-                      ? `${field.pricing.unitType} ($${field.pricing.unitPrice})`
-                      : "Disabled"}
-                  </s-table-cell>
-                  <s-table-cell>
-                    <s-badge tone={field.isActive ? "success" : "neutral"}>
-                      {field.isActive ? "Active" : "Inactive"}
-                    </s-badge>
-                  </s-table-cell>
-                  <s-table-cell>{new Date(field.updatedAt).toLocaleString()}</s-table-cell>
-                  <s-table-cell>
-                    <s-stack direction="inline" gap="base">
-                      <s-button href={`/app/fields/${field.id}`}>Edit</s-button>
-
-                      <fetcher.Form method="post">
-                        <input type="hidden" name="intent" value="toggle_active" />
-                        <input type="hidden" name="fieldId" value={field.id} />
-                        <button type="submit" disabled={fetcher.state === "submitting"}>
-                          {field.isActive ? "Disable" : "Enable"}
-                        </button>
-                      </fetcher.Form>
-
-                      <fetcher.Form method="post">
-                        <input type="hidden" name="intent" value="duplicate" />
-                        <input type="hidden" name="fieldId" value={field.id} />
-                        <button type="submit">Duplicate</button>
-                      </fetcher.Form>
-
-                      {previewUrl ? (
-                        <s-button href={previewUrl} target="_blank">
-                          Preview
-                        </s-button>
-                      ) : null}
-                    </s-stack>
-                  </s-table-cell>
-                </s-table-row>
-              );
-            })}
-          </s-table-body>
-        </s-table>
-      </s-box>
-    </s-page>
+        <Card padding="0">
+          {fields.length === 0 ? (
+            <EmptyState
+              heading="No upload fields yet"
+              action={{ content: "Create field", url: "/app/fields/new" }}
+              image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
+            >
+              <p>
+                Create your first upload field to start accepting artwork from customers.
+              </p>
+            </EmptyState>
+          ) : (
+            <IndexTable
+              resourceName={resourceName}
+              itemCount={fields.length}
+              headings={[
+                { title: "Title" },
+                { title: "Product" },
+                { title: "Limits" },
+                { title: "Pricing" },
+                { title: "Status" },
+                { title: "Updated" },
+                { title: "Actions" },
+              ]}
+              selectable={false}
+            >
+              {fields.map((field, index) => {
+                const previewUrl = field.productHandle
+                  ? `https://${shopDomain}/products/${field.productHandle}`
+                  : null;
+                return (
+                  <IndexTable.Row id={field.id} key={field.id} position={index}>
+                    <IndexTable.Cell>{field.adminTitle}</IndexTable.Cell>
+                    <IndexTable.Cell>{field.productId}</IndexTable.Cell>
+                    <IndexTable.Cell>{`1 file, ${field.maxFileMB}MB max`}</IndexTable.Cell>
+                    <IndexTable.Cell>
+                      {field.pricing.enabled
+                        ? `${field.pricing.unitType} ($${field.pricing.unitPrice})`
+                        : "Disabled"}
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Badge tone={field.isActive ? "success" : "attention"}>
+                        {field.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>{new Date(field.updatedAt).toLocaleString()}</IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <InlineStack gap="200" wrap={false}>
+                        <Button size="slim" url={`/app/fields/${field.id}`}>
+                          Edit
+                        </Button>
+                        <Popover
+                          active={activePopoverId === field.id}
+                          onClose={() => setActivePopoverId(null)}
+                          activator={
+                            <Button
+                              size="slim"
+                              icon={MenuHorizontalIcon}
+                              onClick={() =>
+                                setActivePopoverId((prev) => (prev === field.id ? null : field.id))
+                              }
+                              accessibilityLabel="More actions"
+                            />
+                          }
+                        >
+                          <BlockStack gap="100">
+                            <fetcher.Form method="post">
+                              <input type="hidden" name="intent" value="toggle_active" />
+                              <input type="hidden" name="fieldId" value={field.id} />
+                              <Button
+                                submit
+                                fullWidth
+                                textAlign="left"
+                                variant="plain"
+                                loading={fetcher.state === "submitting"}
+                              >
+                                {field.isActive ? "Disable" : "Enable"}
+                              </Button>
+                            </fetcher.Form>
+                            <fetcher.Form method="post">
+                              <input type="hidden" name="intent" value="duplicate" />
+                              <input type="hidden" name="fieldId" value={field.id} />
+                              <Button submit fullWidth textAlign="left" variant="plain">
+                                Duplicate
+                              </Button>
+                            </fetcher.Form>
+                            {previewUrl ? (
+                              <Button url={previewUrl} target="_blank" fullWidth textAlign="left" variant="plain">
+                                Preview storefront
+                              </Button>
+                            ) : (
+                              <Text as="p" tone="subdued">
+                                No preview available
+                              </Text>
+                            )}
+                          </BlockStack>
+                        </Popover>
+                      </InlineStack>
+                    </IndexTable.Cell>
+                  </IndexTable.Row>
+                );
+              })}
+            </IndexTable>
+          )}
+        </Card>
+      </BlockStack>
+    </Page>
   );
 }
 
