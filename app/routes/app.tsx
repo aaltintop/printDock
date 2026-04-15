@@ -1,7 +1,9 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Link, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
+import { AppProvider as PolarisAppProvider, Frame } from "@shopify/polaris";
+import enTranslations from "@shopify/polaris/locales/en.json";
 
 import { authenticate } from "../shopify.server";
 import { db } from "../firebase.server";
@@ -47,20 +49,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
 
+  const PolarisLink = ({ url, external, children, ...rest }: any) => {
+    if (external || typeof url !== "string") {
+      return (
+        <a href={url} {...rest}>
+          {children}
+        </a>
+      );
+    }
+
+    return (
+      <Link to={url} {...rest}>
+        {children}
+      </Link>
+    );
+  };
+
   return (
-    <AppProvider embedded apiKey={apiKey}>
-      <s-app-nav>
-        <s-link href="/app/onboarding">Setup</s-link>
-        <s-link href="/app">Dashboard</s-link>
-        <s-link href="/app/fields">Fields</s-link>
-        <s-link href="/app/uploads">Uploads</s-link>
-        <s-link href="/app/orders">Orders</s-link>
-        <s-link href="/app/plans">Plans</s-link>
-        <s-link href="/app/settings">Settings</s-link>
-        <s-link href="/app/parity">Parity</s-link>
-      </s-app-nav>
-      <Outlet />
-    </AppProvider>
+    <ShopifyAppProvider embedded apiKey={apiKey}>
+      <PolarisAppProvider i18n={enTranslations} linkComponent={PolarisLink}>
+        <Frame>
+          <s-app-nav>
+            <s-link href="/app/onboarding">Setup</s-link>
+            <s-link href="/app">Dashboard</s-link>
+            <s-link href="/app/fields">Fields</s-link>
+            <s-link href="/app/uploads">Uploads</s-link>
+            <s-link href="/app/orders">Orders</s-link>
+            <s-link href="/app/plans">Plans</s-link>
+            <s-link href="/app/settings">Settings</s-link>
+            <s-link href="/app/parity">Parity</s-link>
+          </s-app-nav>
+          <Outlet />
+        </Frame>
+      </PolarisAppProvider>
+    </ShopifyAppProvider>
   );
 }
 

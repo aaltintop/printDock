@@ -1,6 +1,20 @@
-import { data } from "react-router";
+import { data, useLoaderData, useNavigation } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import {
+  Badge,
+  BlockStack,
+  Button,
+  Card,
+  Icon,
+  InlineStack,
+  Layout,
+  Page,
+  ProgressBar,
+  SkeletonBodyText,
+  SkeletonPage,
+  Text,
+} from "@shopify/polaris";
+import { CheckCircleIcon, XCircleIcon } from "@shopify/polaris-icons";
 import { db } from "../firebase.server";
 import {
   computeDashboardStats,
@@ -43,7 +57,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .map((job) => ({
       id: job.id,
       orderName: job.shopifyOrderName,
-      fileName: job.assetSnapshot?.originalName ?? "N/A",
+      customerEmail: job.customerEmail ?? "N/A",
       status: job.status,
       createdAt: job.createdAt,
     }));
@@ -84,102 +98,146 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function Index() {
+  const navigation = useNavigation();
   const { stats, recentUploads, recentOrders, onboardingChecklist } = useLoaderData<typeof loader>();
+  const completedSteps = onboardingChecklist.filter((item) => item.done).length;
+  const completionPercent = onboardingChecklist.length
+    ? Math.round((completedSteps / onboardingChecklist.length) * 100)
+    : 0;
+
+  if (navigation.state === "loading") {
+    return (
+      <Page title="PrintDock Dashboard">
+        <SkeletonPage primaryAction>
+          <Layout>
+            <Layout.Section>
+              <Card>
+                <SkeletonBodyText lines={5} />
+              </Card>
+            </Layout.Section>
+            <Layout.Section>
+              <Card>
+                <SkeletonBodyText lines={8} />
+              </Card>
+            </Layout.Section>
+          </Layout>
+        </SkeletonPage>
+      </Page>
+    );
+  }
 
   return (
-    <s-page heading="PrintDock Dashboard">
-      <s-stack direction="block" gap="base">
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-heading>Performance Snapshot</s-heading>
-          <s-stack direction="inline" gap="base">
-            <s-card>
-              <s-text>Total uploads: {stats.totalUploads}</s-text>
-            </s-card>
-            <s-card>
-              <s-text>Total orders: {stats.totalOrders}</s-text>
-            </s-card>
-            <s-card>
-              <s-text>Blocked uploads: {stats.blockedUploads}</s-text>
-            </s-card>
-            <s-card>
-              <s-text>Conversion rate: {stats.estimatedConversionRate}%</s-text>
-            </s-card>
-            <s-card>
-              <s-text>Storage used: {stats.storageUsedMB}MB</s-text>
-            </s-card>
-          </s-stack>
-        </s-box>
-
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-heading>Onboarding Checklist</s-heading>
-          <s-stack direction="block" gap="base">
-            {onboardingChecklist.map((item) => (
-              <s-stack key={item.id} direction="inline" justifyContent="space-between" alignItems="center">
-                <s-text>{item.label}</s-text>
-                <s-stack direction="inline" gap="base" alignItems="center">
-                  <s-badge tone={item.done ? "success" : "critical"}>
-                    {item.done ? "Done" : "Pending"}
-                  </s-badge>
-                  <s-button href={item.href}>{item.done ? "Review" : "Complete"}</s-button>
-                </s-stack>
-              </s-stack>
+    <Page title="PrintDock Dashboard">
+      <Layout>
+        <Layout.Section>
+          <InlineStack gap="400" wrap>
+            {[
+              { label: "Uploads", value: stats.totalUploads },
+              { label: "Orders", value: stats.totalOrders },
+              { label: "Conversion Rate", value: `${stats.estimatedConversionRate}%` },
+              { label: "Storage Used", value: `${stats.storageUsedMB}MB` },
+            ].map((item) => (
+              <div key={item.label} style={{ minWidth: 220, flex: 1 }}>
+                <Card>
+                  <BlockStack gap="100">
+                    <Text as="p" variant="heading2xl">
+                      {item.value}
+                    </Text>
+                    <Text as="p" tone="subdued">
+                      {item.label}
+                    </Text>
+                  </BlockStack>
+                </Card>
+              </div>
             ))}
-          </s-stack>
-        </s-box>
+          </InlineStack>
+        </Layout.Section>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-heading>Quick Links</s-heading>
-          <s-stack direction="inline" gap="base">
-            <s-button href="/app/fields/new">New Field</s-button>
-            <s-button href="/app/uploads">Uploads</s-button>
-            <s-button href="/app/orders">Orders</s-button>
-            <s-button href="/app/settings">Settings</s-button>
-            <s-button href="/app/plans">Plans</s-button>
-          </s-stack>
-        </s-box>
-
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-heading>Recent Uploads</s-heading>
-          <s-table>
-            <s-table-header-row>
-              <s-table-header>File</s-table-header>
-              <s-table-header>Status</s-table-header>
-              <s-table-header>Date</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {recentUploads.map((upload) => (
-                <s-table-row key={upload.id}>
-                  <s-table-cell>{upload.fileName}</s-table-cell>
-                  <s-table-cell>{upload.status}</s-table-cell>
-                  <s-table-cell>{new Date(upload.createdAt).toLocaleString()}</s-table-cell>
-                </s-table-row>
+        <Layout.Section variant="oneHalf">
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between">
+                <Text as="h2" variant="headingMd">
+                  Onboarding
+                </Text>
+                <Badge tone={completedSteps === onboardingChecklist.length ? "success" : "attention"}>
+                  {`${completedSteps}/${onboardingChecklist.length} complete`}
+                </Badge>
+              </InlineStack>
+              <ProgressBar progress={completionPercent} size="small" />
+              {onboardingChecklist.map((item) => (
+                <InlineStack key={item.id} align="space-between" blockAlign="center">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Icon source={item.done ? CheckCircleIcon : XCircleIcon} tone={item.done ? "success" : "subdued"} />
+                    <Text as="p">{item.label}</Text>
+                  </InlineStack>
+                  <Button url={item.href} variant="plain">
+                    {item.done ? "Review" : "Complete"}
+                  </Button>
+                </InlineStack>
               ))}
-            </s-table-body>
-          </s-table>
-        </s-box>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-heading>Recent Order Jobs</s-heading>
-          <s-table>
-            <s-table-header-row>
-              <s-table-header>Order</s-table-header>
-              <s-table-header>File</s-table-header>
-              <s-table-header>Status</s-table-header>
-              <s-table-header>Date</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {recentOrders.map((order) => (
-                <s-table-row key={order.id}>
-                  <s-table-cell>{order.orderName}</s-table-cell>
-                  <s-table-cell>{order.fileName}</s-table-cell>
-                  <s-table-cell>{order.status}</s-table-cell>
-                  <s-table-cell>{new Date(order.createdAt).toLocaleString()}</s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        </s-box>
-      </s-stack>
-    </s-page>
+        <Layout.Section variant="oneHalf">
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Quick actions
+              </Text>
+              <InlineStack gap="200" wrap>
+                <Button url="/app/fields/new" variant="primary">
+                  New Field
+                </Button>
+                <Button url="/app/orders">View Orders</Button>
+                <Button url="/app/uploads">View Uploads</Button>
+                <Button url="/app/settings">Settings</Button>
+              </InlineStack>
+              <Text as="p" tone="subdued">
+                Recent uploads this month: {recentUploads.length}
+              </Text>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Recent Order Jobs
+              </Text>
+              {recentOrders.length === 0 ? (
+                <Text as="p" tone="subdued">
+                  No order jobs yet. Jobs will appear once a customer places an order.
+                </Text>
+              ) : (
+                recentOrders.map((order) => (
+                  <InlineStack key={order.id} align="space-between" blockAlign="center">
+                    <BlockStack gap="050">
+                      <Text as="p" variant="bodyMd" fontWeight="medium">
+                        {order.orderName}
+                      </Text>
+                      <Text as="p" tone="subdued">
+                        {order.customerEmail}
+                      </Text>
+                    </BlockStack>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Badge tone="info">{order.status}</Badge>
+                      <Text as="p" tone="subdued">
+                        {new Date(order.createdAt).toLocaleDateString()}
+                      </Text>
+                      <Button url={`/app/orders/${order.id}`} variant="plain">
+                        View
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+                ))
+              )}
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
   );
 }
