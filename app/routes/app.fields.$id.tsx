@@ -96,12 +96,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const planLimits = getPlan(billingPlan.planCode);
   const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
 
+  let fieldCreationBlocked = false;
+  if (id === "new") {
+    const allFields = await listUploadFields(session.shop);
+    fieldCreationBlocked = !isWithinFieldLimit(billingPlan.planCode, allFields.length);
+  }
+
   return data({
     field,
     isNew: id === "new",
     shopDomain: session.shop,
     planCode: billingPlan.planCode,
     maxFileMBFromPlan,
+    fieldCreationBlocked,
   });
 };
 
@@ -180,7 +187,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (id === "new") {
     const allFields = await listUploadFields(session.shop);
     if (!isWithinFieldLimit(planCode, allFields.length)) {
-      return data({ error: "Field limit reached for your plan" }, { status: 402 });
+      return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
     }
   }
 
@@ -248,7 +255,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function FieldEditorPage() {
-  const { field, isNew, shopDomain, planCode, maxFileMBFromPlan } = useLoaderData<typeof loader>();
+  const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -451,6 +459,7 @@ export default function FieldEditorPage() {
           message="Unsaved changes"
           saveAction={{
             onAction: () => {
+              if (fieldCreationBlocked) return;
               const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
               form?.requestSubmit();
             },
@@ -458,7 +467,13 @@ export default function FieldEditorPage() {
           discardAction={{ onAction: resetForm }}
         />
       ) : null}
-      <Form method="post" id="field-editor-form">
+      <Form
+        method="post"
+        id="field-editor-form"
+        onSubmit={(event) => {
+          if (fieldCreationBlocked) event.preventDefault();
+        }}
+      >
         <input type="hidden" name="targetProducts" value={JSON.stringify(targetProducts)} />
         <input type="hidden" name="targetCollections" value={JSON.stringify(targetCollections)} />
         <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
@@ -466,6 +481,15 @@ export default function FieldEditorPage() {
         <input type="hidden" name="dimensionRules" value={JSON.stringify(dimensionRules)} />
 
         <BlockStack gap="400">
+          {fieldCreationBlocked ? (
+            <Banner
+              tone="warning"
+              title="Field limit reached"
+              action={{ content: "View plans", url: "/app/plans" }}
+            >
+              Upgrade your plan to add more fields.
+            </Banner>
+          ) : null}
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
@@ -906,7 +930,7 @@ export default function FieldEditorPage() {
           </Card>
 
           <InlineStack gap="200">
-            <Button submit variant="primary">
+            <Button submit variant="primary" disabled={fieldCreationBlocked}>
               Save Field
             </Button>
             <Button url="/app/fields">Back to Fields</Button>

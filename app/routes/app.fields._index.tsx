@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   Badge,
+  Banner,
   BlockStack,
   Button,
   Card,
@@ -19,8 +20,14 @@ import {
 } from "@shopify/polaris";
 import { MenuHorizontalIcon } from "@shopify/polaris-icons";
 import { useAppBridge } from "@shopify/app-bridge-react";
+import { isWithinFieldLimit } from "../config/plans";
 import { authenticate } from "../shopify.server";
-import { getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
+import {
+  getEffectiveBillingPlan,
+  getUploadField,
+  listUploadFields,
+  saveUploadField,
+} from "../services/shop-data.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -28,8 +35,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const query = (url.searchParams.get("q") || "").trim().toLowerCase();
   const statusFilter = url.searchParams.get("status") || "all";
 
-  const fields = await listUploadFields(session.shop);
-  const filteredFields = fields
+  const allFields = await listUploadFields(session.shop);
+  const billingPlan = await getEffectiveBillingPlan(session.shop);
+  const canCreateMoreFields = isWithinFieldLimit(billingPlan.planCode, allFields.length);
+
+  const filteredFields = allFields
     .filter((field) => {
       const targetText = [
         ...field.targetProducts?.map((p) => p.title) ?? [],
@@ -55,6 +65,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: statusFilter,
     },
     shopDomain: session.shop,
+    canCreateMoreFields,
   });
 };
 
@@ -83,6 +94,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "duplicate") {
+    const billingPlan = await getEffectiveBillingPlan(session.shop);
+    const allFields = await listUploadFields(session.shop);
+    if (!isWithinFieldLimit(billingPlan.planCode, allFields.length)) {
+      return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
+    }
+
     const nowIso = new Date().toISOString();
     const duplicateId = crypto.randomUUID();
     await saveUploadField(session.shop, {
@@ -100,7 +117,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function FieldsIndexPage() {
-  const { fields, filters, shopDomain } = useLoaderData<typeof loader>();
+  const { fields, filters, shopDomain, canCreateMoreFields } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const fetcher = useFetcher<typeof action>();
   const appBridge = useAppBridge();
@@ -119,6 +136,12 @@ export default function FieldsIndexPage() {
   useEffect(() => {
     if (fetcher.data && "ok" in fetcher.data && fetcher.data.ok) {
       appBridge.toast.show("Field updated");
+    }
+  }, [appBridge, fetcher.data]);
+
+  useEffect(() => {
+    if (fetcher.data && "error" in fetcher.data && fetcher.data.error) {
+      appBridge.toast.show(fetcher.data.error, { isError: true });
     }
   }, [appBridge, fetcher.data]);
 
@@ -142,9 +165,25 @@ export default function FieldsIndexPage() {
   return (
     <Page
       title="Fields"
-      primaryAction={{ content: "Create Field", url: "/app/fields/new" }}
+      primaryAction={
+        canCreateMoreFields
+          ? { content: "Create Field", url: "/app/fields/new" }
+          : { content: "Create Field", disabled: true }
+      }
+      secondaryActions={
+        canCreateMoreFields ? undefined : [{ content: "View plans", url: "/app/plans" }]
+      }
     >
       <BlockStack gap="400">
+        {!canCreateMoreFields ? (
+          <Banner
+            tone="warning"
+            title="Field limit reached"
+            action={{ content: "View plans", url: "/app/plans" }}
+          >
+            Upgrade your plan to add more fields.
+          </Banner>
+        ) : null}
         <Card>
           <Form method="get">
             <InlineStack gap="300" align="start" blockAlign="end">
@@ -180,7 +219,12 @@ export default function FieldsIndexPage() {
           {fields.length === 0 ? (
             <EmptyState
               heading="No fields yet"
-              action={{ content: "Create field", url: "/app/fields/new" }}
+              action={
+                canCreateMoreFields ? { content: "Create field", url: "/app/fields/new" } : undefined
+              }
+              secondaryAction={
+                canCreateMoreFields ? undefined : { content: "View plans", url: "/app/plans" }
+              }
               image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
             >
               <p>
@@ -269,7 +313,13 @@ export default function FieldsIndexPage() {
                             <fetcher.Form method="post">
                               <input type="hidden" name="intent" value="duplicate" />
                               <input type="hidden" name="fieldId" value={field.id} />
-                              <Button submit fullWidth textAlign="left" variant="plain">
+                              <Button
+                                submit
+                                fullWidth
+                                textAlign="left"
+                                variant="plain"
+                                disabled={!canCreateMoreFields}
+                              >
                                 Duplicate
                               </Button>
                             </fetcher.Form>
