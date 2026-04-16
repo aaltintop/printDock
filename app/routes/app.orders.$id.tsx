@@ -13,6 +13,26 @@ import {
   saveOrderJob,
 } from "../services/shop-data.server";
 
+function normalizeStatus(status: string) {
+  return status === "ready_for_production" ? "approved" : status;
+}
+
+async function downloadFileWithoutNavigation(downloadUrl: string, fileName: string) {
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error("Failed to download file");
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName || "printdock-file";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(objectUrl);
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const jobId = String(params.id || "");
@@ -43,11 +63,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return data({ error: "Invalid storage path" }, { status: 400 });
     }
     const downloadUrl = await getSignedDownloadUrl(storagePath);
-    return data({ downloadUrl });
+    return data({ downloadUrl, storagePath });
   }
 
   if (intent === "update_status") {
-    const status = String(formData.get("status") || job.status);
+    const status = normalizeStatus(String(formData.get("status") || job.status));
     await saveOrderJob(session.shop, { ...job, status });
     await appendOrderJobAuditEvent(session.shop, jobId, {
       eventType: "job_updated",
@@ -93,27 +113,48 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
 export default function OrderJobDetailPage() {
   const { job, audit } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<typeof action>();
+  const actionFetcher = useFetcher<typeof action>();
+  const downloadFetcher = useFetcher<typeof action>();
   const appBridge = useAppBridge();
-  const [status, setStatus] = useState(job.status);
+  const [status, setStatus] = useState(normalizeStatus(job.status));
   const [internalNotes, setInternalNotes] = useState(job.internalNotes || "");
   const [requestModalOpen, setRequestModalOpen] = useState(false);
   const [reuploadUrl, setReuploadUrl] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
-    if (fetcher.data && "downloadUrl" in fetcher.data && fetcher.data.downloadUrl) {
-      window.open(fetcher.data.downloadUrl as string, "_blank");
+    if (downloadFetcher.data && "downloadUrl" in downloadFetcher.data && downloadFetcher.data.downloadUrl) {
+      const downloadUrl = String(downloadFetcher.data.downloadUrl);
+      void downloadFileWithoutNavigation(
+        downloadUrl,
+        job.assetSnapshot?.originalName || "printdock-file",
+      )
+        .then(() => {
+          setIsDownloading(false);
+          appBridge.toast.show("Downloaded");
+        })
+        .catch(() => {
+          setIsDownloading(false);
+          appBridge.toast.show("Failed to download file", { isError: true });
+        });
     }
-    if (fetcher.data && "reuploadUrl" in fetcher.data && fetcher.data.reuploadUrl) {
-      setReuploadUrl(fetcher.data.reuploadUrl as string);
+    if (downloadFetcher.data && "error" in downloadFetcher.data && downloadFetcher.data.error) {
+      setIsDownloading(false);
+      appBridge.toast.show(String(downloadFetcher.data.error), { isError: true });
     }
-    if (fetcher.data && "message" in fetcher.data && fetcher.data.message) {
-      appBridge.toast.show(String(fetcher.data.message));
+  }, [appBridge, downloadFetcher.data, job.assetSnapshot?.originalName]);
+
+  useEffect(() => {
+    if (actionFetcher.data && "reuploadUrl" in actionFetcher.data && actionFetcher.data.reuploadUrl) {
+      setReuploadUrl(actionFetcher.data.reuploadUrl as string);
     }
-    if (fetcher.data && "error" in fetcher.data && fetcher.data.error) {
-      appBridge.toast.show(String(fetcher.data.error), { isError: true });
+    if (actionFetcher.data && "message" in actionFetcher.data && actionFetcher.data.message) {
+      appBridge.toast.show(String(actionFetcher.data.message));
     }
-  }, [appBridge, fetcher.data]);
+    if (actionFetcher.data && "error" in actionFetcher.data && actionFetcher.data.error) {
+      appBridge.toast.show(String(actionFetcher.data.error), { isError: true });
+    }
+  }, [actionFetcher.data, appBridge]);
 
   return (
     <Page title={`Order ${job.shopifyOrderName}`} backAction={{ content: "Order jobs", url: "/app/orders" }}>
@@ -133,13 +174,18 @@ export default function OrderJobDetailPage() {
                 {((job.assetSnapshot?.sizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB |{" "}
                 {job.assetSnapshot?.fileExtension?.toUpperCase() || "N/A"}
               </Text>
-              <fetcher.Form method="post">
+              <downloadFetcher.Form method="post">
                 <input type="hidden" name="intent" value="download" />
                 <input type="hidden" name="storagePath" value={job.assetSnapshot?.storagePath || ""} />
-                <Button submit disabled={!job.assetSnapshot?.storagePath}>
-                  Download Original
+                <Button
+                  submit
+                  loading={isDownloading}
+                  disabled={!job.assetSnapshot?.storagePath}
+                  onClick={() => setIsDownloading(true)}
+                >
+                  {isDownloading ? "Downloading..." : "Download Original"}
                 </Button>
-              </fetcher.Form>
+              </downloadFetcher.Form>
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -152,7 +198,7 @@ export default function OrderJobDetailPage() {
                   Job Details
                 </Text>
                 <Text as="p">Product ID: {job.productId || "N/A"}</Text>
-                <fetcher.Form method="post">
+                <actionFetcher.Form method="post">
                   <BlockStack gap="200">
                     <input type="hidden" name="intent" value="update_status" />
                     <Select
@@ -163,19 +209,18 @@ export default function OrderJobDetailPage() {
                         { label: "Uploaded", value: "uploaded" },
                         { label: "Pending review", value: "pending_review" },
                         { label: "Approved", value: "approved" },
-                        { label: "Ready for production", value: "ready_for_production" },
                         { label: "Re-upload requested", value: "reupload_requested" },
                       ]}
                       onChange={setStatus}
                     />
                     <Button submit>Save status</Button>
                   </BlockStack>
-                </fetcher.Form>
+                </actionFetcher.Form>
               </BlockStack>
             </Card>
 
             <Card>
-              <fetcher.Form method="post">
+              <actionFetcher.Form method="post">
                 <BlockStack gap="200">
                   <input type="hidden" name="intent" value="save_note" />
                   <TextField
@@ -188,7 +233,7 @@ export default function OrderJobDetailPage() {
                   />
                   <Button submit>Save Note</Button>
                 </BlockStack>
-              </fetcher.Form>
+              </actionFetcher.Form>
             </Card>
 
             <Card>
@@ -220,11 +265,17 @@ export default function OrderJobDetailPage() {
               <Text as="h2" variant="headingMd">
                 Audit History
               </Text>
-              {audit.map((event) => (
-                <Text as="p" key={event.id}>
-                  {new Date(event.createdAt).toLocaleString()} - {event.message}
+              {audit.length === 0 ? (
+                <Text as="p" tone="subdued">
+                  No audit events yet.
                 </Text>
-              ))}
+              ) : (
+                audit.map((event) => (
+                  <Text as="p" key={event.id}>
+                    {new Date(event.createdAt).toLocaleString()} - {event.message}
+                  </Text>
+                ))
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
@@ -237,7 +288,7 @@ export default function OrderJobDetailPage() {
         primaryAction={{
           content: "Send request",
           onAction: () => {
-            fetcher.submit({ intent: "request_reupload" }, { method: "post" });
+            actionFetcher.submit({ intent: "request_reupload" }, { method: "post" });
             setRequestModalOpen(false);
           },
           destructive: true,

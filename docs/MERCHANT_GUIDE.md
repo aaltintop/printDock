@@ -156,12 +156,25 @@ For the full order-line metadata contract (merchant-facing and internal fields),
 The **Orders** page (`/app/orders`) shows all order jobs with:
 
 - **Search and filter** by status, text query.
-- **Status management:** Update job status (uploaded, processing, printed, shipped, etc.).
+- **Status management:** Update job status directly from row actions or the order detail page.
 - **Assignee and notes:** Assign jobs to team members and add internal notes.
-- **File download:** Download the uploaded file via a signed URL.
+- **File download:** Download the uploaded file directly from the table or detail page.
 - **Audit trail:** Each status change and action is logged.
 - **CSV export:** Export filtered order jobs as CSV.
 - **Pagination:** Navigate through large order lists.
+
+Current order-job statuses:
+
+- **Uploaded:** File is received and waiting for quality review.
+- **Pending review:** File has a warning/blocking concern or is marked for manual review.
+- **Approved:** File is approved and ready for production.
+- **Re-upload requested:** Customer must upload a corrected file.
+
+How statuses are set:
+
+- New jobs start as **Uploaded** or **Pending review** automatically, based on validation warnings.
+- Merchants can change status from row action buttons (`Mark approved` / `Mark review`) or from the order detail page.
+- Requesting a re-upload sets the job to **Re-upload requested**.
 
 ---
 
@@ -223,7 +236,7 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 1. Customer uploads a file and completes checkout.
 2. Go to **Orders** in PrintDock.
 3. Find the order job, download the file.
-4. Update the status as you process (e.g., "processing" > "printed" > "shipped").
+4. Review and update status (e.g., `Uploaded` -> `Pending review` -> `Approved`).
 
 ---
 

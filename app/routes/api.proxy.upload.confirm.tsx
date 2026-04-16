@@ -7,6 +7,7 @@ import { extractMetadata, runValidationRules, hasBlockingError } from "../servic
 import { calculatePrice } from "../services/pricing.server";
 import { authenticate } from "../shopify.server";
 import {
+  createCollectionIdResolver,
   getActiveFieldForProduct,
   getEffectiveBillingPlan,
   getUploadField,
@@ -65,7 +66,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const field =
     (sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null) ??
-    (await getActiveFieldForProduct(shopDomain, sessionData.productId, sessionData.variantId));
+    (await getActiveFieldForProduct(shopDomain, sessionData.productId, sessionData.variantId, createCollectionIdResolver()));
   const allowedMaxFileMB = Math.min(field?.maxFileMB ?? Infinity, billingPlan.maxFileMBLimit || Infinity);
   if (Number.isFinite(allowedMaxFileMB) && sizeBytes > allowedMaxFileMB * 1024 * 1024) {
     return data(

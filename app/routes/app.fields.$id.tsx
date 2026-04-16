@@ -8,15 +8,14 @@ import {
   useSearchParams,
 } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Banner,
   BlockStack,
   Button,
   Card,
   Checkbox,
-  ChoiceList,
   ContextualSaveBar,
+  Divider,
   FormLayout,
   InlineStack,
   Page,
@@ -31,15 +30,7 @@ import {
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { getEffectiveBillingPlan, getUploadField, saveUploadField } from "../services/shop-data.server";
-import type { UploadFieldConfig, UploadFieldDimensionRule } from "../types/printdock";
-
-type ProductOption = {
-  id: string;
-  gid: string;
-  title: string;
-  handle: string;
-  variants: Array<{ id: string; title: string }>;
-};
+import type { UploadFieldConfig, UploadFieldDimensionRule, FieldTargetProduct, FieldTargetCollection } from "../types/printdock";
 
 function extractNumericId(gid: string): string {
   return gid.split("/").pop() ?? gid;
@@ -52,6 +43,10 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
     productId: "",
     productHandle: "",
     targetVariantIds: [],
+    targetProducts: [],
+    targetCollections: [],
+    targetProductIds: [],
+    targetCollectionIds: [],
     isActive: true,
     isRequired: true,
     adminTitle: "Artwork Upload Field",
@@ -82,52 +77,9 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
   };
 }
 
-async function loadProducts(admin: any): Promise<ProductOption[]> {
-  const response = await admin.graphql(`
-    #graphql
-    query UploadFieldProducts {
-      products(first: 50) {
-        edges {
-          node {
-            id
-            title
-            handle
-            variants(first: 50) {
-              edges {
-                node {
-                  id
-                  title
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  `);
-  const json = await response.json();
-  const edges = json?.data?.products?.edges ?? [];
-
-  return edges.map((edge: any) => {
-    const product = edge.node;
-    return {
-      id: extractNumericId(String(product.id)),
-      gid: String(product.id),
-      title: String(product.title),
-      handle: String(product.handle ?? ""),
-      variants: (product.variants?.edges ?? []).map((variantEdge: any) => ({
-        id: extractNumericId(String(variantEdge.node.id)),
-        title: String(variantEdge.node.title ?? "Default"),
-      })),
-    };
-  });
-}
-
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const id = params.id || "new";
-  const products = await loadProducts(admin);
-  const billingPlan = await getEffectiveBillingPlan(session.shop);
 
   let field = emptyFieldConfig(id);
   if (id !== "new") {
@@ -141,9 +93,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return data({
     field,
     isNew: id === "new",
-    products,
     shopDomain: session.shop,
-    billingPlan,
   });
 };
 
@@ -157,51 +107,42 @@ function parseBoolean(value: FormDataEntryValue | null): boolean {
   return value === "on" || value === "true" || value === "1";
 }
 
+function parseJsonArray<T>(raw: string, fallback: T[]): T[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const formData = await request.formData();
   const id = params.id || "new";
   const nowIso = new Date().toISOString();
   const billingPlan = await getEffectiveBillingPlan(session.shop);
 
-  const productId = String(formData.get("productId") || "").trim();
-  if (!productId) {
-    return data({ error: "Product is required" }, { status: 400 });
+  const targetProducts: FieldTargetProduct[] = parseJsonArray(
+    String(formData.get("targetProducts") || "[]"),
+    [],
+  );
+  const targetCollections: FieldTargetCollection[] = parseJsonArray(
+    String(formData.get("targetCollections") || "[]"),
+    [],
+  );
+
+  if (targetProducts.length === 0 && targetCollections.length === 0) {
+    return data({ error: "Select at least one product or collection" }, { status: 400 });
   }
 
-  const productGid = `gid://shopify/Product/${productId}`;
-  const productResponse = await admin.graphql(
-    `
-      #graphql
-      query SelectedProduct($id: ID!) {
-        product(id: $id) {
-          id
-          handle
-          variants(first: 100) {
-            edges {
-              node {
-                id
-              }
-            }
-          }
-        }
-      }
-    `,
-    { variables: { id: productGid } },
-  );
-  const productJson = await productResponse.json();
-  const product = productJson?.data?.product;
-  if (!product) {
-    return data({ error: "Selected product is invalid" }, { status: 400 });
-  }
+  const targetProductIds = targetProducts.map((p) => p.id).filter(Boolean);
+  const targetCollectionIds = targetCollections.map((c) => c.id).filter(Boolean);
 
-  const allowedVariantIds = new Set<string>(
-    (product.variants?.edges ?? []).map((edge: any) => extractNumericId(String(edge.node.id))),
+  const targetVariantIds = parseJsonArray<string>(
+    String(formData.get("targetVariantIds") || "[]"),
+    [],
   );
-  const targetVariantIds = formData
-    .getAll("targetVariantIds")
-    .map((value) => String(value))
-    .filter((value) => allowedVariantIds.has(value));
 
   const allowedExtensions = String(formData.get("allowedExtensions") || "")
     .split(",")
@@ -215,7 +156,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (Array.isArray(parsedRules)) {
       dimensionRules = parsedRules;
     }
-  } catch (error) {
+  } catch {
     return data({ error: "Dimension rules must be valid JSON array" }, { status: 400 });
   }
 
@@ -237,20 +178,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     );
   }
 
+  const firstProduct = targetProducts[0];
+
   const nextField: UploadFieldConfig = {
     id: fieldId,
-    productId,
-    productHandle: String(product.handle ?? ""),
+    productId: firstProduct?.id ?? "",
+    productHandle: firstProduct?.handle ?? "",
     targetVariantIds,
+    targetProducts,
+    targetCollections,
+    targetProductIds,
+    targetCollectionIds,
     isActive: parseBoolean(formData.get("isActive")),
-    isRequired: parseBoolean(formData.get("isRequired")),
+    isRequired: true,
     adminTitle: String(formData.get("adminTitle") || "Upload Field"),
     storefrontTitle: String(formData.get("storefrontTitle") || "Upload your file"),
     storefrontDescription: String(formData.get("storefrontDescription") || ""),
     fileRenamingPattern: String(formData.get("fileRenamingPattern") || "{orderId}_{originalName}"),
     minFiles: 1,
     maxFiles: 1,
-    allowedExtensions: allowedExtensions.length > 0 ? allowedExtensions : ["png", "jpg", "jpeg", "pdf"],
+    allowedExtensions,
     maxFileMB,
     fileQuantityManagement: {
       enabled: parseBoolean(formData.get("fileQuantityEnabled")),
@@ -272,11 +219,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       roundingEnabled: parseBoolean(formData.get("roundingEnabled")),
     },
     dimensionRules,
-    planRequirement:
-      String(formData.get("planRequirement")) === "basic_plus" ||
-      String(formData.get("planRequirement")) === "pro_plus"
-        ? (String(formData.get("planRequirement")) as "basic_plus" | "pro_plus")
-        : "free",
+    planRequirement: "free",
     createdAt: existingField?.createdAt || nowIso,
     updatedAt: nowIso,
   };
@@ -286,7 +229,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function FieldEditorPage() {
-  const { field, products, isNew, shopDomain, billingPlan } = useLoaderData<typeof loader>();
+  const { field, isNew, shopDomain } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -295,10 +238,10 @@ export default function FieldEditorPage() {
   const initialState = useMemo(
     () => ({
       adminTitle: field.adminTitle,
-      productId: field.productId || "",
+      targetProducts: field.targetProducts,
+      targetCollections: field.targetCollections,
       targetVariantIds: field.targetVariantIds,
       isActive: field.isActive,
-      isRequired: field.isRequired,
       storefrontTitle: field.storefrontTitle,
       storefrontDescription: field.storefrontDescription,
       fileRenamingPattern: field.fileRenamingPattern,
@@ -313,20 +256,20 @@ export default function FieldEditorPage() {
       dpi: String(field.pricing.dpi),
       printWidth: String(field.pricing.printWidth),
       roundingEnabled: field.pricing.roundingEnabled,
-      planRequirement: field.planRequirement,
       dimensionRules: field.dimensionRules,
     }),
     [field],
   );
 
   const [adminTitle, setAdminTitle] = useState(initialState.adminTitle);
-  const [selectedProductId, setSelectedProductId] = useState(initialState.productId);
-  const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(initialState.targetVariantIds);
+  const [targetProducts, setTargetProducts] = useState<FieldTargetProduct[]>(initialState.targetProducts);
+  const [targetCollections, setTargetCollections] = useState<FieldTargetCollection[]>(initialState.targetCollections);
+  const [targetVariantIds, setTargetVariantIds] = useState<string[]>(initialState.targetVariantIds);
   const [isActive, setIsActive] = useState(initialState.isActive);
-  const [isRequired, setIsRequired] = useState(initialState.isRequired);
   const [storefrontTitle, setStorefrontTitle] = useState(initialState.storefrontTitle);
   const [storefrontDescription, setStorefrontDescription] = useState(initialState.storefrontDescription);
   const [fileRenamingPattern, setFileRenamingPattern] = useState(initialState.fileRenamingPattern);
+  const [contentTypeRestricted, setContentTypeRestricted] = useState(initialState.allowedExtensions.length > 0);
   const [allowedExtensions, setAllowedExtensions] = useState<string[]>(initialState.allowedExtensions);
   const [newExtension, setNewExtension] = useState("");
   const [maxFileMB, setMaxFileMB] = useState(initialState.maxFileMB);
@@ -339,7 +282,6 @@ export default function FieldEditorPage() {
   const [dpi, setDpi] = useState(initialState.dpi);
   const [printWidth, setPrintWidth] = useState(initialState.printWidth);
   const [roundingEnabled, setRoundingEnabled] = useState(initialState.roundingEnabled);
-  const [planRequirement, setPlanRequirement] = useState(initialState.planRequirement);
   const [renameHelpOpen, setRenameHelpOpen] = useState(false);
   const [dimensionRules, setDimensionRules] = useState<UploadFieldDimensionRule[]>(
     initialState.dimensionRules.length > 0
@@ -356,20 +298,16 @@ export default function FieldEditorPage() {
         ],
   );
 
-  const selectedProduct = useMemo(
-    () => products.find((product) => product.id === selectedProductId) ?? null,
-    [products, selectedProductId],
-  );
-
   const serializedCurrent = JSON.stringify({
     adminTitle,
-    selectedProductId,
-    selectedVariantIds,
+    targetProducts,
+    targetCollections,
+    targetVariantIds,
     isActive,
-    isRequired,
     storefrontTitle,
     storefrontDescription,
     fileRenamingPattern,
+    contentTypeRestricted,
     allowedExtensions,
     maxFileMB,
     fileQuantityEnabled,
@@ -381,24 +319,21 @@ export default function FieldEditorPage() {
     dpi,
     printWidth,
     roundingEnabled,
-    planRequirement,
     dimensionRules,
   });
-  const serializedInitial = JSON.stringify({
-    ...initialState,
-    selectedProductId: initialState.productId,
-  });
+  const serializedInitial = JSON.stringify(initialState);
   const isDirty = serializedCurrent !== serializedInitial;
 
   const resetForm = () => {
     setAdminTitle(initialState.adminTitle);
-    setSelectedProductId(initialState.productId);
-    setSelectedVariantIds(initialState.targetVariantIds);
+    setTargetProducts(initialState.targetProducts);
+    setTargetCollections(initialState.targetCollections);
+    setTargetVariantIds(initialState.targetVariantIds);
     setIsActive(initialState.isActive);
-    setIsRequired(initialState.isRequired);
     setStorefrontTitle(initialState.storefrontTitle);
     setStorefrontDescription(initialState.storefrontDescription);
     setFileRenamingPattern(initialState.fileRenamingPattern);
+    setContentTypeRestricted(initialState.allowedExtensions.length > 0);
     setAllowedExtensions(initialState.allowedExtensions);
     setMaxFileMB(initialState.maxFileMB);
     setFileQuantityEnabled(initialState.fileQuantityEnabled);
@@ -410,23 +345,54 @@ export default function FieldEditorPage() {
     setDpi(initialState.dpi);
     setPrintWidth(initialState.printWidth);
     setRoundingEnabled(initialState.roundingEnabled);
-    setPlanRequirement(initialState.planRequirement);
     setDimensionRules(initialState.dimensionRules);
   };
 
-  const openResourcePicker = async () => {
+  const openProductPicker = useCallback(async () => {
     const selection = await (appBridge as any).resourcePicker({
       type: "product",
       action: "select",
-      multiple: false,
+      multiple: true,
       filter: { variants: false },
     });
-    const selected = selection?.[0]?.id;
-    if (typeof selected === "string") {
-      setSelectedProductId(extractNumericId(selected));
-      setSelectedVariantIds([]);
-    }
-  };
+    if (!Array.isArray(selection)) return;
+    const newProducts: FieldTargetProduct[] = selection.map((item: any) => ({
+      id: extractNumericId(String(item.id)),
+      title: String(item.title ?? ""),
+      handle: String(item.handle ?? ""),
+    }));
+    setTargetProducts((prev) => {
+      const existingIds = new Set(prev.map((p) => p.id));
+      const additions = newProducts.filter((p) => !existingIds.has(p.id));
+      return [...prev, ...additions];
+    });
+  }, [appBridge]);
+
+  const openCollectionPicker = useCallback(async () => {
+    const selection = await (appBridge as any).resourcePicker({
+      type: "collection",
+      action: "select",
+      multiple: true,
+    });
+    if (!Array.isArray(selection)) return;
+    const newCollections: FieldTargetCollection[] = selection.map((item: any) => ({
+      id: extractNumericId(String(item.id)),
+      title: String(item.title ?? ""),
+    }));
+    setTargetCollections((prev) => {
+      const existingIds = new Set(prev.map((c) => c.id));
+      const additions = newCollections.filter((c) => !existingIds.has(c.id));
+      return [...prev, ...additions];
+    });
+  }, [appBridge]);
+
+  const removeProduct = useCallback((id: string) => {
+    setTargetProducts((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const removeCollection = useCallback((id: string) => {
+    setTargetCollections((prev) => prev.filter((c) => c.id !== id));
+  }, []);
 
   useEffect(() => {
     if (actionData && "error" in actionData && actionData.error) {
@@ -440,9 +406,13 @@ export default function FieldEditorPage() {
     }
   }, [appBridge, searchParams]);
 
+  const pageTitle = isNew ? "Create Upload Field" : (adminTitle || "Edit Upload Field");
+  const hasTargets = targetProducts.length > 0 || targetCollections.length > 0;
+  const firstProductHandle = targetProducts[0]?.handle;
+
   if (navigation.state === "loading") {
     return (
-      <Page title={isNew ? "Create Upload Field" : "Edit Upload Field"}>
+      <Page title={pageTitle}>
         <SkeletonPage primaryAction>
           <Card>
             <SkeletonBodyText lines={10} />
@@ -454,7 +424,7 @@ export default function FieldEditorPage() {
 
   return (
     <Page
-      title={isNew ? "Create Upload Field" : "Edit Upload Field"}
+      title={pageTitle}
       backAction={{ content: "Fields", url: "/app/fields" }}
     >
       {isDirty ? (
@@ -470,22 +440,13 @@ export default function FieldEditorPage() {
         />
       ) : null}
       <Form method="post" id="field-editor-form">
-        <input type="hidden" name="productId" value={selectedProductId} />
-        {selectedVariantIds.map((variantId) => (
-          <input key={variantId} type="hidden" name="targetVariantIds" value={variantId} />
-        ))}
-        <input type="hidden" name="allowedExtensions" value={allowedExtensions.join(",")} />
+        <input type="hidden" name="targetProducts" value={JSON.stringify(targetProducts)} />
+        <input type="hidden" name="targetCollections" value={JSON.stringify(targetCollections)} />
+        <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
+        <input type="hidden" name="allowedExtensions" value={contentTypeRestricted ? allowedExtensions.join(",") : ""} />
         <input type="hidden" name="dimensionRules" value={JSON.stringify(dimensionRules)} />
 
         <BlockStack gap="400">
-          {!billingPlan.allowAdvancedRules || !billingPlan.allowAutoPricing ? (
-            <Banner
-              tone="warning"
-              title="Upgrade your plan to unlock advanced rules and auto pricing."
-              action={{ content: "Upgrade plan", url: "/app/plans" }}
-            />
-          ) : null}
-
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
@@ -495,37 +456,89 @@ export default function FieldEditorPage() {
                 <TextField
                   name="adminTitle"
                   label="Admin title"
+                  helpText="Only visible to you in the admin. Customers never see this."
                   value={adminTitle}
                   autoComplete="off"
                   onChange={setAdminTitle}
                   requiredIndicator
                 />
-                <InlineStack align="start">
-                  <Button onClick={openResourcePicker}>Select product</Button>
-                </InlineStack>
-                <Text as="p" tone="subdued">
-                  {selectedProduct ? `Selected: ${selectedProduct.title}` : "No product selected"}
-                </Text>
-                {selectedProduct ? (
-                  <ChoiceList
-                    title="Target variants"
-                    allowMultiple
-                    selected={selectedVariantIds}
-                    choices={selectedProduct.variants.map((variant) => ({
-                      label: variant.title,
-                      value: variant.id,
-                    }))}
-                    onChange={(values) => setSelectedVariantIds(values)}
-                  />
-                ) : null}
                 <Checkbox label="Active" name="isActive" checked={isActive} onChange={setIsActive} />
-                <Checkbox
-                  label="Required before add-to-cart"
-                  name="isRequired"
-                  checked={isRequired}
-                  onChange={setIsRequired}
-                />
               </FormLayout>
+            </BlockStack>
+          </Card>
+
+          <Card>
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingMd">
+                Display Target
+              </Text>
+              <Text as="p" tone="subdued">
+                Choose where this upload field appears on your storefront. Products and collections
+                are combined — the field shows on any product that is directly selected or belongs
+                to a selected collection.
+              </Text>
+
+              <Divider />
+
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="h3" variant="headingSm">
+                    Products
+                  </Text>
+                  <Button onClick={openProductPicker}>Browse products</Button>
+                </InlineStack>
+                {targetProducts.length > 0 ? (
+                  <InlineStack gap="200" wrap>
+                    {targetProducts.map((product) => (
+                      <Tag key={product.id} onRemove={() => removeProduct(product.id)}>
+                        {product.title || `Product ${product.id}`}
+                      </Tag>
+                    ))}
+                  </InlineStack>
+                ) : (
+                  <Text as="p" tone="subdued">
+                    No products selected
+                  </Text>
+                )}
+              </BlockStack>
+
+              <Divider />
+
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="h3" variant="headingSm">
+                    Collections
+                  </Text>
+                  <Button onClick={openCollectionPicker}>Browse collections</Button>
+                </InlineStack>
+                {targetCollections.length > 0 ? (
+                  <InlineStack gap="200" wrap>
+                    {targetCollections.map((collection) => (
+                      <Tag key={collection.id} onRemove={() => removeCollection(collection.id)}>
+                        {collection.title || `Collection ${collection.id}`}
+                      </Tag>
+                    ))}
+                  </InlineStack>
+                ) : (
+                  <Text as="p" tone="subdued">
+                    No collections selected
+                  </Text>
+                )}
+                {targetCollections.length > 0 ? (
+                  <Text as="p" tone="subdued">
+                    All products in these collections will automatically show this upload field.
+                  </Text>
+                ) : null}
+              </BlockStack>
+
+              {!hasTargets ? (
+                <>
+                  <Divider />
+                  <Text as="p" tone="critical">
+                    Select at least one product or collection.
+                  </Text>
+                </>
+              ) : null}
             </BlockStack>
           </Card>
 
@@ -578,38 +591,95 @@ export default function FieldEditorPage() {
           </Card>
 
           <Card>
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingMd">
+                Content Type
+              </Text>
+              <Checkbox
+                label="Restrict allowed file types"
+                checked={contentTypeRestricted}
+                onChange={(checked) => {
+                  setContentTypeRestricted(checked);
+                  if (checked && allowedExtensions.length === 0) {
+                    setAllowedExtensions(["png", "jpg", "jpeg", "pdf"]);
+                  }
+                }}
+              />
+              {!contentTypeRestricted ? (
+                <Text as="p" tone="subdued">
+                  All file types are accepted.
+                </Text>
+              ) : (
+                <BlockStack gap="300">
+                  <Text as="p" tone="subdued">
+                    Only the file types listed below will be accepted.
+                  </Text>
+                  <BlockStack gap="200">
+                    {[
+                      { label: "Images (png, jpg, jpeg)", exts: ["png", "jpg", "jpeg"] },
+                      { label: "PDF", exts: ["pdf"] },
+                      { label: "SVG", exts: ["svg"] },
+                      { label: "Adobe (ai, psd, eps)", exts: ["ai", "psd", "eps"] },
+                      { label: "TIFF", exts: ["tif", "tiff"] },
+                    ].map((group) => {
+                      const allIncluded = group.exts.every((ext) => allowedExtensions.includes(ext));
+                      return (
+                        <Checkbox
+                          key={group.label}
+                          label={group.label}
+                          checked={allIncluded}
+                          onChange={(checked) => {
+                            setAllowedExtensions((prev) => {
+                              const without = prev.filter((ext) => !group.exts.includes(ext));
+                              return checked ? [...without, ...group.exts] : without;
+                            });
+                          }}
+                        />
+                      );
+                    })}
+                  </BlockStack>
+
+                  <Divider />
+
+                  <InlineStack gap="200" wrap>
+                    {allowedExtensions.map((ext) => (
+                      <Tag key={ext} onRemove={() => setAllowedExtensions((prev) => prev.filter((item) => item !== ext))}>
+                        .{ext}
+                      </Tag>
+                    ))}
+                  </InlineStack>
+                  <InlineStack gap="200" blockAlign="end">
+                    <div style={{ minWidth: 180 }}>
+                      <TextField
+                        label="Add custom extension"
+                        value={newExtension}
+                        autoComplete="off"
+                        onChange={setNewExtension}
+                        placeholder="e.g. webp"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => {
+                        const normalized = newExtension.trim().toLowerCase().replace(/^\./, "");
+                        if (normalized && !allowedExtensions.includes(normalized)) {
+                          setAllowedExtensions((prev) => [...prev, normalized]);
+                        }
+                        setNewExtension("");
+                      }}
+                    >
+                      Add
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              )}
+            </BlockStack>
+          </Card>
+
+          <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
                 File Rules
               </Text>
-              <InlineStack gap="200" wrap>
-                {allowedExtensions.map((ext) => (
-                  <Tag key={ext} onRemove={() => setAllowedExtensions((prev) => prev.filter((item) => item !== ext))}>
-                    {ext}
-                  </Tag>
-                ))}
-              </InlineStack>
-              <InlineStack gap="200" blockAlign="end">
-                <div style={{ minWidth: 180 }}>
-                  <TextField
-                    label="Add extension"
-                    value={newExtension}
-                    autoComplete="off"
-                    onChange={setNewExtension}
-                  />
-                </div>
-                <Button
-                  onClick={() => {
-                    const normalized = newExtension.trim().toLowerCase();
-                    if (normalized && !allowedExtensions.includes(normalized)) {
-                      setAllowedExtensions((prev) => [...prev, normalized]);
-                    }
-                    setNewExtension("");
-                  }}
-                >
-                  Add
-                </Button>
-              </InlineStack>
               <FormLayout>
                 <TextField
                   name="maxFileMB"
@@ -805,29 +875,13 @@ export default function FieldEditorPage() {
             </BlockStack>
           </Card>
 
-          <Card>
-            <FormLayout>
-              <Select
-                name="planRequirement"
-                label="Required plan"
-                value={planRequirement}
-                options={[
-                  { label: "Free", value: "free" },
-                  { label: "Basic Plus", value: "basic_plus" },
-                  { label: "Pro Plus", value: "pro_plus" },
-                ]}
-                onChange={(value) => setPlanRequirement(value as UploadFieldConfig["planRequirement"])}
-              />
-            </FormLayout>
-          </Card>
-
           <InlineStack gap="200">
             <Button submit variant="primary">
               Save Field
             </Button>
             <Button url="/app/fields">Back to Fields</Button>
-            {field.productHandle ? (
-              <Button url={`https://${shopDomain}/products/${field.productHandle}`} target="_blank">
+            {firstProductHandle ? (
+              <Button url={`https://${shopDomain}/products/${firstProductHandle}`} target="_blank">
                 Preview Product
               </Button>
             ) : null}
@@ -837,4 +891,3 @@ export default function FieldEditorPage() {
     </Page>
   );
 }
-

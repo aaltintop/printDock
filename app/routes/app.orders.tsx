@@ -1,4 +1,4 @@
-import { data, useLoaderData, useFetcher, useNavigation } from "react-router";
+import { data, useFetcher, useLoaderData, useNavigation, useSubmit } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -15,7 +15,7 @@ import {
   SkeletonBodyText,
   SkeletonPage,
   Text,
-  useIndexResourceState,
+  Tooltip,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -26,6 +26,99 @@ import {
   listOrderJobs,
   saveOrderJob,
 } from "../services/shop-data.server";
+
+function normalizeStatus(status: string) {
+  return status === "ready_for_production" ? "approved" : status;
+}
+
+function getStatusLabel(status: string) {
+  const normalized = normalizeStatus(status);
+  if (normalized === "pending_review") return "Pending review";
+  if (normalized === "approved") return "Approved";
+  if (normalized === "uploaded") return "Uploaded";
+  if (normalized === "reupload_requested") return "Re-upload requested";
+  if (normalized === "reviewed") return "Reviewed";
+  return normalized.replaceAll("_", " ");
+}
+
+function getStatusTone(status: string) {
+  const normalized = normalizeStatus(status);
+  if (normalized === "approved") return "success";
+  if (normalized === "pending_review" || normalized === "reviewed") return "warning";
+  if (normalized === "uploaded") return "attention";
+  if (normalized === "reupload_requested") return "critical";
+  return "info";
+}
+
+function formatFileSize(sizeBytes: number | null | undefined) {
+  if (!sizeBytes || sizeBytes <= 0) return "N/A";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = sizeBytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const decimals = unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+function buildOrdersUrl(filters: {
+  q: string;
+  status: string;
+  startDate: string;
+  endDate: string;
+  page?: number;
+  exportCsv?: boolean;
+}) {
+  const params = new URLSearchParams();
+  if (filters.page && filters.page > 1) {
+    params.set("page", String(filters.page));
+  }
+  if (filters.exportCsv) {
+    params.set("export", "csv");
+  }
+  if (filters.q) {
+    params.set("q", filters.q);
+  }
+  if (filters.status && filters.status !== "all") {
+    params.set("status", filters.status);
+  }
+  if (filters.startDate) {
+    params.set("startDate", filters.startDate);
+  }
+  if (filters.endDate) {
+    params.set("endDate", filters.endDate);
+  }
+  const query = params.toString();
+  return query ? `/app/orders?${query}` : "/app/orders";
+}
+
+function getStoreHandleFromDomain(shopDomain: string) {
+  return shopDomain.replace(".myshopify.com", "");
+}
+
+function buildShopifyOrderAdminUrl(shopDomain: string, orderGid: string) {
+  const storeHandle = getStoreHandleFromDomain(shopDomain);
+  const orderId = orderGid.replace("gid://shopify/Order/", "");
+  return `https://admin.shopify.com/store/${storeHandle}/orders/${orderId}`;
+}
+
+async function downloadFileWithoutNavigation(downloadUrl: string, fileName: string) {
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error("Failed to download file");
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName || "printdock-file";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(objectUrl);
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -48,7 +141,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         orderId: orderJob.shopifyOrderId,
         orderName: orderJob.shopifyOrderName,
         lineItemId: orderJob.shopifyLineItemId,
-        status: orderJob.status,
+        status: normalizeStatus(orderJob.status),
         createdAt: orderJob.createdAt,
         asset: orderJob.assetSnapshot || null,
         dimensions,
@@ -103,6 +196,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const total = allOrders.length;
+  const quickStats = {
+    pendingReview: allOrders.filter((order) => order.status === "pending_review").length,
+    approved: allOrders.filter((order) => order.status === "approved").length,
+    reuploadRequested: allOrders.filter((order) => order.status === "reupload_requested").length,
+  };
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
   const start = (safePage - 1) * pageSize;
@@ -132,6 +230,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       startDate,
       endDate,
     },
+    quickStats,
     availableStatuses,
     shopDomain: session.shop,
   });
@@ -168,10 +267,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     }
     return data({ ok: true, message: `${jobIds.length} jobs updated` });
-  }
-
-  if (intent === "bulk_zip") {
-    return data({ ok: true, message: "ZIP export has been queued for selected jobs." });
   }
 
   if (intent === "update_job") {
@@ -236,7 +331,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     const downloadUrl = await getSignedDownloadUrl(storagePath);
-    return data({ downloadUrl });
+    return data({ downloadUrl, storagePath });
   } catch (error) {
     console.error("Error generating download URL:", error);
     return data({ error: "Failed to generate download link" }, { status: 500 });
@@ -244,90 +339,151 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Orders() {
-  const { orders, pagination, filters, availableStatuses, shopDomain } = useLoaderData<typeof loader>();
+  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain } =
+    useLoaderData<typeof loader>();
   const navigation = useNavigation();
-  const fetcher = useFetcher<typeof action>();
+  const actionFetcher = useFetcher<typeof action>();
+  const downloadFetcher = useFetcher<typeof action>();
+  const submit = useSubmit();
   const appBridge = useAppBridge();
   const [queryValue, setQueryValue] = useState(filters.q);
   const [statusValue, setStatusValue] = useState(filters.status);
   const [startDateValue, setStartDateValue] = useState(filters.startDate);
   const [endDateValue, setEndDateValue] = useState(filters.endDate);
-  const { selectedResources, handleSelectionChange } = useIndexResourceState(
-    orders,
-  );
+  const [downloadingStoragePath, setDownloadingStoragePath] = useState<string | null>(null);
+  const [downloadedStoragePath, setDownloadedStoragePath] = useState<string | null>(null);
+  const [downloadingFileName, setDownloadingFileName] = useState<string>("printdock-file");
+  const [updatingStatusJobId, setUpdatingStatusJobId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (fetcher.data && "downloadUrl" in fetcher.data && fetcher.data.downloadUrl) {
-      window.open(fetcher.data.downloadUrl as string, "_blank");
+    if (downloadFetcher.data && "downloadUrl" in downloadFetcher.data && downloadFetcher.data.downloadUrl) {
+      const completedStoragePath =
+        "storagePath" in downloadFetcher.data ? String(downloadFetcher.data.storagePath || "") : "";
+      const downloadUrl = String(downloadFetcher.data.downloadUrl);
+      void downloadFileWithoutNavigation(downloadUrl, downloadingFileName)
+        .then(() => {
+          if (completedStoragePath) {
+            setDownloadedStoragePath(completedStoragePath);
+          }
+          setDownloadingStoragePath(null);
+          appBridge.toast.show("Downloaded");
+        })
+        .catch(() => {
+          setDownloadingStoragePath(null);
+          appBridge.toast.show("Failed to download file", { isError: true });
+        });
     }
-  }, [fetcher.data]);
+    if (downloadFetcher.data && "error" in downloadFetcher.data && downloadFetcher.data.error) {
+      setDownloadingStoragePath(null);
+      appBridge.toast.show(String(downloadFetcher.data.error), { isError: true });
+    }
+  }, [appBridge, downloadFetcher.data, downloadingFileName]);
 
   useEffect(() => {
-    if (fetcher.data && "message" in fetcher.data && fetcher.data.message) {
-      appBridge.toast.show(String(fetcher.data.message));
+    if (actionFetcher.data && "message" in actionFetcher.data && actionFetcher.data.message) {
+      appBridge.toast.show(String(actionFetcher.data.message));
     }
-    if (fetcher.data && "error" in fetcher.data && fetcher.data.error) {
-      appBridge.toast.show(String(fetcher.data.error), { isError: true });
+    if (actionFetcher.data && "error" in actionFetcher.data && actionFetcher.data.error) {
+      appBridge.toast.show(String(actionFetcher.data.error), { isError: true });
     }
-  }, [appBridge, fetcher.data]);
+    if (actionFetcher.state === "idle") {
+      setUpdatingStatusJobId(null);
+    }
+  }, [actionFetcher.data, appBridge]);
 
-  const handleDownload = (storagePath: string) => {
-    fetcher.submit(
-      { storagePath },
-      { method: "POST" }
+  const submitFilterValues = (next: {
+    q: string;
+    status: string;
+    startDate: string;
+    endDate: string;
+  }) => {
+    const nextUrl = buildOrdersUrl(next);
+    submit(new URLSearchParams(), { method: "get", action: nextUrl });
+  };
+
+  const handleDownload = (storagePath: string, fileName: string) => {
+    setDownloadingStoragePath(storagePath);
+    setDownloadedStoragePath(null);
+    setDownloadingFileName(fileName || "printdock-file");
+    downloadFetcher.submit({ storagePath }, { method: "POST" });
+  };
+
+  const handleStatusUpdate = (jobId: string, nextStatus: "pending_review" | "approved") => {
+    setUpdatingStatusJobId(jobId);
+    actionFetcher.submit(
+      {
+        intent: "bulk_update",
+        status: nextStatus,
+        jobIds: jobId,
+      },
+      { method: "post" },
     );
   };
 
-  const promotedBulkActions = useMemo(
-    () => [
-      {
-        content: "Download ZIP",
-        onAction: () =>
-          fetcher.submit(
-            {
-              intent: "bulk_zip",
-              jobIds: selectedResources.join(","),
-            },
-            { method: "post" },
-          ),
-      },
-      {
-        content: "Mark as Approved",
-        onAction: () =>
-          fetcher.submit(
-            {
-              intent: "bulk_update",
-              status: "approved",
-              jobIds: selectedResources.join(","),
-            },
-            { method: "post" },
-          ),
-      },
-      {
-        content: "Mark as Ready for Production",
-        onAction: () =>
-          fetcher.submit(
-            {
-              intent: "bulk_update",
-              status: "ready_for_production",
-              jobIds: selectedResources.join(","),
-            },
-            { method: "post" },
-          ),
-      },
-    ],
-    [fetcher, selectedResources],
-  );
-
-  const statusTone = (status: string) => {
-    const normalized = status.toLowerCase();
-    if (normalized === "ready_for_production") return "success";
-    if (normalized === "approved") return "info";
-    if (normalized === "pending_review" || normalized === "reviewed") return "warning";
-    if (normalized === "uploaded") return "attention";
-    if (normalized === "reupload_requested") return "critical";
-    return "info";
-  };
+  const appliedFilters = useMemo(() => {
+    const chips: Array<{ key: string; label: string; onRemove: () => void }> = [];
+    if (filters.q) {
+      chips.push({
+        key: "q",
+        label: `Search: ${filters.q}`,
+        onRemove: () => {
+          setQueryValue("");
+          submitFilterValues({
+            q: "",
+            status: statusValue,
+            startDate: startDateValue,
+            endDate: endDateValue,
+          });
+        },
+      });
+    }
+    if (statusValue !== "all") {
+      chips.push({
+        key: "status",
+        label: `Status: ${getStatusLabel(statusValue)}`,
+        onRemove: () => {
+          setStatusValue("all");
+          submitFilterValues({
+            q: queryValue,
+            status: "all",
+            startDate: startDateValue,
+            endDate: endDateValue,
+          });
+        },
+      });
+    }
+    if (startDateValue) {
+      chips.push({
+        key: "startDate",
+        label: `Start: ${startDateValue}`,
+        onRemove: () => {
+          setStartDateValue("");
+          submitFilterValues({
+            q: queryValue,
+            status: statusValue,
+            startDate: "",
+            endDate: endDateValue,
+          });
+        },
+      });
+    }
+    if (endDateValue) {
+      chips.push({
+        key: "endDate",
+        label: `End: ${endDateValue}`,
+        onRemove: () => {
+          setEndDateValue("");
+          submitFilterValues({
+            q: queryValue,
+            status: statusValue,
+            startDate: startDateValue,
+            endDate: "",
+          });
+        },
+      });
+    }
+    return chips;
+  }, [endDateValue, filters.q, queryValue, startDateValue, statusValue]);
 
   if (navigation.state === "loading") {
     return (
@@ -396,25 +552,72 @@ export default function Orders() {
                     ),
                   },
                 ]}
-                appliedFilters={[]}
+                appliedFilters={appliedFilters}
                 onClearAll={() => {
                   setStatusValue("all");
                   setStartDateValue("");
                   setEndDateValue("");
                   setQueryValue("");
+                  submitFilterValues({
+                    q: "",
+                    status: "all",
+                    startDate: "",
+                    endDate: "",
+                  });
                 }}
               />
               <InlineStack gap="200">
                 <input type="hidden" name="q" value={queryValue} />
+                <input type="hidden" name="status" value={statusValue} />
+                <input type="hidden" name="startDate" value={startDateValue} />
+                <input type="hidden" name="endDate" value={endDateValue} />
                 <Button submit>Apply filters</Button>
                 <Button
-                  url={`/app/orders?export=csv&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
+                  url={buildOrdersUrl({
+                    q: filters.q,
+                    status: filters.status,
+                    startDate: filters.startDate,
+                    endDate: filters.endDate,
+                    exportCsv: true,
+                  })}
                 >
                   Export CSV
                 </Button>
               </InlineStack>
             </BlockStack>
           </form>
+        </Card>
+
+        <Card>
+          <InlineStack gap="400" align="space-between">
+            <Text as="p">Pending review: {quickStats.pendingReview}</Text>
+            <Text as="p">Approved: {quickStats.approved}</Text>
+            <Text as="p">Re-upload requested: {quickStats.reuploadRequested}</Text>
+          </InlineStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingMd">
+              Status guide
+            </Text>
+            <Text as="p" tone="subdued">
+              Uploaded: file received and waiting for a quality check.
+            </Text>
+            <Text as="p" tone="subdued">
+              Pending review: file needs manual review before production.
+            </Text>
+            <Text as="p" tone="subdued">
+              Approved: file is accepted and ready for production.
+            </Text>
+            <Text as="p" tone="subdued">
+              Re-upload requested: customer must upload a corrected file.
+            </Text>
+            <Text as="p" tone="subdued">
+              You can change status from quick action buttons in each row or from the order detail
+              page.
+            </Text>
+          </BlockStack>
         </Card>
 
         <Card padding="0">
@@ -430,15 +633,14 @@ export default function Orders() {
             </EmptyState>
           ) : (
               <IndexTable
+              selectable={false}
               resourceName={{ singular: "order job", plural: "order jobs" }}
               itemCount={orders.length}
-              selectedItemsCount={selectedResources.length}
-              onSelectionChange={handleSelectionChange}
-              promotedBulkActions={promotedBulkActions}
               headings={[
                 { title: "Order" },
                 { title: "Status" },
                 { title: "File" },
+                { title: "Size" },
                 { title: "Dimensions" },
                 { title: "Date" },
                 { title: "Actions" },
@@ -447,34 +649,74 @@ export default function Orders() {
               {orders.map((order, index) => (
                 <IndexTable.Row id={order.id} key={order.id} position={index}>
                   <IndexTable.Cell>
-                    <Link url={`https://${shopDomain}/admin/orders/${order.orderId ? order.orderId.replace("gid://shopify/Order/", "") : ""}`} target="_blank">
-                      {order.orderName || "Unknown"}
-                    </Link>
+                    {order.orderId ? (
+                      <Link
+                        url={buildShopifyOrderAdminUrl(shopDomain, order.orderId)}
+                        target="_blank"
+                      >
+                        {order.orderName || "Unknown"}
+                      </Link>
+                    ) : (
+                      <Text as="span">{order.orderName || "Unknown"}</Text>
+                    )}
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    <Badge tone={statusTone(order.status)}>
-                      {order.status.replaceAll("_", " ")}
+                    <Badge tone={getStatusTone(order.status)}>
+                      {getStatusLabel(order.status)}
                     </Badge>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    {(order.asset?.originalName || "No File").slice(0, 40)}
+                    {(() => {
+                      const fileName = order.asset?.originalName || "No File";
+                      const truncated = fileName.length > 40 ? `${fileName.slice(0, 40)}...` : fileName;
+                      return fileName.length > 40 ? (
+                        <Tooltip content={fileName}>
+                          <Text as="span">{truncated}</Text>
+                        </Tooltip>
+                      ) : (
+                        truncated
+                      );
+                    })()}
                   </IndexTable.Cell>
+                  <IndexTable.Cell>{formatFileSize(order.asset?.sizeBytes)}</IndexTable.Cell>
                   <IndexTable.Cell>{order.dimensions}</IndexTable.Cell>
                   <IndexTable.Cell>{new Date(order.createdAt).toLocaleString()}</IndexTable.Cell>
                   <IndexTable.Cell>
                     <InlineStack gap="200">
-                      <Button url={`/app/orders/${order.id}`} variant="plain">
-                        View
-                      </Button>
+                      {order.status !== "approved" ? (
+                        <Button
+                          variant="plain"
+                          onClick={() => handleStatusUpdate(order.id, "approved")}
+                          loading={actionFetcher.state === "submitting" && updatingStatusJobId === order.id}
+                        >
+                          Mark approved
+                        </Button>
+                      ) : null}
+                      {order.status !== "pending_review" ? (
+                        <Button
+                          variant="plain"
+                          onClick={() => handleStatusUpdate(order.id, "pending_review")}
+                          loading={actionFetcher.state === "submitting" && updatingStatusJobId === order.id}
+                        >
+                          Mark review
+                        </Button>
+                      ) : null}
                       <Button
-                        onClick={() => order.asset?.storagePath && handleDownload(order.asset.storagePath)}
+                        onClick={() =>
+                          order.asset?.storagePath &&
+                          handleDownload(order.asset.storagePath, order.asset?.originalName || "printdock-file")
+                        }
                         loading={
-                          fetcher.state === "submitting" &&
-                          fetcher.formData?.get("storagePath") === order.asset?.storagePath
+                          downloadFetcher.state === "submitting" &&
+                          downloadingStoragePath === order.asset?.storagePath
                         }
                         disabled={!order.asset?.storagePath}
                       >
-                        Download
+                        {downloadingStoragePath === order.asset?.storagePath
+                          ? "Downloading..."
+                          : downloadedStoragePath === order.asset?.storagePath
+                            ? "Downloaded"
+                            : "Download"}
                       </Button>
                     </InlineStack>
                   </IndexTable.Cell>
@@ -490,13 +732,25 @@ export default function Orders() {
           </Text>
           <InlineStack gap="200">
             <Button
-              url={`/app/orders?page=${Math.max(1, pagination.page - 1)}&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
+              url={buildOrdersUrl({
+                q: filters.q,
+                status: filters.status,
+                startDate: filters.startDate,
+                endDate: filters.endDate,
+                page: Math.max(1, pagination.page - 1),
+              })}
               disabled={pagination.page <= 1}
             >
               Previous
             </Button>
             <Button
-              url={`/app/orders?page=${Math.min(pagination.pageCount, pagination.page + 1)}&q=${encodeURIComponent(filters.q)}&status=${encodeURIComponent(filters.status)}`}
+              url={buildOrdersUrl({
+                q: filters.q,
+                status: filters.status,
+                startDate: filters.startDate,
+                endDate: filters.endDate,
+                page: Math.min(pagination.pageCount, pagination.page + 1),
+              })}
               disabled={pagination.page >= pagination.pageCount}
             >
               Next
