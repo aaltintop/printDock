@@ -19,9 +19,11 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { canUseFeature } from "../config/plans";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
+  getBillingPlan,
   listOrderJobAuditEvents,
   listOrderJobs,
   saveOrderJob,
@@ -168,7 +170,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  const billingPlan = await getBillingPlan(session.shop);
+  const bulkDownloadAllowed = canUseFeature(billingPlan.planCode, "bulkDownload");
+
   if (url.searchParams.get("export") === "csv") {
+    if (!bulkDownloadAllowed) {
+      throw new Response("CSV export requires a Pro or Business plan", {
+        status: 402,
+      });
+    }
+
     const csvRows = [
       ["Order", "File", "Dimensions", "Price", "Status", "Assignee", "Date"].join(","),
       ...allOrders.map((order) =>
@@ -233,6 +244,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     quickStats,
     availableStatuses,
     shopDomain: session.shop,
+    canBulkDownload: bulkDownloadAllowed,
   });
 };
 
@@ -339,7 +351,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Orders() {
-  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain } =
+  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain, canBulkDownload } =
     useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const actionFetcher = useFetcher<typeof action>();
@@ -572,17 +584,23 @@ export default function Orders() {
                 <input type="hidden" name="startDate" value={startDateValue} />
                 <input type="hidden" name="endDate" value={endDateValue} />
                 <Button submit>Apply filters</Button>
-                <Button
-                  url={buildOrdersUrl({
-                    q: filters.q,
-                    status: filters.status,
-                    startDate: filters.startDate,
-                    endDate: filters.endDate,
-                    exportCsv: true,
-                  })}
-                >
-                  Export CSV
-                </Button>
+                {canBulkDownload ? (
+                  <Button
+                    url={buildOrdersUrl({
+                      q: filters.q,
+                      status: filters.status,
+                      startDate: filters.startDate,
+                      endDate: filters.endDate,
+                      exportCsv: true,
+                    })}
+                  >
+                    Export CSV
+                  </Button>
+                ) : (
+                  <Tooltip content="CSV export requires a Pro or Business plan">
+                    <Button url="/app/plans">Upgrade to export</Button>
+                  </Tooltip>
+                )}
               </InlineStack>
             </BlockStack>
           </form>

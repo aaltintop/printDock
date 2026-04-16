@@ -10,6 +10,7 @@ import {
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Banner,
   BlockStack,
   Button,
   Card,
@@ -29,7 +30,8 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
-import { getEffectiveBillingPlan, getUploadField, saveUploadField } from "../services/shop-data.server";
+import { canUseFeature, getPlan, isWithinFieldLimit } from "../config/plans";
+import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
 import type { UploadFieldConfig, UploadFieldDimensionRule, FieldTargetProduct, FieldTargetCollection } from "../types/printdock";
 
 function extractNumericId(gid: string): string {
@@ -90,10 +92,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     field = existing;
   }
 
+  const billingPlan = await getEffectiveBillingPlan(session.shop);
+  const planLimits = getPlan(billingPlan.planCode);
+  const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+
   return data({
     field,
     isNew: id === "new",
     shopDomain: session.shop,
+    planCode: billingPlan.planCode,
+    maxFileMBFromPlan,
   });
 };
 
@@ -165,15 +173,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
   const maxFileMB = Math.max(1, parseNumber(formData.get("maxFileMB"), 50));
 
-  if (pricingEnabled && !billingPlan.allowAutoPricing) {
-    return data({ error: "Auto pricing requires a higher plan." }, { status: 402 });
+  const planCode = billingPlan.planCode;
+  const planLimits = getPlan(planCode);
+  const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+
+  if (id === "new") {
+    const allFields = await listUploadFields(session.shop);
+    if (!isWithinFieldLimit(planCode, allFields.length)) {
+      return data({ error: "Upload field limit reached for your plan" }, { status: 402 });
+    }
   }
-  if (dimensionRules.length > 0 && !billingPlan.allowAdvancedRules) {
+
+  if (pricingEnabled && !canUseFeature(planCode, "dynamicPricing")) {
+    return data({ error: "Dynamic pricing requires a higher plan." }, { status: 402 });
+  }
+  if (dimensionRules.length > 0 && !canUseFeature(planCode, "advancedValidation")) {
     return data({ error: "Advanced dimension rules require a higher plan." }, { status: 402 });
   }
-  if (maxFileMB > billingPlan.maxFileMBLimit) {
+  if (maxFileMB > maxFileMBFromPlan) {
     return data(
-      { error: `Your current plan supports up to ${billingPlan.maxFileMBLimit}MB per file.` },
+      { error: `Your current plan supports up to ${maxFileMBFromPlan}MB per file.` },
       { status: 402 },
     );
   }
@@ -229,7 +248,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function FieldEditorPage() {
-  const { field, isNew, shopDomain } = useLoaderData<typeof loader>();
+  const { field, isNew, shopDomain, planCode, maxFileMBFromPlan } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -689,7 +708,18 @@ export default function FieldEditorPage() {
                   autoComplete="off"
                   value={maxFileMB}
                   onChange={setMaxFileMB}
+                  helpText={`Your plan allows up to ${maxFileMBFromPlan}MB`}
                 />
+                {Number(maxFileMB) > maxFileMBFromPlan && (
+                  <Banner
+                    title="File size exceeds your plan limit"
+                    tone="warning"
+                    action={{ content: "Upgrade plan", url: "/app/plans" }}
+                  >
+                    Your {planCode} plan supports up to {maxFileMBFromPlan}MB per
+                    file. Upgrade to increase this limit.
+                  </Banner>
+                )}
                 <Checkbox
                   name="fileQuantityEnabled"
                   label="Enable custom quantity management"

@@ -1,6 +1,7 @@
 import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { z } from "zod";
+import { canUseFeature, getPlan } from "../config/plans";
 import { createPrintReadyFileToken } from "../services/file-download-token.server";
 import { getFileBuffer } from "../services/storage.server";
 import { extractMetadata, runValidationRules, hasBlockingError } from "../services/validation.server";
@@ -67,7 +68,9 @@ export async function action({ request }: ActionFunctionArgs) {
   const field =
     (sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null) ??
     (await getActiveFieldForProduct(shopDomain, sessionData.productId, sessionData.variantId, createCollectionIdResolver()));
-  const allowedMaxFileMB = Math.min(field?.maxFileMB ?? Infinity, billingPlan.maxFileMBLimit || Infinity);
+  const planLimits = getPlan(billingPlan.planCode);
+  const planMaxMB = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+  const allowedMaxFileMB = Math.min(field?.maxFileMB ?? Infinity, planMaxMB);
   if (Number.isFinite(allowedMaxFileMB) && sizeBytes > allowedMaxFileMB * 1024 * 1024) {
     return data(
       { error: `File exceeds plan limit of ${allowedMaxFileMB}MB` },
@@ -82,9 +85,8 @@ export async function action({ request }: ActionFunctionArgs) {
     );
   }
 
-  // Run validation rules
   const rules: ValidationRule[] = (field?.dimensionRules ?? [])
-    .filter(() => billingPlan.allowAdvancedRules)
+    .filter(() => canUseFeature(billingPlan.planCode, "advancedValidation"))
     .map((rule) => ({
     id: rule.id,
     type: rule.dimensionType,
@@ -131,17 +133,18 @@ export async function action({ request }: ActionFunctionArgs) {
 
   // Calculate price
   let pricing = null;
-  if (field?.pricing?.enabled && !billingPlan.allowAutoPricing) {
+  const hasDynamicPricing = canUseFeature(billingPlan.planCode, "dynamicPricing");
+  if (field?.pricing?.enabled && !hasDynamicPricing) {
     validationResults.push({
       ruleId: "plan_auto_pricing",
       severity: "warning",
-      message: "Auto pricing is not available on your current plan",
+      message: "Dynamic pricing is not available on your current plan",
       actual: null,
       expected: 0,
     });
   }
 
-  if (field?.pricing?.enabled && billingPlan.allowAutoPricing && !blocked) {
+  if (field?.pricing?.enabled && hasDynamicPricing && !blocked) {
     pricing = calculatePrice(
       metadata,
       {
@@ -209,7 +212,7 @@ export async function action({ request }: ActionFunctionArgs) {
     printReadyFileUrl,
     usage: {
       current: usage.usageThisMonth,
-      limit: usage.monthlyUploadsLimit,
+      limit: planLimits.maxOrdersPerMonth,
     },
   });
 }

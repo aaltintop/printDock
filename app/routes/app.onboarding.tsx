@@ -2,6 +2,7 @@ import { data, useLoaderData, useFetcher } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Badge, BlockStack, Button, Card, InlineStack, Page, Text, Divider } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { getPlan } from "../config/plans";
 import { db } from "../firebase.server";
 import {
   getEffectiveBillingPlan,
@@ -240,7 +241,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       uploads: uploads.length,
       jobs: jobs.length,
       activePlan: billingPlan.planCode,
-      usage: `${billingPlan.usageThisMonth}/${billingPlan.monthlyUploadsLimit}`,
+      usage: `${billingPlan.usageThisMonth}/${getPlan(billingPlan.planCode).maxOrdersPerMonth === -1 ? "∞" : getPlan(billingPlan.planCode).maxOrdersPerMonth}`,
     },
   });
 };

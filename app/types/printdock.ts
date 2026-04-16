@@ -71,7 +71,7 @@ export interface UploadFieldConfig {
   };
   pricing: UploadFieldPricing;
   dimensionRules: UploadFieldDimensionRule[];
-  planRequirement: "free" | "basic_plus" | "pro_plus";
+  planRequirement: import("../config/plans").PlanCode;
   createdAt: string;
   updatedAt: string;
 }
@@ -165,13 +165,9 @@ export interface AppSettings {
 }
 
 export interface BillingPlan {
-  planCode: "free" | "basic_plus" | "pro_plus";
+  planCode: import("../config/plans").PlanCode;
   status: "active" | "inactive" | "trial";
   subscriptionId: string | null;
-  monthlyUploadsLimit: number;
-  maxFileMBLimit: number;
-  allowAdvancedRules: boolean;
-  allowAutoPricing: boolean;
   usageThisMonth: number;
   usageMonthKey: string;
   updatedAt: string;

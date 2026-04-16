@@ -1,5 +1,7 @@
 import { db } from "../firebase.server";
 import { unauthenticated } from "../shopify.server";
+import type { PlanCode } from "../config/plans";
+import { migratePlanCode } from "../config/plans";
 import type {
   AppSettings,
   BillingPlan,
@@ -29,10 +31,6 @@ export const DEFAULT_BILLING_PLAN: BillingPlan = {
   planCode: "free",
   status: "trial",
   subscriptionId: null,
-  monthlyUploadsLimit: 100,
-  maxFileMBLimit: 50,
-  allowAdvancedRules: false,
-  allowAutoPricing: false,
   usageThisMonth: 0,
   usageMonthKey: "1970-01",
   updatedAt: new Date(0).toISOString(),
@@ -176,10 +174,7 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
     dimensionRules: Array.isArray(field.dimensionRules)
       ? (field.dimensionRules as UploadFieldConfig["dimensionRules"])
       : [],
-    planRequirement:
-      field.planRequirement === "basic_plus" || field.planRequirement === "pro_plus"
-        ? (field.planRequirement as "basic_plus" | "pro_plus")
-        : "free",
+    planRequirement: migratePlanCode(String(field.planRequirement ?? "free")),
     createdAt: toIsoDate(field.createdAt),
     updatedAt: toIsoDate(field.updatedAt),
   };
@@ -614,21 +609,36 @@ export async function createReuploadRequest(shopDomain: string, jobId: string): 
   return token;
 }
 
+export async function getShopPlan(shopDomain: string): Promise<PlanCode> {
+  const billing = await getBillingPlan(shopDomain);
+  return billing.planCode;
+}
+
+export async function updateShopPlan(
+  shopDomain: string,
+  planCode: PlanCode,
+): Promise<void> {
+  await saveBillingPlan(shopDomain, { planCode });
+}
+
 export async function getBillingPlan(shopDomain: string): Promise<BillingPlan> {
   const nestedDoc = await shopDoc(shopDomain).collection("billing").doc("plan").get();
   if (nestedDoc.exists) {
+    const raw = nestedDoc.data() as Record<string, unknown>;
     return {
       ...DEFAULT_BILLING_PLAN,
-      ...(nestedDoc.data() as Partial<BillingPlan>),
+      ...raw,
+      planCode: migratePlanCode(String(raw?.planCode ?? "free")),
     };
   }
 
   const legacyDoc = await db.collection("billingPlans").doc(shopDomain).get();
   if (!legacyDoc.exists) return DEFAULT_BILLING_PLAN;
-  const legacyData = legacyDoc.data() as Partial<BillingPlan>;
+  const raw = legacyDoc.data() as Record<string, unknown>;
   return {
     ...DEFAULT_BILLING_PLAN,
-    ...legacyData,
+    ...raw,
+    planCode: migratePlanCode(String(raw?.planCode ?? "free")),
   };
 }
 
