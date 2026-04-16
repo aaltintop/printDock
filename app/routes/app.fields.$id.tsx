@@ -197,7 +197,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     fileRenamingPattern: String(formData.get("fileRenamingPattern") || "{orderId}_{originalName}"),
     minFiles: 1,
     maxFiles: 1,
-    allowedExtensions: allowedExtensions.length > 0 ? allowedExtensions : ["png", "jpg", "jpeg", "pdf"],
+    allowedExtensions,
     maxFileMB,
     fileQuantityManagement: {
       enabled: parseBoolean(formData.get("fileQuantityEnabled")),
@@ -269,6 +269,7 @@ export default function FieldEditorPage() {
   const [storefrontTitle, setStorefrontTitle] = useState(initialState.storefrontTitle);
   const [storefrontDescription, setStorefrontDescription] = useState(initialState.storefrontDescription);
   const [fileRenamingPattern, setFileRenamingPattern] = useState(initialState.fileRenamingPattern);
+  const [contentTypeRestricted, setContentTypeRestricted] = useState(initialState.allowedExtensions.length > 0);
   const [allowedExtensions, setAllowedExtensions] = useState<string[]>(initialState.allowedExtensions);
   const [newExtension, setNewExtension] = useState("");
   const [maxFileMB, setMaxFileMB] = useState(initialState.maxFileMB);
@@ -306,6 +307,7 @@ export default function FieldEditorPage() {
     storefrontTitle,
     storefrontDescription,
     fileRenamingPattern,
+    contentTypeRestricted,
     allowedExtensions,
     maxFileMB,
     fileQuantityEnabled,
@@ -331,6 +333,7 @@ export default function FieldEditorPage() {
     setStorefrontTitle(initialState.storefrontTitle);
     setStorefrontDescription(initialState.storefrontDescription);
     setFileRenamingPattern(initialState.fileRenamingPattern);
+    setContentTypeRestricted(initialState.allowedExtensions.length > 0);
     setAllowedExtensions(initialState.allowedExtensions);
     setMaxFileMB(initialState.maxFileMB);
     setFileQuantityEnabled(initialState.fileQuantityEnabled);
@@ -440,7 +443,7 @@ export default function FieldEditorPage() {
         <input type="hidden" name="targetProducts" value={JSON.stringify(targetProducts)} />
         <input type="hidden" name="targetCollections" value={JSON.stringify(targetCollections)} />
         <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
-        <input type="hidden" name="allowedExtensions" value={allowedExtensions.join(",")} />
+        <input type="hidden" name="allowedExtensions" value={contentTypeRestricted ? allowedExtensions.join(",") : ""} />
         <input type="hidden" name="dimensionRules" value={JSON.stringify(dimensionRules)} />
 
         <BlockStack gap="400">
@@ -588,38 +591,95 @@ export default function FieldEditorPage() {
           </Card>
 
           <Card>
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingMd">
+                Content Type
+              </Text>
+              <Checkbox
+                label="Restrict allowed file types"
+                checked={contentTypeRestricted}
+                onChange={(checked) => {
+                  setContentTypeRestricted(checked);
+                  if (checked && allowedExtensions.length === 0) {
+                    setAllowedExtensions(["png", "jpg", "jpeg", "pdf"]);
+                  }
+                }}
+              />
+              {!contentTypeRestricted ? (
+                <Text as="p" tone="subdued">
+                  All file types are accepted.
+                </Text>
+              ) : (
+                <BlockStack gap="300">
+                  <Text as="p" tone="subdued">
+                    Only the file types listed below will be accepted.
+                  </Text>
+                  <BlockStack gap="200">
+                    {[
+                      { label: "Images (png, jpg, jpeg)", exts: ["png", "jpg", "jpeg"] },
+                      { label: "PDF", exts: ["pdf"] },
+                      { label: "SVG", exts: ["svg"] },
+                      { label: "Adobe (ai, psd, eps)", exts: ["ai", "psd", "eps"] },
+                      { label: "TIFF", exts: ["tif", "tiff"] },
+                    ].map((group) => {
+                      const allIncluded = group.exts.every((ext) => allowedExtensions.includes(ext));
+                      return (
+                        <Checkbox
+                          key={group.label}
+                          label={group.label}
+                          checked={allIncluded}
+                          onChange={(checked) => {
+                            setAllowedExtensions((prev) => {
+                              const without = prev.filter((ext) => !group.exts.includes(ext));
+                              return checked ? [...without, ...group.exts] : without;
+                            });
+                          }}
+                        />
+                      );
+                    })}
+                  </BlockStack>
+
+                  <Divider />
+
+                  <InlineStack gap="200" wrap>
+                    {allowedExtensions.map((ext) => (
+                      <Tag key={ext} onRemove={() => setAllowedExtensions((prev) => prev.filter((item) => item !== ext))}>
+                        .{ext}
+                      </Tag>
+                    ))}
+                  </InlineStack>
+                  <InlineStack gap="200" blockAlign="end">
+                    <div style={{ minWidth: 180 }}>
+                      <TextField
+                        label="Add custom extension"
+                        value={newExtension}
+                        autoComplete="off"
+                        onChange={setNewExtension}
+                        placeholder="e.g. webp"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => {
+                        const normalized = newExtension.trim().toLowerCase().replace(/^\./, "");
+                        if (normalized && !allowedExtensions.includes(normalized)) {
+                          setAllowedExtensions((prev) => [...prev, normalized]);
+                        }
+                        setNewExtension("");
+                      }}
+                    >
+                      Add
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              )}
+            </BlockStack>
+          </Card>
+
+          <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
                 File Rules
               </Text>
-              <InlineStack gap="200" wrap>
-                {allowedExtensions.map((ext) => (
-                  <Tag key={ext} onRemove={() => setAllowedExtensions((prev) => prev.filter((item) => item !== ext))}>
-                    {ext}
-                  </Tag>
-                ))}
-              </InlineStack>
-              <InlineStack gap="200" blockAlign="end">
-                <div style={{ minWidth: 180 }}>
-                  <TextField
-                    label="Add extension"
-                    value={newExtension}
-                    autoComplete="off"
-                    onChange={setNewExtension}
-                  />
-                </div>
-                <Button
-                  onClick={() => {
-                    const normalized = newExtension.trim().toLowerCase();
-                    if (normalized && !allowedExtensions.includes(normalized)) {
-                      setAllowedExtensions((prev) => [...prev, normalized]);
-                    }
-                    setNewExtension("");
-                  }}
-                >
-                  Add
-                </Button>
-              </InlineStack>
               <FormLayout>
                 <TextField
                   name="maxFileMB"
