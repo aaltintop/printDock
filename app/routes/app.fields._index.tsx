@@ -31,10 +31,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const fields = await listUploadFields(session.shop);
   const filteredFields = fields
     .filter((field) => {
+      const targetText = [
+        ...field.targetProducts?.map((p) => p.title) ?? [],
+        ...field.targetCollections?.map((c) => c.title) ?? [],
+        field.productId,
+      ].join(" ").toLowerCase();
       const matchesText =
         query.length === 0 ||
         field.adminTitle.toLowerCase().includes(query) ||
-        field.productId.toLowerCase().includes(query);
+        targetText.includes(query);
       const matchesStatus =
         statusFilter === "all" ||
         (statusFilter === "active" && field.isActive) ||
@@ -188,7 +193,7 @@ export default function FieldsIndexPage() {
               itemCount={fields.length}
               headings={[
                 { title: "Title" },
-                { title: "Product" },
+                { title: "Targets" },
                 { title: "Limits" },
                 { title: "Pricing" },
                 { title: "Status" },
@@ -198,13 +203,24 @@ export default function FieldsIndexPage() {
               selectable={false}
             >
               {fields.map((field, index) => {
-                const previewUrl = field.productHandle
-                  ? `https://${shopDomain}/products/${field.productHandle}`
+                const firstHandle = field.targetProducts?.[0]?.handle || field.productHandle;
+                const previewUrl = firstHandle
+                  ? `https://${shopDomain}/products/${firstHandle}`
                   : null;
                 return (
                   <IndexTable.Row id={field.id} key={field.id} position={index}>
                     <IndexTable.Cell>{field.adminTitle}</IndexTable.Cell>
-                    <IndexTable.Cell>{field.productId}</IndexTable.Cell>
+                    <IndexTable.Cell>
+                      {(() => {
+                        const parts: string[] = [];
+                        const pc = field.targetProducts?.length ?? 0;
+                        const cc = field.targetCollections?.length ?? 0;
+                        if (pc > 0) parts.push(`${pc} product${pc > 1 ? "s" : ""}`);
+                        if (cc > 0) parts.push(`${cc} collection${cc > 1 ? "s" : ""}`);
+                        if (parts.length === 0 && field.productId) parts.push(`Product ${field.productId}`);
+                        return parts.join(", ") || "None";
+                      })()}
+                    </IndexTable.Cell>
                     <IndexTable.Cell>{`1 file, ${field.maxFileMB}MB max`}</IndexTable.Cell>
                     <IndexTable.Cell>
                       {field.pricing.enabled

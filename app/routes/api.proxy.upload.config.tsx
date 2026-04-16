@@ -1,7 +1,7 @@
 import { data } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getActiveFieldForProduct, getEffectiveBillingPlan } from "../services/shop-data.server";
+import { createCollectionIdResolver, getActiveFieldForProduct, getEffectiveBillingPlan } from "../services/shop-data.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.public.appProxy(request);
@@ -17,7 +17,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return data({ error: "Missing productId" }, { status: 400 });
   }
 
-  const field = await getActiveFieldForProduct(shopDomain, productId, variantId);
+  const resolveCollectionIds = createCollectionIdResolver();
+  const field = await getActiveFieldForProduct(shopDomain, productId, variantId, resolveCollectionIds);
   const billingPlan = await getEffectiveBillingPlan(shopDomain);
   if (!field) {
     return data({

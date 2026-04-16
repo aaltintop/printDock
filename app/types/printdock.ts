@@ -33,11 +33,28 @@ export interface UploadFieldPricing {
   roundingEnabled: boolean;
 }
 
+export interface FieldTargetProduct {
+  id: string;
+  title: string;
+  handle: string;
+}
+
+export interface FieldTargetCollection {
+  id: string;
+  title: string;
+}
+
 export interface UploadFieldConfig {
   id: string;
+  /** @deprecated Use targetProducts instead. Kept for backward compatibility. */
   productId: string;
+  /** @deprecated Use targetProducts instead. Kept for backward compatibility. */
   productHandle: string;
   targetVariantIds: string[];
+  targetProducts: FieldTargetProduct[];
+  targetCollections: FieldTargetCollection[];
+  targetProductIds: string[];
+  targetCollectionIds: string[];
   isActive: boolean;
   isRequired: boolean;
   adminTitle: string;

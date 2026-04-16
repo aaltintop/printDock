@@ -5,6 +5,7 @@ import { getPresignedUploadUrl } from "../services/storage.server";
 import { authenticate } from "../shopify.server";
 import crypto from "crypto";
 import {
+  createCollectionIdResolver,
   createUploadSession,
   getActiveFieldForProduct,
   getEffectiveBillingPlan,
@@ -57,7 +58,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const selectedField =
     (existingSession?.fieldId ? await getUploadField(shopDomain, existingSession.fieldId) : null) ??
     (fieldId ? await getUploadField(shopDomain, fieldId) : null) ??
-    (await getActiveFieldForProduct(shopDomain, productId, normalizedVariantId));
+    (await getActiveFieldForProduct(shopDomain, productId, normalizedVariantId, createCollectionIdResolver()));
 
   const billingPlan = await getEffectiveBillingPlan(shopDomain);
   if (

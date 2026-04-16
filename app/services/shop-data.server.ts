@@ -1,4 +1,5 @@
 import { db } from "../firebase.server";
+import { unauthenticated } from "../shopify.server";
 import type {
   AppSettings,
   BillingPlan,
@@ -90,13 +91,50 @@ function normalizeAsset(id: string, raw: unknown): UploadAsset {
 
 function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
   const field = isRecord(raw) ? raw : {};
+
+  const legacyProductId = String(field.productId ?? "");
+  const legacyProductHandle = String(field.productHandle ?? "");
+
+  const targetProducts: UploadFieldConfig["targetProducts"] = Array.isArray(field.targetProducts)
+    ? field.targetProducts
+        .filter((p): p is Record<string, unknown> => isRecord(p))
+        .map((p) => ({
+          id: String(p.id ?? ""),
+          title: String(p.title ?? ""),
+          handle: String(p.handle ?? ""),
+        }))
+    : [];
+  const targetCollections: UploadFieldConfig["targetCollections"] = Array.isArray(field.targetCollections)
+    ? field.targetCollections
+        .filter((c): c is Record<string, unknown> => isRecord(c))
+        .map((c) => ({
+          id: String(c.id ?? ""),
+          title: String(c.title ?? ""),
+        }))
+    : [];
+
+  if (targetProducts.length === 0 && legacyProductId) {
+    targetProducts.push({ id: legacyProductId, title: "", handle: legacyProductHandle });
+  }
+
+  const targetProductIds: string[] = Array.isArray(field.targetProductIds)
+    ? field.targetProductIds.map((v) => String(v))
+    : targetProducts.map((p) => p.id).filter(Boolean);
+  const targetCollectionIds: string[] = Array.isArray(field.targetCollectionIds)
+    ? field.targetCollectionIds.map((v) => String(v))
+    : targetCollections.map((c) => c.id).filter(Boolean);
+
   return {
     id: docId,
-    productId: String(field.productId ?? ""),
-    productHandle: String(field.productHandle ?? ""),
+    productId: legacyProductId,
+    productHandle: legacyProductHandle,
     targetVariantIds: Array.isArray(field.targetVariantIds)
       ? field.targetVariantIds.map((value) => String(value))
       : [],
+    targetProducts,
+    targetCollections,
+    targetProductIds,
+    targetCollectionIds,
     isActive: field.isActive !== false,
     isRequired: Boolean(field.isRequired),
     adminTitle: String(field.adminTitle ?? "Upload Field"),
@@ -265,40 +303,151 @@ export async function getUploadField(shopDomain: string, fieldId: string): Promi
   return normalizeField(fieldId, legacyData);
 }
 
+const COLLECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function productCollectionCacheRef(shopDomain: string, productId: string) {
+  return db.collection("shops").doc(shopDomain).collection("productCollectionCache").doc(productId);
+}
+
+export async function getCachedCollectionIds(
+  shopDomain: string,
+  productId: string,
+): Promise<string[] | null> {
+  const doc = await productCollectionCacheRef(shopDomain, productId).get();
+  if (!doc.exists) return null;
+  const data = doc.data();
+  if (!data || !Array.isArray(data.collectionIds)) return null;
+  const cachedAt = new Date(data.cachedAt).getTime();
+  if (Date.now() - cachedAt > COLLECTION_CACHE_TTL_MS) return null;
+  return data.collectionIds.map((id: unknown) => String(id));
+}
+
+export async function setCachedCollectionIds(
+  shopDomain: string,
+  productId: string,
+  collectionIds: string[],
+): Promise<void> {
+  await productCollectionCacheRef(shopDomain, productId).set({
+    collectionIds,
+    cachedAt: new Date().toISOString(),
+  });
+}
+
+function extractNumericId(gid: string): string {
+  return gid.split("/").pop() ?? gid;
+}
+
+export function createCollectionIdResolver(): CollectionIdResolver {
+  return async (shopDomain: string, productId: string): Promise<string[]> => {
+    try {
+      const { admin } = await unauthenticated.admin(shopDomain);
+      const productGid = `gid://shopify/Product/${productId}`;
+      const response = await admin.graphql(
+        `#graphql
+        query ProductCollections($id: ID!) {
+          product(id: $id) {
+            collections(first: 50) {
+              edges { node { id } }
+            }
+          }
+        }`,
+        { variables: { id: productGid } },
+      );
+      const json = await response.json();
+      const edges = json?.data?.product?.collections?.edges ?? [];
+      return edges.map((edge: any) => extractNumericId(String(edge.node.id)));
+    } catch {
+      return [];
+    }
+  };
+}
+
+function pickVariantMatch(
+  fields: UploadFieldConfig[],
+  variantId: string,
+): UploadFieldConfig | null {
+  const matched = fields.find(
+    (f) => f.targetVariantIds.length === 0 || f.targetVariantIds.includes(variantId),
+  );
+  return matched ?? fields[0] ?? null;
+}
+
+export type CollectionIdResolver = (
+  shopDomain: string,
+  productId: string,
+) => Promise<string[]>;
+
 export async function getActiveFieldForProduct(
   shopDomain: string,
   productId: string,
   variantId: string,
+  resolveCollectionIds?: CollectionIdResolver,
 ): Promise<UploadFieldConfig | null> {
-  const nestedSnapshot = await fieldsCollection(shopDomain)
+  // Step 1: Direct product match via targetProductIds
+  const directSnapshot = await fieldsCollection(shopDomain)
+    .where("targetProductIds", "array-contains", productId)
+    .where("isActive", "==", true)
+    .limit(15)
+    .get();
+  const directFields = directSnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
+  if (directFields.length > 0) {
+    return pickVariantMatch(directFields, variantId);
+  }
+
+  // Step 2: Legacy productId fallback for old documents
+  const legacySnapshot = await fieldsCollection(shopDomain)
     .where("productId", "==", productId)
     .where("isActive", "==", true)
     .limit(15)
     .get();
-
-  const nestedFields = nestedSnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
-  if (nestedFields.length > 0) {
-    const matched =
-      nestedFields.find(
-        (field) =>
-          field.targetVariantIds.length === 0 || field.targetVariantIds.includes(variantId),
-      ) ?? nestedFields[0];
-    return matched ?? null;
+  const legacyFields = legacySnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
+  if (legacyFields.length > 0) {
+    return pickVariantMatch(legacyFields, variantId);
   }
 
-  const legacySnapshot = await db
+  // Step 3: Collection-based match (requires resolving product's collections)
+  if (resolveCollectionIds) {
+    let collectionIds = await getCachedCollectionIds(shopDomain, productId);
+    if (!collectionIds) {
+      collectionIds = await resolveCollectionIds(shopDomain, productId);
+      await setCachedCollectionIds(shopDomain, productId, collectionIds);
+    }
+
+    if (collectionIds.length > 0) {
+      const batchSize = 10; // Firestore array-contains-any limit
+      for (let i = 0; i < collectionIds.length; i += batchSize) {
+        const batch = collectionIds.slice(i, i + batchSize);
+        const collectionSnapshot = await fieldsCollection(shopDomain)
+          .where("targetCollectionIds", "array-contains-any", batch)
+          .where("isActive", "==", true)
+          .limit(15)
+          .get();
+        const collectionFields = collectionSnapshot.docs.map((doc) =>
+          normalizeField(doc.id, doc.data()),
+        );
+        if (collectionFields.length > 0) {
+          return pickVariantMatch(collectionFields, variantId);
+        }
+      }
+    }
+  }
+
+  // Step 4: Top-level legacy collection fallback
+  const topLevelLegacySnapshot = await db
     .collection("uploadFields")
     .where("shopDomain", "==", shopDomain)
     .where("productId", "==", productId)
     .where("isActive", "==", true)
     .limit(15)
     .get();
-  const legacyFields = legacySnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
-  const matchedLegacy =
-    legacyFields.find(
-      (field) => field.targetVariantIds.length === 0 || field.targetVariantIds.includes(variantId),
-    ) ?? legacyFields[0];
-  return matchedLegacy ?? null;
+  const topLevelLegacyFields = topLevelLegacySnapshot.docs.map((doc) =>
+    normalizeField(doc.id, doc.data()),
+  );
+  if (topLevelLegacyFields.length > 0) {
+    return pickVariantMatch(topLevelLegacyFields, variantId);
+  }
+
+  return null;
 }
 
 export async function saveUploadField(shopDomain: string, field: UploadFieldConfig): Promise<void> {

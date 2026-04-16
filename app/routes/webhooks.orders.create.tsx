@@ -209,6 +209,12 @@ export async function action({ request }: ActionFunctionArgs) {
       if ((renamedAsset.widthInch || 0) > 20 || (renamedAsset.heightInch || 0) > 20) {
         tags.push("large_format");
       }
+      const hasWarningOrBlocker =
+        renamedAsset.blocked ||
+        renamedAsset.validationResults.some(
+          (result) => result.severity === "warning" || result.severity === "blocking",
+        );
+      const initialStatus = hasWarningOrBlocker ? "pending_review" : "uploaded";
 
       const job: OrderJob = {
         id: jobId,
@@ -232,7 +238,7 @@ export async function action({ request }: ActionFunctionArgs) {
         warnings: renamedAsset.validationResults
           .filter((result) => result.severity === "warning")
           .map((result) => result.message),
-        status: "uploaded",
+        status: initialStatus,
         assignee,
         internalNotes: "",
         tags,
