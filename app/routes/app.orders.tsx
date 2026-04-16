@@ -50,7 +50,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         lineItemId: orderJob.shopifyLineItemId,
         status: orderJob.status,
         createdAt: orderJob.createdAt,
-        shippingAddress: orderJob.shippingAddress || null,
         asset: orderJob.assetSnapshot || null,
         dimensions,
         calculatedPrice: orderJob.calculatedPrice || 0,
@@ -350,7 +349,7 @@ export default function Orders() {
             <BlockStack gap="300">
               <Filters
                 queryValue={queryValue}
-                queryPlaceholder="Search order number or customer email"
+                queryPlaceholder="Search order number or file name"
                 onQueryChange={setQueryValue}
                 onQueryClear={() => setQueryValue("")}
                 filters={[

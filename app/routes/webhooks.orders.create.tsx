@@ -3,7 +3,6 @@ import { processBillableOrder } from "../services/billing.server";
 import { authenticate } from "../shopify.server";
 import {
   appendOrderJobAuditEvent,
-  getAppSettings,
   getUploadField,
   getUploadSession,
   jobsCollection,
@@ -102,7 +101,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const order = payload as any;
   const shopDomain = shop;
-  const appSettings = await getAppSettings(shopDomain);
   console.info(
     JSON.stringify({
       event: "orders_create_received",
@@ -220,7 +218,7 @@ export async function action({ request }: ActionFunctionArgs) {
         shopifyLineItemId: String(line.id),
         sessionId: String(sessionToken),
         legacySessionUploadPath: asset.storagePath,
-        shippingAddress: order.shipping_address ?? null,
+        shippingAddress: null,
         productId: sessionData.productId,
         variantId: sessionData.variantId,
         assetSnapshot: renamedAsset,

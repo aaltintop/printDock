@@ -5,21 +5,16 @@ import {
   BlockStack,
   Button,
   Card,
-  Icon,
   InlineStack,
   Layout,
   Page,
-  ProgressBar,
   SkeletonBodyText,
   SkeletonPage,
   Text,
 } from "@shopify/polaris";
-import { CheckCircleIcon, XCircleIcon } from "@shopify/polaris-icons";
-import { db } from "../firebase.server";
 import {
   computeDashboardStats,
   listOrderJobs,
-  listUploadFields,
   listUploadSessions,
 } from "../services/shop-data.server";
 import { authenticate } from "../shopify.server";
@@ -28,15 +23,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
 
-  const [stats, fields, sessions, jobs, shopDoc] = await Promise.all([
+  const [stats, sessions, jobs] = await Promise.all([
     computeDashboardStats(shopDomain),
-    listUploadFields(shopDomain),
     listUploadSessions(shopDomain),
     listOrderJobs(shopDomain),
-    db.collection("shops").doc(shopDomain).get(),
   ]);
 
-  const shopData = shopDoc.data() ?? {};
   const recentUploads = sessions
     .flatMap((uploadSession) => {
       const assets = uploadSession.assets.length > 0 ? uploadSession.assets : uploadSession.asset ? [uploadSession.asset] : [];

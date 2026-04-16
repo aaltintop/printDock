@@ -64,7 +64,6 @@ print-upload-app/
 │   │   ├── app.orders._index.tsx ← Operations center (job list)
 │   │   ├── app.orders.$id.tsx    ← Job detail page
 │   │   ├── app.billing.tsx       ← Plan management
-│   │   ├── app.settings.tsx      ← App settings
 │   │   ├── api.upload.session.tsx      ← POST: create session + presigned URL
 │   │   ├── api.upload.confirm.tsx      ← POST: validate + price after upload
 │   │   ├── api.upload.restore.tsx      ← GET: session recovery
