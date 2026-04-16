@@ -135,7 +135,7 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
     targetCollectionIds,
     isActive: field.isActive !== false,
     isRequired: Boolean(field.isRequired),
-    adminTitle: String(field.adminTitle ?? "Upload Field"),
+    adminTitle: String(field.adminTitle ?? "Field"),
     storefrontTitle: String(field.storefrontTitle ?? "Upload your artwork"),
     storefrontDescription: String(
       field.storefrontDescription ?? "Upload your design file before checkout.",

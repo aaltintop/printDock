@@ -123,13 +123,13 @@ export default function FieldsIndexPage() {
   }, [appBridge, fetcher.data]);
 
   const resourceName = useMemo(
-    () => ({ singular: "upload field", plural: "upload fields" }),
+    () => ({ singular: "field", plural: "fields" }),
     [],
   );
 
   if (navigation.state === "loading") {
     return (
-      <Page title="Upload Fields">
+      <Page title="Fields">
         <SkeletonPage primaryAction>
           <Card>
             <SkeletonBodyText lines={10} />
@@ -141,7 +141,7 @@ export default function FieldsIndexPage() {
 
   return (
     <Page
-      title="Upload Fields"
+      title="Fields"
       primaryAction={{ content: "Create Field", url: "/app/fields/new" }}
     >
       <BlockStack gap="400">
@@ -179,12 +179,12 @@ export default function FieldsIndexPage() {
         <Card padding="0">
           {fields.length === 0 ? (
             <EmptyState
-              heading="No upload fields yet"
+              heading="No fields yet"
               action={{ content: "Create field", url: "/app/fields/new" }}
               image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
             >
               <p>
-                Create your first upload field to start accepting artwork from customers.
+                Create your first field to start accepting artwork from customers.
               </p>
             </EmptyState>
           ) : (

@@ -51,7 +51,7 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
     targetCollectionIds: [],
     isActive: true,
     isRequired: true,
-    adminTitle: "Artwork Upload Field",
+    adminTitle: "Artwork Field",
     storefrontTitle: "Upload your artwork",
     storefrontDescription: "Supported files: PNG, JPG, PDF",
     fileRenamingPattern: "{orderId}_{lineItemId}_{originalName}",
@@ -180,7 +180,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (id === "new") {
     const allFields = await listUploadFields(session.shop);
     if (!isWithinFieldLimit(planCode, allFields.length)) {
-      return data({ error: "Upload field limit reached for your plan" }, { status: 402 });
+      return data({ error: "Field limit reached for your plan" }, { status: 402 });
     }
   }
 
@@ -210,7 +210,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     targetCollectionIds,
     isActive: parseBoolean(formData.get("isActive")),
     isRequired: true,
-    adminTitle: String(formData.get("adminTitle") || "Upload Field"),
+    adminTitle: String(formData.get("adminTitle") || "Field"),
     storefrontTitle: String(formData.get("storefrontTitle") || "Upload your file"),
     storefrontDescription: String(formData.get("storefrontDescription") || ""),
     fileRenamingPattern: String(formData.get("fileRenamingPattern") || "{orderId}_{originalName}"),
@@ -425,7 +425,7 @@ export default function FieldEditorPage() {
     }
   }, [appBridge, searchParams]);
 
-  const pageTitle = isNew ? "Create Upload Field" : (adminTitle || "Edit Upload Field");
+  const pageTitle = isNew ? "Create Field" : (adminTitle || "Edit Field");
   const hasTargets = targetProducts.length > 0 || targetCollections.length > 0;
   const firstProductHandle = targetProducts[0]?.handle;
 
@@ -492,7 +492,7 @@ export default function FieldEditorPage() {
                 Display Target
               </Text>
               <Text as="p" tone="subdued">
-                Choose where this upload field appears on your storefront. Products and collections
+                Choose where this field appears on your storefront. Products and collections
                 are combined — the field shows on any product that is directly selected or belongs
                 to a selected collection.
               </Text>
@@ -545,7 +545,7 @@ export default function FieldEditorPage() {
                 )}
                 {targetCollections.length > 0 ? (
                   <Text as="p" tone="subdued">
-                    All products in these collections will automatically show this upload field.
+                    All products in these collections will automatically show this field.
                   </Text>
                 ) : null}
               </BlockStack>

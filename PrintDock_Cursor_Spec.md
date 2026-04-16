@@ -59,8 +59,8 @@ print-upload-app/
 │   │   └── billing.server.ts     ← Shopify Billing API
 │   ├── routes/
 │   │   ├── app._index.tsx        ← Dashboard home
-│   │   ├── app.fields._index.tsx ← Upload fields list
-│   │   ├── app.fields.$id.tsx    ← Create / edit upload field
+│   │   ├── app.fields._index.tsx ← Fields list
+│   │   ├── app.fields.$id.tsx    ← Create / edit field
 │   │   ├── app.orders._index.tsx ← Operations center (job list)
 │   │   ├── app.orders.$id.tsx    ← Job detail page
 │   │   ├── app.billing.tsx       ← Plan management
@@ -907,7 +907,7 @@ export async function action({ request }: ActionFunctionArgs) {
   // Extract metadata with sharp / pdf-lib
   const metadata = await extractMetadata(buffer, mimeType, sizeBytes);
 
-  // Find upload field config for this product
+  // Find field config for this product
   const field = await db.uploadField.findFirst({
     where: {
       shopId: session.shopId,
@@ -1100,7 +1100,7 @@ export async function action({ request }: ActionFunctionArgs) {
   data-app-url="{{ 'config' | app_url | remove: '/config' }}"
   data-required="{{ block.settings.required }}"
 >
-  <div class="printdock-loading">Loading upload field...</div>
+  <div class="printdock-loading">Loading field...</div>
 </div>
 
 <link rel="stylesheet" href="{{ 'upload.css' | asset_url }}">
@@ -1114,7 +1114,7 @@ export async function action({ request }: ActionFunctionArgs) {
     {
       "type": "text",
       "id": "field_id",
-      "label": "Upload Field ID",
+      "label": "Field ID",
       "info": "Copy this from the PrintDock app → Fields"
     },
     {
@@ -1553,7 +1553,7 @@ Must show:
 - Re-upload request button → generates token → sends email to customer
 - ZIP download button (all files for this job)
 
-### 10.3 Upload Field Config (app/routes/app.fields.$id.tsx)
+### 10.3 Field config (app/routes/app.fields.$id.tsx)
 
 Form sections:
 1. **Basic settings**: Title (internal), Label (shown to customer), Help text, Required toggle, Max files, Max file size (MB)

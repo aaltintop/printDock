@@ -179,7 +179,7 @@ export default function PlansPage() {
                       : plan.maxOrdersPerMonth}
                   </List.Item>
                   <List.Item>
-                    Upload fields:{" "}
+                    Fields:{" "}
                     {plan.maxUploadFields === -1
                       ? "Unlimited"
                       : plan.maxUploadFields}

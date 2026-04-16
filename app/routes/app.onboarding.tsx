@@ -192,7 +192,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     {
       id: "fields",
       label: "Upload rules configured",
-      help: "At least one upload field exists for your products.",
+      help: "At least one field exists for your products.",
       pass: fields.length > 0,
     },
     {
@@ -393,7 +393,7 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                4. First Upload Field
+                4. First field
               </Text>
               <StatusBadge enabled={setup.fieldsConfigured} />
             </InlineStack>
@@ -418,10 +418,10 @@ export default function OnboardingPage() {
                 Setup complete
               </Text>
               <Text as="p" tone="subdued">
-                Your onboarding is complete. You can now manage upload fields for your products.
+                Your onboarding is complete. You can now manage fields for your products.
               </Text>
               <Button url="/app/fields" variant="primary">
-                Go to Upload Fields
+                Go to Fields
               </Button>
             </BlockStack>
           </Card>

@@ -78,7 +78,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const currentRank = PLAN_RANK[planCode] ?? 0;
     if (currentRank < requiredRank) {
       return data(
-        { error: `This upload field requires the ${selectedField.planRequirement} plan` },
+        { error: `This field requires the ${selectedField.planRequirement} plan` },
         { status: 402 },
       );
     }
