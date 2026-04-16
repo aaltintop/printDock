@@ -1,6 +1,6 @@
 import { data, useLoaderData, useFetcher } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Badge, BlockStack, Box, Button, Card, InlineStack, Page, Text, Divider } from "@shopify/polaris";
+import { Badge, BlockStack, Button, Card, InlineStack, Page, Text, Divider } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { db } from "../firebase.server";
 import {
@@ -12,6 +12,7 @@ import {
 
 type SetupState = {
   themeBlockEnabled: boolean;
+  themeBlockVerified: boolean;
   themeVerificationUnavailable: boolean;
   themeVerificationMessage: string | null;
   cartValidationVerified: boolean;
@@ -156,6 +157,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const setup: SetupState = {
     themeBlockEnabled,
+    themeBlockVerified: Boolean(shopSettings.themeBlockVerified),
     themeVerificationUnavailable: verificationUnavailable,
     themeVerificationMessage: verificationMessage,
     fieldsConfigured,
@@ -164,8 +166,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     themeEditorUrl,
   };
 
+  const themeStepVerified =
+    setup.themeVerificationUnavailable || setup.themeBlockEnabled || setup.themeBlockVerified;
+
   const setupComplete =
-    (setup.themeVerificationUnavailable || setup.themeBlockEnabled) &&
+    themeStepVerified &&
     setup.fieldsConfigured &&
     setup.cartValidationVerified &&
     setup.cartTransformVerified;
@@ -173,50 +178,59 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const checks = [
     {
       id: "dashboard",
-      label: "Dashboard route, KPIs, quick links, and activity panels",
+      label: "Dashboard is active",
+      help: "Your overview page is available with your key store metrics.",
       pass: true,
     },
     {
       id: "onboarding",
-      label: "Onboarding wizard completed (validation + transform verification)",
+      label: "Setup wizard completed",
+      help: "Cart validation and dynamic pricing have both been verified.",
       pass: Boolean(shopSettings.cartValidationVerified && shopSettings.cartTransformVerified),
     },
     {
       id: "fields",
-      label: "Fields module supports targeting, rules, pricing, renaming",
+      label: "Upload rules configured",
+      help: "At least one upload field exists for your products.",
       pass: fields.length > 0,
     },
     {
       id: "storefront",
-      label: "Storefront config fetch + upload session flow operational",
+      label: "Storefront widget is ready",
+      help: "Customers can see and use the upload flow on your storefront.",
       pass: uploads.length > 0 || fields.length > 0,
     },
     {
       id: "orders",
-      label: "Orders dashboard supports filtering, preview/download, updates, CSV",
+      label: "Order management is active",
+      help: "You can manage uploaded files tied to orders.",
       pass: true,
     },
     {
       id: "plans",
-      label: "Plans and billing page active with usage limits enforcement",
+      label: "Billing plan selected",
+      help: "A billing plan is active for this store.",
       pass: Boolean(billingPlan.planCode),
     },
     {
       id: "settings",
-      label: "Settings page + theme block health check",
+      label: "Global settings configured",
+      help: "Core app settings are available and accessible.",
       pass: true,
     },
     {
       id: "webhooks",
-      label: "orders/create webhook creates jobs with renamed files and idempotency",
+      label: "Order syncing is active",
+      help: "Order events are syncing to PrintDock for fulfillment workflows.",
       pass: jobs.length > 0 || uploads.length > 0,
     },
   ];
 
   const passedCount = checks.filter((check) => check.pass).length;
 
-  return data({ 
-    setup, 
+  return data({
+    setup,
+    themeStepVerified,
     setupComplete,
     checks,
     passedCount,
@@ -242,6 +256,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return data({ ok: true });
   }
 
+  if (intent === "verify_theme_block") {
+    await shopDoc.set({ themeBlockVerified: true }, { merge: true });
+    return data({ ok: true });
+  }
+
   if (intent === "verify_cart_transform") {
     await shopDoc.set({ cartTransformVerified: true }, { merge: true });
     return data({ ok: true });
@@ -259,7 +278,8 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
 }
 
 export default function OnboardingPage() {
-  const { setup, setupComplete, checks, passedCount, totalChecks, metrics } = useLoaderData<typeof loader>();
+  const { setup, themeStepVerified, setupComplete, checks, passedCount, totalChecks, metrics } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const ready = passedCount === totalChecks;
 
@@ -272,11 +292,17 @@ export default function OnboardingPage() {
               <Text as="h2" variant="headingMd">
                 1. Theme App Block
               </Text>
-              <StatusBadge enabled={setup.themeBlockEnabled} />
+              <StatusBadge enabled={themeStepVerified} />
             </InlineStack>
             <Text as="p" tone="subdued">
-              Add and enable the PrintDock block in your product template.
+              To show the upload button on your storefront, add the PrintDock block to your product
+              page template.
             </Text>
+            {themeStepVerified ? (
+              <Text as="p" tone="success">
+                Theme block is successfully installed.
+              </Text>
+            ) : null}
             {setup.themeVerificationUnavailable && setup.themeVerificationMessage ? (
               <Text as="p" tone="critical">
                 {setup.themeVerificationMessage}
@@ -285,6 +311,20 @@ export default function OnboardingPage() {
             <Button url={setup.themeEditorUrl} target="_blank">
               Open Theme Editor
             </Button>
+            {!themeStepVerified ? (
+              <BlockStack gap="200">
+                <Text as="p" tone="subdued">
+                  If you already added the block and saved your theme, use this button to confirm it
+                  manually when automatic detection is delayed or unavailable.
+                </Text>
+                <fetcher.Form method="post">
+                  <input type="hidden" name="intent" value="verify_theme_block" />
+                  <Button submit loading={fetcher.state === "submitting"}>
+                    Mark as verified
+                  </Button>
+                </fetcher.Form>
+              </BlockStack>
+            ) : null}
           </BlockStack>
         </Card>
 
@@ -297,14 +337,24 @@ export default function OnboardingPage() {
               <StatusBadge enabled={setup.cartValidationVerified} />
             </InlineStack>
             <Text as="p" tone="subdued">
-              Confirm your cart validation safeguards are configured.
+              If you require customers to upload a file before checkout, ensure cart validation is
+              active in your Shopify settings.
             </Text>
-            <fetcher.Form method="post">
-              <input type="hidden" name="intent" value="verify_cart_validation" />
-              <Button submit loading={fetcher.state === "submitting"}>
-                Mark as verified
-              </Button>
-            </fetcher.Form>
+            <Text as="p" tone="subdued">
+              Go to Shopify Settings &gt; Checkout &gt; Checkout rules to verify.
+            </Text>
+            {!setup.cartValidationVerified ? (
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value="verify_cart_validation" />
+                <Button submit loading={fetcher.state === "submitting"}>
+                  Mark as verified
+                </Button>
+              </fetcher.Form>
+            ) : (
+              <Text as="p" tone="success">
+                Cart validation is verified.
+              </Text>
+            )}
           </BlockStack>
         </Card>
 
@@ -317,14 +367,24 @@ export default function OnboardingPage() {
               <StatusBadge enabled={setup.cartTransformVerified} />
             </InlineStack>
             <Text as="p" tone="subdued">
-              Confirm cart transform pricing behavior is enabled.
+              If you plan to charge customers based on file size or dimensions, enable dynamic
+              pricing.
             </Text>
-            <fetcher.Form method="post">
-              <input type="hidden" name="intent" value="verify_cart_transform" />
-              <Button submit loading={fetcher.state === "submitting"}>
-                Mark as verified
-              </Button>
-            </fetcher.Form>
+            <Text as="p" tone="subdued">
+              Ensure the PrintDock Cart Transform function is active in your Shopify settings.
+            </Text>
+            {!setup.cartTransformVerified ? (
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value="verify_cart_transform" />
+                <Button submit loading={fetcher.state === "submitting"}>
+                  Mark as verified
+                </Button>
+              </fetcher.Form>
+            ) : (
+              <Text as="p" tone="success">
+                Dynamic pricing is verified.
+              </Text>
+            )}
           </BlockStack>
         </Card>
 
@@ -337,31 +397,34 @@ export default function OnboardingPage() {
               <StatusBadge enabled={setup.fieldsConfigured} />
             </InlineStack>
             <Text as="p" tone="subdued">
-              Create at least one active upload field for a product.
+              Configure which products require file uploads, allowed file types, and pricing rules.
             </Text>
-            <Button url="/app/fields/new">Create field</Button>
+            {setup.fieldsConfigured ? (
+              <Text as="p" tone="success">
+                You have configured your first field.
+              </Text>
+            ) : null}
+            <Button url={setup.fieldsConfigured ? "/app/fields" : "/app/fields/new"}>
+              {setup.fieldsConfigured ? "Manage fields" : "Create field"}
+            </Button>
           </BlockStack>
         </Card>
 
-        <Card>
-          <BlockStack gap="300">
-            <Text as="h2" variant="headingMd">
-              Next Step
-            </Text>
-            <Text as="p" tone="subdued">
-              Continue when all setup checks are verified.
-            </Text>
-            <Box>
-              <Button
-                url={setupComplete ? "/app/fields" : undefined}
-                disabled={!setupComplete}
-                variant={setupComplete ? "primary" : "secondary"}
-              >
-                {setupComplete ? "Go to Upload Fields" : "Complete Setup First"}
+        {setupComplete ? (
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingMd">
+                Setup complete
+              </Text>
+              <Text as="p" tone="subdued">
+                Your onboarding is complete. You can now manage upload fields for your products.
+              </Text>
+              <Button url="/app/fields" variant="primary">
+                Go to Upload Fields
               </Button>
-            </Box>
-          </BlockStack>
-        </Card>
+            </BlockStack>
+          </Card>
+        ) : null}
 
         <Divider />
 
@@ -369,10 +432,10 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">
-                System Health & Parity
+                App Health Status
               </Text>
               <Badge tone={ready ? "success" : "critical"}>
-                {ready ? "Ready for launch validation" : "Action needed"}
+                {ready ? "Ready" : "Action needed"}
               </Badge>
             </InlineStack>
             <Text as="p">
@@ -382,18 +445,26 @@ export default function OnboardingPage() {
               Metrics: fields {metrics.fields}, uploads {metrics.uploads}, order jobs {metrics.jobs},
               plan {metrics.activePlan}, usage {metrics.usage}
             </Text>
+            <Text as="p" tone="subdued">
+              This section shows whether key merchant-facing app areas are ready to use.
+            </Text>
           </BlockStack>
         </Card>
 
         <Card>
           <BlockStack gap="300">
             {checks.map((check) => (
-              <InlineStack key={check.id} align="space-between" blockAlign="center">
-                <Text as="p">{check.label}</Text>
-                <Badge tone={check.pass ? "success" : "critical"}>
-                  {check.pass ? "Pass" : "Pending"}
-                </Badge>
-              </InlineStack>
+              <BlockStack key={check.id} gap="100">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="p">{check.label}</Text>
+                  <Badge tone={check.pass ? "success" : "critical"}>
+                    {check.pass ? "Pass" : "Pending"}
+                  </Badge>
+                </InlineStack>
+                <Text as="p" tone="subdued">
+                  {check.help}
+                </Text>
+              </BlockStack>
             ))}
           </BlockStack>
         </Card>
