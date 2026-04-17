@@ -1,3 +1,4 @@
+import { DEFAULT_FILE_RENAME_PATTERN } from "../utils/file-rename-pattern";
 import { db } from "../firebase.server";
 import { unauthenticated } from "../shopify.server";
 import type { PlanCode } from "../config/plans";
@@ -84,6 +85,7 @@ function normalizeAsset(id: string, raw: unknown): UploadAsset {
         }
       : null,
     blocked: Boolean(asset.blocked),
+    ...(asset.storageExpired === true ? { storageExpired: true as const } : {}),
   };
 }
 
@@ -140,9 +142,7 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
     storefrontDescription: String(
       field.storefrontDescription ?? "Upload your design file before checkout.",
     ),
-    fileRenamingPattern: String(
-      field.fileRenamingPattern ?? "{orderId}_{lineItemId}_{originalName}",
-    ),
+    fileRenamingPattern: String(field.fileRenamingPattern ?? DEFAULT_FILE_RENAME_PATTERN),
     minFiles: Math.max(1, Number(field.minFiles ?? 1)),
     maxFiles: Math.max(1, Number(field.maxFiles ?? 1)),
     allowedExtensions: Array.isArray(field.allowedExtensions)
@@ -557,6 +557,35 @@ export async function saveOrderJob(shopDomain: string, job: OrderJob): Promise<v
       ...job,
       updatedAt: new Date().toISOString(),
       createdAt: job.createdAt || new Date().toISOString(),
+      shopDomain,
+    },
+    { merge: true },
+  );
+}
+
+/** Patch order job on nested path if present, otherwise top-level legacy `jobs` collection. */
+export async function mergeOrderJob(shopDomain: string, jobId: string, patch: Partial<OrderJob>): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const nestedRef = jobsCollection(shopDomain).doc(jobId);
+  const nestedDoc = await nestedRef.get();
+  if (nestedDoc.exists) {
+    await nestedRef.set(
+      {
+        ...patch,
+        updatedAt: nowIso,
+        shopDomain,
+      },
+      { merge: true },
+    );
+    return;
+  }
+  const legacyRef = db.collection("jobs").doc(jobId);
+  const legacyDoc = await legacyRef.get();
+  if (!legacyDoc.exists) return;
+  await legacyRef.set(
+    {
+      ...patch,
+      updatedAt: nowIso,
       shopDomain,
     },
     { merge: true },

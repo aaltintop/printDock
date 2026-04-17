@@ -45,7 +45,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxFileSizeBytes: 300 * 1024 * 1024, // 300 MB
     maxOrdersPerMonth: 50,
     maxUploadFields: -1,
-    fileStorageDays: 7,
+    fileStorageDays: 30,
     basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,
@@ -61,7 +61,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxFileSizeBytes: 1 * 1024 * 1024 * 1024, // 1 GB
     maxOrdersPerMonth: 500,
     maxUploadFields: -1,
-    fileStorageDays: 7,
+    fileStorageDays: 30,
     basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,
@@ -77,7 +77,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxFileSizeBytes: 5 * 1024 * 1024 * 1024, // 5 GB
     maxOrdersPerMonth: -1,
     maxUploadFields: -1,
-    fileStorageDays: 30,
+    fileStorageDays: 90,
     basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,

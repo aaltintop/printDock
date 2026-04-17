@@ -341,6 +341,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return data({ error: "Invalid storage path" }, { status: 400 });
   }
 
+  const allJobs = await listOrderJobs(session.shop);
+  const jobForPath = allJobs.find((j) => j.assetSnapshot?.storagePath === storagePath);
+  if (jobForPath?.assetSnapshot?.storageExpired) {
+    return data(
+      { error: "This file is no longer stored (retention period ended)." },
+      { status: 410 },
+    );
+  }
+
   try {
     const downloadUrl = await getSignedDownloadUrl(storagePath);
     return data({ downloadUrl, storagePath });
@@ -684,17 +693,24 @@ export default function Orders() {
                     </Badge>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    {(() => {
-                      const fileName = order.asset?.originalName || "No File";
-                      const truncated = fileName.length > 40 ? `${fileName.slice(0, 40)}...` : fileName;
-                      return fileName.length > 40 ? (
-                        <Tooltip content={fileName}>
-                          <Text as="span">{truncated}</Text>
-                        </Tooltip>
-                      ) : (
-                        truncated
-                      );
-                    })()}
+                    {order.asset?.storageExpired ? (
+                      <Text as="span" tone="subdued">
+                        File no longer stored
+                      </Text>
+                    ) : (
+                      (() => {
+                        const fileName = order.asset?.originalName || "No File";
+                        const truncated =
+                          fileName.length > 40 ? `${fileName.slice(0, 40)}...` : fileName;
+                        return fileName.length > 40 ? (
+                          <Tooltip content={fileName}>
+                            <Text as="span">{truncated}</Text>
+                          </Tooltip>
+                        ) : (
+                          truncated
+                        );
+                      })()
+                    )}
                   </IndexTable.Cell>
                   <IndexTable.Cell>{formatFileSize(order.asset?.sizeBytes)}</IndexTable.Cell>
                   <IndexTable.Cell>{order.dimensions}</IndexTable.Cell>
@@ -722,13 +738,14 @@ export default function Orders() {
                       <Button
                         onClick={() =>
                           order.asset?.storagePath &&
+                          !order.asset?.storageExpired &&
                           handleDownload(order.asset.storagePath, order.asset?.originalName || "printdock-file")
                         }
                         loading={
                           downloadFetcher.state === "submitting" &&
                           downloadingStoragePath === order.asset?.storagePath
                         }
-                        disabled={!order.asset?.storagePath}
+                        disabled={!order.asset?.storagePath || Boolean(order.asset?.storageExpired)}
                       >
                         {downloadingStoragePath === order.asset?.storagePath
                           ? "Downloading..."

@@ -79,6 +79,8 @@ export interface UploadFieldConfig {
 export interface UploadAsset {
   id: string;
   storagePath: string;
+  /** Set when the blob was removed per retention purge; downloads should be disabled */
+  storageExpired?: boolean;
   originalName: string;
   mimeType: string;
   fileExtension: string;

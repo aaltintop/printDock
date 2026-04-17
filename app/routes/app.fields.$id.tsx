@@ -41,6 +41,7 @@ import type {
   UploadFieldConfig,
   UploadFieldDimensionRule,
 } from "../types/printdock";
+import { DEFAULT_FILE_RENAME_PATTERN, previewRenamedFileName } from "../utils/file-rename-pattern";
 
 function extractNumericId(gid: string): string {
   return gid.split("/").pop() ?? gid;
@@ -62,7 +63,7 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
     adminTitle: "Artwork Field",
     storefrontTitle: "Upload your artwork",
     storefrontDescription: "Supported files: PNG, JPG, PDF",
-    fileRenamingPattern: "{orderId}_{lineItemId}_{originalName}",
+    fileRenamingPattern: DEFAULT_FILE_RENAME_PATTERN,
     minFiles: 1,
     maxFiles: 1,
     allowedExtensions: ["png", "jpg", "jpeg", "pdf"],
@@ -213,6 +214,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     );
   }
 
+  const planAllowsRenaming = canUseFeature(planCode, "fileRenaming");
+  let resolvedFileRenamingPattern: string;
+  if (planAllowsRenaming) {
+    const raw = String(formData.get("fileRenamingPattern") ?? "").trim();
+    resolvedFileRenamingPattern = raw ? raw.slice(0, 200) : DEFAULT_FILE_RENAME_PATTERN;
+  } else if (id === "new" || !existingField) {
+    resolvedFileRenamingPattern = DEFAULT_FILE_RENAME_PATTERN;
+  } else {
+    resolvedFileRenamingPattern = existingField.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
+  }
+
   const firstProduct = targetProducts[0];
 
   const nextField: UploadFieldConfig = {
@@ -229,7 +241,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     adminTitle: String(formData.get("adminTitle") || "Field"),
     storefrontTitle: String(formData.get("storefrontTitle") || "Upload your file"),
     storefrontDescription: String(formData.get("storefrontDescription") || ""),
-    fileRenamingPattern: String(formData.get("fileRenamingPattern") || "{orderId}_{originalName}"),
+    fileRenamingPattern: resolvedFileRenamingPattern,
     minFiles: 1,
     maxFiles: 1,
     allowedExtensions,
@@ -268,6 +280,9 @@ export default function FieldEditorPage() {
     useLoaderData<typeof loader>();
   const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
   const planAllowsAdvancedValidation = canUseFeature(planCode, "advancedValidation");
+  const planAllowsFileRenaming = canUseFeature(planCode, "fileRenaming");
+  const patternIsCustom =
+    !isNew && field.fileRenamingPattern.trim() !== DEFAULT_FILE_RENAME_PATTERN;
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -340,6 +355,40 @@ export default function FieldEditorPage() {
   const [renameHelpOpen, setRenameHelpOpen] = useState(false);
   const [dimensionRules, setDimensionRules] = useState<UploadFieldDimensionRule[]>(
     initialState.dimensionRules,
+  );
+
+  const renamePreviewExample = useMemo(() => {
+    const pattern = planAllowsFileRenaming
+      ? fileRenamingPattern
+      : patternIsCustom
+        ? field.fileRenamingPattern
+        : DEFAULT_FILE_RENAME_PATTERN;
+    return previewRenamedFileName(pattern);
+  }, [planAllowsFileRenaming, fileRenamingPattern, patternIsCustom, field.fileRenamingPattern]);
+
+  const renameTokensHelp = (
+    <Card>
+      <BlockStack gap="200">
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{orderId}`}</Text> — Shopify order ID (numeric).
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{orderName}`}</Text> — Order name (e.g. #1001).
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{lineItemId}`}</Text> — Line item ID.
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{variantName}`}</Text> — Variant title.
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{originalName}`}</Text> — File name without extension.
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{fileIndex}`}</Text> — 1-based index when multiple files.
+        </Text>
+      </BlockStack>
+    </Card>
   );
 
   const serializedCurrent = JSON.stringify({
@@ -623,29 +672,90 @@ export default function FieldEditorPage() {
                   value={storefrontDescription}
                   onChange={setStorefrontDescription}
                 />
-                <TextField
-                  label="File rename pattern"
-                  name="fileRenamingPattern"
-                  autoComplete="off"
-                  value={fileRenamingPattern}
-                  onChange={setFileRenamingPattern}
-                  connectedRight={
-                    <Popover
-                      active={renameHelpOpen}
-                      onClose={() => setRenameHelpOpen(false)}
-                      activator={<Button onClick={() => setRenameHelpOpen(true)}>Tokens</Button>}
-                    >
-                      <Card>
-                        <BlockStack gap="100">
-                          <Text as="p">{`{orderId}`}</Text>
-                          <Text as="p">{`{lineItem}`}</Text>
-                          <Text as="p">{`{fileName}`}</Text>
-                          <Text as="p">{`{timestamp}`}</Text>
-                        </BlockStack>
-                      </Card>
-                    </Popover>
-                  }
-                />
+                {planAllowsFileRenaming ? (
+                  <BlockStack gap="200">
+                    <TextField
+                      label="File rename pattern"
+                      name="fileRenamingPattern"
+                      autoComplete="off"
+                      value={fileRenamingPattern}
+                      onChange={setFileRenamingPattern}
+                      helpText="Applied when an order is placed. Characters are sanitized for safe file names."
+                      connectedRight={
+                        <Popover
+                          active={renameHelpOpen}
+                          onClose={() => setRenameHelpOpen(false)}
+                          activator={<Button onClick={() => setRenameHelpOpen(true)}>Tokens</Button>}
+                        >
+                          {renameTokensHelp}
+                        </Popover>
+                      }
+                    />
+                    <Text as="p" tone="subdued" variant="bodySm">
+                      Example file name: {renamePreviewExample}
+                    </Text>
+                  </BlockStack>
+                ) : patternIsCustom ? (
+                  <BlockStack gap="300">
+                    <Banner tone="info" title="Your custom pattern is still in use">
+                      <p>
+                        When customers check out, files are still renamed using the pattern below. File
+                        renaming on Starter and higher plans lets you edit this pattern any time and use
+                        placeholders (tokens) for order ID, line item, variant, and more. On your current
+                        plan the pattern is read-only so nothing breaks for orders already using it—upgrade
+                        when you are ready to customize it again.
+                      </p>
+                    </Banner>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade plan
+                    </Button>
+                    <TextField
+                      label="File rename pattern"
+                      autoComplete="off"
+                      value={field.fileRenamingPattern}
+                      disabled
+                      helpText="Applied when an order is placed."
+                      connectedRight={
+                        <Popover
+                          active={renameHelpOpen}
+                          onClose={() => setRenameHelpOpen(false)}
+                          activator={<Button onClick={() => setRenameHelpOpen(true)}>Tokens</Button>}
+                        >
+                          {renameTokensHelp}
+                        </Popover>
+                      }
+                    />
+                    <Text as="p" tone="subdued" variant="bodySm">
+                      Example file name: {renamePreviewExample}
+                    </Text>
+                  </BlockStack>
+                ) : (
+                  <BlockStack gap="300">
+                    <Banner tone="info" title="Custom file names are a paid feature">
+                      <p>
+                        On your current plan, PrintDock uses a single default pattern for files attached to
+                        orders so names stay safe and consistent. Upgrading unlocks a custom rename pattern:
+                        you choose how filenames are built using tokens (for example order ID, line item,
+                        and original upload name), which helps production, downloads, and archive searches
+                        match how your team works.
+                      </p>
+                    </Banner>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade plan
+                    </Button>
+                    <BlockStack gap="200">
+                      <Text as="p" tone="subdued">
+                        Default pattern on your plan:{" "}
+                        <Text as="span" variant="bodySm">
+                          {DEFAULT_FILE_RENAME_PATTERN}
+                        </Text>
+                      </Text>
+                      <Text as="p" tone="subdued" variant="bodySm">
+                        Example file name: {renamePreviewExample}
+                      </Text>
+                    </BlockStack>
+                  </BlockStack>
+                )}
               </FormLayout>
             </BlockStack>
           </Card>

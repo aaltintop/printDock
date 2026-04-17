@@ -130,6 +130,15 @@ echo "Resolved SHOPIFY_APP_URL=$SHOPIFY_APP_URL"
 echo "Phase 2/2: deploy with SHOPIFY_APP_URL"
 deploy_base 1
 
+# URL can change to the regional hostname (e.g. *.us-central1.run.app) after the second deploy;
+# re-read so "Next steps" matches what Cloud Run reports.
+SHOPIFY_APP_URL="$(gcloud run services describe "$SERVICE_NAME" --region "$SERVICE_REGION" --format='value(status.url)')"
+if [[ -z "$SHOPIFY_APP_URL" ]]; then
+  echo "Failed to re-resolve SHOPIFY_APP_URL after phase 2."
+  exit 1
+fi
+echo "Final SHOPIFY_APP_URL=$SHOPIFY_APP_URL"
+
 cat <<EOF
 Two-phase deploy completed.
 

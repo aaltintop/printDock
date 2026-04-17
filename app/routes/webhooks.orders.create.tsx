@@ -11,22 +11,11 @@ import {
 } from "../services/shop-data.server";
 import { copyFile } from "../services/storage.server";
 import type { OrderJob } from "../types/printdock";
-
-function sanitizeSegment(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80);
-}
-
-function applyRenamePattern(pattern: string, tokens: Record<string, string>): string {
-  return pattern.replace(/\{([^}]+)\}/g, (_, token: string) => {
-    const key = token.trim();
-    return tokens[key] ?? "";
-  });
-}
+import {
+  DEFAULT_FILE_RENAME_PATTERN,
+  applyRenamePattern,
+  sanitizeSegment,
+} from "../utils/file-rename-pattern";
 
 async function buildRenamedAsset({
   shopDomain,
@@ -45,7 +34,7 @@ async function buildRenamedAsset({
 }) {
   const extension = (asset.fileExtension || asset.originalName.split(".").pop() || "bin").toLowerCase();
   const originalNameWithoutExt = asset.originalName.replace(/\.[^/.]+$/, "");
-  const tokens = {
+  const tokens: Record<string, string> = {
     orderId: String(order.id),
     orderName: String(order.name || ""),
     lineItemId: String(line.id),
@@ -159,7 +148,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const perFileQuantities = parsePerFileQuantities(props);
 
     const field = sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null;
-    const renamePattern = field?.fileRenamingPattern || "{orderId}_{lineItemId}_{originalName}";
+    const renamePattern = field?.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
     const renamedAssets = [];
 
     for (const [assetIndex, asset] of sessionAssets.entries()) {
