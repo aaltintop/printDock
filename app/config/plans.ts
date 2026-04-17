@@ -10,6 +10,7 @@ export interface PlanLimits {
   maxOrdersPerMonth: number;
   maxUploadFields: number;
   fileStorageDays: number;
+  basicValidation: boolean; // file type, size, count — always true for all plans
   advancedValidation: boolean;
   fileRenaming: boolean;
   bulkDownload: boolean;
@@ -17,6 +18,8 @@ export interface PlanLimits {
 }
 
 export const PLANS: Record<PlanCode, PlanLimits> = {
+  // basicValidation (file type/MIME/count) is always enforced regardless of plan
+  // advancedValidation adds: DPI checks, pixel dimensions, PDF page count, print size
   free: {
     planCode: "free",
     displayName: "Free",
@@ -27,6 +30,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxOrdersPerMonth: 10,
     maxUploadFields: 2,
     fileStorageDays: 7,
+    basicValidation: true,
     advancedValidation: false,
     fileRenaming: false,
     bulkDownload: false,
@@ -42,6 +46,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxOrdersPerMonth: 50,
     maxUploadFields: -1,
     fileStorageDays: 7,
+    basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,
     bulkDownload: false,
@@ -57,6 +62,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxOrdersPerMonth: 500,
     maxUploadFields: -1,
     fileStorageDays: 7,
+    basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,
     bulkDownload: true,
@@ -72,6 +78,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     maxOrdersPerMonth: -1,
     maxUploadFields: -1,
     fileStorageDays: 30,
+    basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,
     bulkDownload: true,
@@ -90,7 +97,11 @@ export const PLAN_SUBSCRIPTION_NAMES: Record<
 
 type BooleanFeature = keyof Pick<
   PlanLimits,
-  "advancedValidation" | "fileRenaming" | "bulkDownload" | "dynamicPricing"
+  | "basicValidation"
+  | "advancedValidation"
+  | "fileRenaming"
+  | "bulkDownload"
+  | "dynamicPricing"
 >;
 
 export function getPlan(planCode: PlanCode): PlanLimits {

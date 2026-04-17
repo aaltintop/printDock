@@ -25,6 +25,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const planLimitsResponse = {
     maxFileSizeBytes: planLimits.maxFileSizeBytes,
+    basicValidation: planLimits.basicValidation,
     advancedValidation: planLimits.advancedValidation,
     dynamicPricing: planLimits.dynamicPricing,
   };

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Banner,
   BlockStack,
+  Box,
   Button,
   Card,
   Checkbox,
@@ -257,6 +258,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 export default function FieldEditorPage() {
   const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked } =
     useLoaderData<typeof loader>();
+  const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -276,7 +278,7 @@ export default function FieldEditorPage() {
       maxFileMB: String(field.maxFileMB),
       fileQuantityEnabled: field.fileQuantityManagement.enabled,
       quantityMode: field.fileQuantityManagement.mode,
-      pricingEnabled: field.pricing.enabled,
+      pricingEnabled: canUseFeature(planCode, "dynamicPricing") && field.pricing.enabled,
       pricingUnitType: field.pricing.unitType,
       unitPrice: String(field.pricing.unitPrice),
       minPrice: String(field.pricing.minPrice),
@@ -285,7 +287,7 @@ export default function FieldEditorPage() {
       roundingEnabled: field.pricing.roundingEnabled,
       dimensionRules: field.dimensionRules,
     }),
-    [field],
+    [field, planCode],
   );
 
   const [adminTitle, setAdminTitle] = useState(initialState.adminTitle);
@@ -765,79 +767,164 @@ export default function FieldEditorPage() {
           </Card>
 
           <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Pricing
-              </Text>
-              <FormLayout>
+            <BlockStack gap="400">
+              <BlockStack gap="150">
+                <Text as="h2" variant="headingMd">
+                  Dynamic pricing
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Optional add-on fees for this upload field, calculated when the customer
+                  uploads a file. Shown before checkout with the rest of the line item.
+                </Text>
+              </BlockStack>
+
+              {!planAllowsDynamicPricing ? (
+                <input type="hidden" name="pricingEnabled" value="" />
+              ) : null}
+
+              {planAllowsDynamicPricing ? (
                 <Checkbox
                   name="pricingEnabled"
-                  label="Enable dynamic pricing"
+                  label="Charge using dynamic pricing"
+                  helpText="When off, no upload fee is added from this field."
                   checked={pricingEnabled}
                   onChange={setPricingEnabled}
                 />
-                <Select
-                  name="pricingUnitType"
-                  label="Unit type"
-                  value={pricingUnitType}
-                  options={[
-                    { label: "Flat", value: "flat" },
-                    { label: "Per file", value: "per_file" },
-                    { label: "Per inch height", value: "inch_height" },
-                    { label: "Per square inch", value: "inch_square" },
-                  ]}
-                  onChange={(value) => setPricingUnitType(value as UploadFieldConfig["pricing"]["unitType"])}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="unitPrice"
-                  label="Unit price"
-                  type="number"
-                  prefix="$"
-                  autoComplete="off"
-                  value={unitPrice}
-                  onChange={setUnitPrice}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="minPrice"
-                  label="Minimum price"
-                  type="number"
-                  prefix="$"
-                  autoComplete="off"
-                  value={minPrice}
-                  onChange={setMinPrice}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="dpi"
-                  label="Target DPI"
-                  type="number"
-                  suffix="DPI"
-                  helpText="Used to calculate physical print dimensions from pixel size."
-                  autoComplete="off"
-                  value={dpi}
-                  onChange={setDpi}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="printWidth"
-                  label="Print width"
-                  type="number"
-                  suffix="inch"
-                  autoComplete="off"
-                  value={printWidth}
-                  onChange={setPrintWidth}
-                  disabled={!pricingEnabled}
-                />
-                <Checkbox
-                  name="roundingEnabled"
-                  label="Enable rounding"
-                  checked={roundingEnabled}
-                  onChange={setRoundingEnabled}
-                  disabled={!pricingEnabled}
-                />
-              </FormLayout>
+              ) : (
+                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+                  <BlockStack gap="300">
+                    <InlineStack gap="400" align="space-between" blockAlign="center" wrap>
+                      <Checkbox
+                        label="Charge using dynamic pricing"
+                        checked={false}
+                        onChange={setPricingEnabled}
+                        disabled
+                      />
+                      <Button url="/app/plans" variant="primary">
+                        Upgrade plan
+                      </Button>
+                    </InlineStack>
+                    <Text as="p" variant="bodyMd">
+                      Per-file and dimension-based rates are on{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Pro
+                      </Text>{" "}
+                      and{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Business
+                      </Text>
+                      . Upgrade to unlock this section.
+                    </Text>
+                  </BlockStack>
+                </Box>
+              )}
+
+              {!(planAllowsDynamicPricing && pricingEnabled) ? (
+                <>
+                  <input type="hidden" name="pricingUnitType" value={pricingUnitType} />
+                  <input type="hidden" name="unitPrice" value={unitPrice} />
+                  <input type="hidden" name="minPrice" value={minPrice} />
+                  <input type="hidden" name="dpi" value={dpi} />
+                  <input type="hidden" name="printWidth" value={printWidth} />
+                  <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "on" : ""} />
+                </>
+              ) : null}
+
+              {planAllowsDynamicPricing && !pricingEnabled ? (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Turn on dynamic pricing to set how the upload fee is calculated.
+                </Text>
+              ) : null}
+
+              {planAllowsDynamicPricing && pricingEnabled ? (
+                <BlockStack gap="300">
+                  <Divider />
+                  <Text as="h3" variant="headingSm">
+                    Rate settings
+                  </Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {
+                      "These values are used together with the customer's file metadata (size, dimensions) where applicable."
+                    }
+                  </Text>
+                  <FormLayout>
+                    <Select
+                      name="pricingUnitType"
+                      label="Calculation method"
+                      helpText="Pick how the fee scales with the uploaded file."
+                      value={pricingUnitType}
+                      options={[
+                        { label: "Flat — fixed price per upload", value: "flat" },
+                        { label: "Per file — price × number of files", value: "per_file" },
+                        { label: "Per inch height — price × print height", value: "inch_height" },
+                        { label: "Per square inch — price × print area", value: "inch_square" },
+                      ]}
+                      onChange={(value) =>
+                        setPricingUnitType(value as UploadFieldConfig["pricing"]["unitType"])
+                      }
+                    />
+                    <InlineStack gap="400" align="start" blockAlign="start" wrap>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="unitPrice"
+                          label="Rate"
+                          type="number"
+                          prefix="$"
+                          autoComplete="off"
+                          value={unitPrice}
+                          onChange={setUnitPrice}
+                          helpText="Base unit for the method above (e.g. per inch or per file)."
+                        />
+                      </Box>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="minPrice"
+                          label="Floor price"
+                          type="number"
+                          prefix="$"
+                          autoComplete="off"
+                          value={minPrice}
+                          onChange={setMinPrice}
+                          helpText="Minimum fee charged for an upload (0 = no floor)."
+                        />
+                      </Box>
+                    </InlineStack>
+                    <InlineStack gap="400" align="start" blockAlign="start" wrap>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="dpi"
+                          label="Assumed DPI"
+                          type="number"
+                          suffix="DPI"
+                          helpText="Used to convert pixels to physical inches for area/height pricing."
+                          autoComplete="off"
+                          value={dpi}
+                          onChange={setDpi}
+                        />
+                      </Box>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="printWidth"
+                          label="Roll / print width"
+                          type="number"
+                          suffix="in"
+                          helpText="Reference width for layout calculations (e.g. wide-format rolls)."
+                          autoComplete="off"
+                          value={printWidth}
+                          onChange={setPrintWidth}
+                        />
+                      </Box>
+                    </InlineStack>
+                    <Checkbox
+                      name="roundingEnabled"
+                      label="Round calculated price to a cleaner amount"
+                      checked={roundingEnabled}
+                      onChange={setRoundingEnabled}
+                      helpText="Helps avoid long decimal prices on the storefront."
+                    />
+                  </FormLayout>
+                </BlockStack>
+              ) : null}
             </BlockStack>
           </Card>
 
