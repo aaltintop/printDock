@@ -33,7 +33,14 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { canUseFeature, getPlan, isWithinFieldLimit } from "../config/plans";
 import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
-import type { UploadFieldConfig, UploadFieldDimensionRule, FieldTargetProduct, FieldTargetCollection } from "../types/printdock";
+import type {
+  FieldDimensionType,
+  FieldOperator,
+  FieldTargetCollection,
+  FieldTargetProduct,
+  UploadFieldConfig,
+  UploadFieldDimensionRule,
+} from "../types/printdock";
 
 function extractNumericId(gid: string): string {
   return gid.split("/").pop() ?? gid;
@@ -185,6 +192,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const planLimits = getPlan(planCode);
   const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
 
+  if (!canUseFeature(planCode, "advancedValidation")) {
+    dimensionRules = [];
+  }
+
   if (id === "new") {
     const allFields = await listUploadFields(session.shop);
     if (!isWithinFieldLimit(planCode, allFields.length)) {
@@ -194,9 +205,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (pricingEnabled && !canUseFeature(planCode, "dynamicPricing")) {
     return data({ error: "Dynamic pricing requires a higher plan." }, { status: 402 });
-  }
-  if (dimensionRules.length > 0 && !canUseFeature(planCode, "advancedValidation")) {
-    return data({ error: "Advanced dimension rules require a higher plan." }, { status: 402 });
   }
   if (maxFileMB > maxFileMBFromPlan) {
     return data(
@@ -259,6 +267,7 @@ export default function FieldEditorPage() {
   const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked } =
     useLoaderData<typeof loader>();
   const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
+  const planAllowsAdvancedValidation = canUseFeature(planCode, "advancedValidation");
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -285,7 +294,24 @@ export default function FieldEditorPage() {
       dpi: String(field.pricing.dpi),
       printWidth: String(field.pricing.printWidth),
       roundingEnabled: field.pricing.roundingEnabled,
-      dimensionRules: field.dimensionRules,
+      dimensionRules: (() => {
+        if (!canUseFeature(planCode, "advancedValidation")) {
+          return [];
+        }
+        if (field.dimensionRules.length > 0) {
+          return field.dimensionRules;
+        }
+        return [
+          {
+            id: crypto.randomUUID(),
+            dimensionType: "widthInch" as const,
+            operator: "lte" as const,
+            value: 1,
+            action: "prevent" as const,
+            warningMessage: "",
+          },
+        ];
+      })(),
     }),
     [field, planCode],
   );
@@ -313,18 +339,7 @@ export default function FieldEditorPage() {
   const [roundingEnabled, setRoundingEnabled] = useState(initialState.roundingEnabled);
   const [renameHelpOpen, setRenameHelpOpen] = useState(false);
   const [dimensionRules, setDimensionRules] = useState<UploadFieldDimensionRule[]>(
-    initialState.dimensionRules.length > 0
-      ? initialState.dimensionRules
-      : [
-          {
-            id: crypto.randomUUID(),
-            dimensionType: "widthInch",
-            operator: "lte",
-            value: 1,
-            action: "prevent",
-            warningMessage: "",
-          },
-        ],
+    initialState.dimensionRules,
   );
 
   const serializedCurrent = JSON.stringify({
@@ -929,90 +944,133 @@ export default function FieldEditorPage() {
           </Card>
 
           <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Dimension Rules
-              </Text>
-              {dimensionRules.map((rule, index) => (
-                <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
-                  <div style={{ minWidth: 180 }}>
-                    <Select
-                      label="Dimension"
-                      value={rule.dimensionType}
-                      options={[
-                        { label: "Width", value: "widthInch" },
-                        { label: "Height", value: "heightInch" },
-                        { label: "DPI", value: "dpi" },
-                      ]}
-                      onChange={(value) =>
-                        setDimensionRules((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, dimensionType: value as any } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
-                  <div style={{ minWidth: 160 }}>
-                    <Select
-                      label="Rule"
-                      value={rule.operator}
-                      options={[
-                        { label: "Min (>=)", value: "gte" },
-                        { label: "Max (<=)", value: "lte" },
-                        { label: "Equals", value: "eq" },
-                      ]}
-                      onChange={(value) =>
-                        setDimensionRules((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, operator: value as any } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
-                  <div style={{ minWidth: 120 }}>
-                    <TextField
-                      label="Value"
-                      type="number"
-                      autoComplete="off"
-                      value={String(rule.value)}
-                      onChange={(value) =>
-                        setDimensionRules((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, value: Number(value) } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
+            <BlockStack gap="400">
+              <BlockStack gap="150">
+                <Text as="h2" variant="headingMd">
+                  Dimension rules
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Block uploads or show warnings when artwork does not meet DPI, size, or
+                  other limits. Evaluated when the customer uploads a file.
+                </Text>
+              </BlockStack>
+
+              {planAllowsAdvancedValidation ? (
+                <BlockStack gap="300">
+                  {dimensionRules.length === 0 ? (
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      No rules yet. Add a rule to enforce limits on uploaded files.
+                    </Text>
+                  ) : null}
+                  {dimensionRules.map((rule, index) => (
+                    <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
+                      <div style={{ minWidth: 180 }}>
+                        <Select
+                          label="Dimension"
+                          value={rule.dimensionType}
+                          options={[
+                            { label: "Width", value: "widthInch" },
+                            { label: "Height", value: "heightInch" },
+                            { label: "DPI", value: "dpi" },
+                          ]}
+                          onChange={(value) =>
+                            setDimensionRules((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, dimensionType: value as FieldDimensionType }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <div style={{ minWidth: 160 }}>
+                        <Select
+                          label="Rule"
+                          value={rule.operator}
+                          options={[
+                            { label: "Min (>=)", value: "gte" },
+                            { label: "Max (<=)", value: "lte" },
+                            { label: "Equals", value: "eq" },
+                          ]}
+                          onChange={(value) =>
+                            setDimensionRules((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, operator: value as FieldOperator } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <div style={{ minWidth: 120 }}>
+                        <TextField
+                          label="Value"
+                          type="number"
+                          autoComplete="off"
+                          value={String(rule.value)}
+                          onChange={(value) =>
+                            setDimensionRules((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, value: Number(value) } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <Button
+                        tone="critical"
+                        onClick={() =>
+                          setDimensionRules((prev) =>
+                            prev.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </InlineStack>
+                  ))}
                   <Button
-                    tone="critical"
                     onClick={() =>
-                      setDimensionRules((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                      setDimensionRules((prev) => [
+                        ...prev,
+                        {
+                          id: crypto.randomUUID(),
+                          dimensionType: "widthInch",
+                          operator: "gte",
+                          value: 1,
+                          action: "prevent",
+                          warningMessage: "",
+                        },
+                      ])
                     }
                   >
-                    Remove
+                    Add rule
                   </Button>
-                </InlineStack>
-              ))}
-              <Button
-                onClick={() =>
-                  setDimensionRules((prev) => [
-                    ...prev,
-                    {
-                      id: crypto.randomUUID(),
-                      dimensionType: "widthInch",
-                      operator: "gte",
-                      value: 1,
-                      action: "prevent",
-                      warningMessage: "",
-                    },
-                  ])
-                }
-              >
-                Add Rule
-              </Button>
+                </BlockStack>
+              ) : (
+                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+                  <BlockStack gap="300">
+                    <Text as="p" variant="bodyMd">
+                      DPI, pixel size, print dimensions, and page-count rules are on{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Starter
+                      </Text>
+                      ,{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Pro
+                      </Text>
+                      , and{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Business
+                      </Text>
+                      . Upgrade to add dimension rules for this field.
+                    </Text>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade plan
+                    </Button>
+                  </BlockStack>
+                </Box>
+              )}
             </BlockStack>
           </Card>
 
