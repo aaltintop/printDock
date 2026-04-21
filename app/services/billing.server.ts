@@ -1,4 +1,5 @@
 import { db } from "../firebase.server";
+import { log } from "../lib/logger.server";
 import type { PlanCode } from "../config/plans";
 import { PLANS, PLAN_SUBSCRIPTION_NAMES } from "../config/plans";
 import { billableLinesCollection, getBillingPlan, jobsCollection } from "./shop-data.server";
@@ -106,14 +107,11 @@ export async function processBillableOrder(
           )
         : false;
       if (hasPrintDockHints) {
-        console.warn(
-          JSON.stringify({
-            event: "billing_missing_uc_session",
-            shopDomain,
-            orderId: String(order.id),
-            lineItemId: String(line.id),
-          }),
-        );
+        log.warn("billing_missing_uc_session", "PrintDock line hints without _uc_session", {
+          shopDomain,
+          orderId: String(order.id),
+          lineItemId: String(line.id),
+        });
       }
       continue;
     }
@@ -125,15 +123,12 @@ export async function processBillableOrder(
     }
 
     if (!jobDoc.exists) {
-      console.warn(
-        JSON.stringify({
-          event: "billing_job_not_found",
-          shopDomain,
-          orderId: String(order.id),
-          lineItemId: String(line.id),
-          sessionToken: String(sessionToken),
-        }),
-      );
+      log.warn("billing_job_not_found", "No order job for billable line", {
+        shopDomain,
+        orderId: String(order.id),
+        lineItemId: String(line.id),
+        sessionToken: String(sessionToken),
+      });
       continue;
     }
 

@@ -10,6 +10,7 @@ import {
   listUploadFields,
   listUploadSessions,
 } from "../services/shop-data.server";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 type SetupState = {
   themeBlockEnabled: boolean;
@@ -115,7 +116,7 @@ async function detectThemeBlockEnabled(
       };
     }
 
-    console.error("Theme block status check failed:", error);
+    log.error("theme_block_status_check_failed", error, {});
     return {
       enabled: false,
       themeId: null,
@@ -126,10 +127,14 @@ async function detectThemeBlockEnabled(
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
+  return runWithRequestContext(request, async () => {
+    try {
+      const { admin, session } = await authenticate.admin(request);
+      const shopDomain = session.shop;
+      setLogShopDomain(shopDomain);
+      log.event("admin_page_view", { path: "/app/onboarding" });
 
-  const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
+      const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
   const shopSettings = shopSettingsDoc.data() ?? {};
   const fieldsSnapshot = await db
     .collection("shops")
@@ -227,47 +232,66 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   ];
 
-  const passedCount = checks.filter((check) => check.pass).length;
+      const passedCount = checks.filter((check) => check.pass).length;
 
-  return data({
-    setup,
-    themeStepVerified,
-    setupComplete,
-    checks,
-    passedCount,
-    totalChecks: checks.length,
-    metrics: {
-      fields: fields.length,
-      uploads: uploads.length,
-      jobs: jobs.length,
-      activePlan: billingPlan.planCode,
-      usage: `${billingPlan.usageThisMonth}/${getPlan(billingPlan.planCode).maxOrdersPerMonth === -1 ? "∞" : getPlan(billingPlan.planCode).maxOrdersPerMonth}`,
-    },
+      return data({
+        setup,
+        themeStepVerified,
+        setupComplete,
+        checks,
+        passedCount,
+        totalChecks: checks.length,
+        metrics: {
+          fields: fields.length,
+          uploads: uploads.length,
+          jobs: jobs.length,
+          activePlan: billingPlan.planCode,
+          usage: `${billingPlan.usageThisMonth}/${getPlan(billingPlan.planCode).maxOrdersPerMonth === -1 ? "∞" : getPlan(billingPlan.planCode).maxOrdersPerMonth}`,
+        },
+      });
+    } catch (err) {
+      log.error("admin_onboarding_loader_failed", err, { path: "/app/onboarding" });
+      throw err;
+    }
   });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = formData.get("intent");
-  const shopDoc = db.collection("shops").doc(session.shop);
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const formData = await request.formData();
+      const intent = formData.get("intent");
+      const shopDoc = db.collection("shops").doc(session.shop);
 
-  if (intent === "verify_cart_validation") {
-    await shopDoc.set({ cartValidationVerified: true }, { merge: true });
-    return data({ ok: true });
-  }
+      if (intent === "verify_cart_validation") {
+        log.event("onboarding_verify_cart_validation", {});
+        await shopDoc.set({ cartValidationVerified: true }, { merge: true });
+        return data({ ok: true });
+      }
 
-  if (intent === "verify_theme_block") {
-    await shopDoc.set({ themeBlockVerified: true }, { merge: true });
-    return data({ ok: true });
-  }
+      if (intent === "verify_theme_block") {
+        log.event("onboarding_verify_theme_block", {});
+        await shopDoc.set({ themeBlockVerified: true }, { merge: true });
+        return data({ ok: true });
+      }
 
-  if (intent === "verify_cart_transform") {
-    await shopDoc.set({ cartTransformVerified: true }, { merge: true });
-    return data({ ok: true });
-  }
+      if (intent === "verify_cart_transform") {
+        log.event("onboarding_verify_cart_transform", {});
+        await shopDoc.set({ cartTransformVerified: true }, { merge: true });
+        return data({ ok: true });
+      }
 
-  return data({ ok: false }, { status: 400 });
+      log.warn("onboarding_unknown_intent", "Unknown onboarding intent", {
+        intent: String(intent ?? ""),
+      });
+      return data({ ok: false }, { status: 400 });
+    } catch (err) {
+      log.error("admin_onboarding_action_failed", err, { path: "/app/onboarding" });
+      throw err;
+    }
+  });
 };
 
 function StatusBadge({ enabled }: { enabled: boolean }) {

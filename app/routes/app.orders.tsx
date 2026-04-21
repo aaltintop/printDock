@@ -28,6 +28,7 @@ import {
   listOrderJobs,
   saveOrderJob,
 } from "../services/shop-data.server";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function normalizeStatus(status: string) {
   return status === "ready_for_production" ? "approved" : status;
@@ -123,8 +124,12 @@ async function downloadFileWithoutNavigation(downloadUrl: string, fileName: stri
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const url = new URL(request.url);
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      log.event("admin_page_view", { path: "/app/orders" });
+      const url = new URL(request.url);
   const query = (url.searchParams.get("q") || "").trim().toLowerCase();
   const status = url.searchParams.get("status") || "all";
   const startDate = (url.searchParams.get("startDate") || "").trim();
@@ -227,30 +232,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   );
   const availableStatuses = Array.from(new Set(allOrders.map((order) => order.status)));
 
-  return data({
-    orders,
-    pagination: {
-      page: safePage,
-      pageSize,
-      total,
-      pageCount,
-    },
-    filters: {
-      q: query,
-      status,
-      startDate,
-      endDate,
-    },
-    quickStats,
-    availableStatuses,
-    shopDomain: session.shop,
-    canBulkDownload: bulkDownloadAllowed,
+      return data({
+        orders,
+        pagination: {
+          page: safePage,
+          pageSize,
+          total,
+          pageCount,
+        },
+        filters: {
+          q: query,
+          status,
+          startDate,
+          endDate,
+        },
+        quickStats,
+        availableStatuses,
+        shopDomain: session.shop,
+        canBulkDownload: bulkDownloadAllowed,
+      });
+    } catch (err) {
+      log.error("admin_orders_loader_failed", err, { path: "/app/orders" });
+      throw err;
+    }
   });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const formData = await request.formData();
   const intent = String(formData.get("intent") || "download");
 
   if (intent === "bulk_update") {
@@ -350,13 +363,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  try {
-    const downloadUrl = await getSignedDownloadUrl(storagePath);
-    return data({ downloadUrl, storagePath });
-  } catch (error) {
-    console.error("Error generating download URL:", error);
-    return data({ error: "Failed to generate download link" }, { status: 500 });
-  }
+      try {
+        const downloadUrl = await getSignedDownloadUrl(storagePath);
+        return data({ downloadUrl, storagePath });
+      } catch (error) {
+        log.error("orders_download_url_failed", error, { storagePath });
+        return data({ error: "Failed to generate download link" }, { status: 500 });
+      }
+    } catch (err) {
+      log.error("admin_orders_action_failed", err, { path: "/app/orders" });
+      throw err;
+    }
+  });
 };
 
 export default function Orders() {

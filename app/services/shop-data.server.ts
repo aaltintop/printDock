@@ -1,5 +1,6 @@
 import { DEFAULT_FILE_RENAME_PATTERN } from "../utils/file-rename-pattern";
 import { db } from "../firebase.server";
+import { log } from "../lib/logger.server";
 import { unauthenticated } from "../shopify.server";
 import type { PlanCode } from "../config/plans";
 import { migratePlanCode } from "../config/plans";
@@ -371,7 +372,11 @@ export function createCollectionIdResolver(): CollectionIdResolver {
       const json = await response.json();
       const edges = json?.data?.product?.collections?.edges ?? [];
       return edges.map((edge: any) => extractNumericId(String(edge.node.id)));
-    } catch {
+    } catch (err) {
+      log.warn("collection_id_resolve_failed", err instanceof Error ? err.message : String(err), {
+        shopDomain,
+        productId,
+      });
       return [];
     }
   };

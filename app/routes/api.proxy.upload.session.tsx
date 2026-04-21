@@ -15,6 +15,7 @@ import {
   updateUploadSession,
 } from "../services/shop-data.server";
 import type { UploadSession } from "../types/printdock";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 const schema = z.object({
   productId: z.string(),
@@ -33,20 +34,57 @@ const PLAN_RANK: Record<string, number> = {
 };
 
 export async function action({ request }: ActionFunctionArgs) {
+  return runWithRequestContext(request, async () => {
+    try {
+      return await handleUploadSessionAction(request);
+    } catch (err) {
+      log.error("upload_session_failed", err, {});
+      const message =
+        err instanceof Error ? err.message : typeof err === "string" ? err : "Unknown error";
+      return data(
+        {
+          error: "Upload session failed",
+          detail: message,
+        },
+        { status: 500 },
+      );
+    }
+  });
+}
+
+async function handleUploadSessionAction(request: Request) {
   const { session } = await authenticate.public.appProxy(request);
   if (!session) {
     return data({ error: "Unauthorized" }, { status: 401 });
   }
 
   const shopDomain = session.shop;
+  setLogShopDomain(shopDomain);
+
   const body = await request.json();
   const parsed = schema.safeParse(body);
   if (!parsed.success) return data({ error: "Invalid input" }, { status: 400 });
 
-  const { productId, variantId, fieldId, fileName, mimeType, sessionToken: existingSessionToken } = parsed.data;
+  const {
+    productId,
+    variantId,
+    fieldId,
+    fileName,
+    mimeType,
+    sessionToken: existingSessionToken,
+  } = parsed.data;
   const normalizedVariantId = variantId ?? "";
   const nowIso = new Date().toISOString();
   const expiresAtIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+
+  log.event("upload_session_requested", {
+    productId,
+    variantId: normalizedVariantId,
+    fieldId: fieldId ?? "",
+    fileName,
+    mimeType,
+    hasExistingToken: Boolean(existingSessionToken),
+  });
 
   const existingSession = existingSessionToken
     ? await getUploadSession(shopDomain, existingSessionToken)
@@ -60,17 +98,19 @@ export async function action({ request }: ActionFunctionArgs) {
   const selectedField =
     (existingSession?.fieldId ? await getUploadField(shopDomain, existingSession.fieldId) : null) ??
     (fieldId ? await getUploadField(shopDomain, fieldId) : null) ??
-    (await getActiveFieldForProduct(shopDomain, productId, normalizedVariantId, createCollectionIdResolver()));
+    (await getActiveFieldForProduct(
+      shopDomain,
+      productId,
+      normalizedVariantId,
+      createCollectionIdResolver(),
+    ));
 
   const billingPlan = await getEffectiveBillingPlan(shopDomain);
   const planCode = billingPlan.planCode;
   const planLimits = getPlan(planCode);
 
   if (!isWithinOrderLimit(planCode, billingPlan.usageThisMonth)) {
-    return data(
-      { error: "Monthly order limit reached" },
-      { status: 403 },
-    );
+    return data({ error: "Monthly order limit reached" }, { status: 403 });
   }
 
   if (selectedField) {

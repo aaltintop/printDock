@@ -33,6 +33,7 @@ import { PLANS, getPlan, planCodeFromSubscriptionName } from "../config/plans";
 import { createSubscription } from "../services/billing.server";
 import { getBillingPlan, saveBillingPlan } from "../services/shop-data.server";
 import { authenticate } from "../shopify.server";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${bytes / (1024 * 1024 * 1024)}GB`;
@@ -96,10 +97,14 @@ function formatDate(iso: string | null | undefined): string {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
+  return runWithRequestContext(request, async () => {
+    try {
+      const { admin, session } = await authenticate.admin(request);
+      const shopDomain = session.shop;
+      setLogShopDomain(shopDomain);
+      log.event("admin_page_view", { path: "/app/plans" });
 
-  const installationResponse = await admin.graphql(`
+      const installationResponse = await admin.graphql(`
     #graphql
     query PrintDockPlansPage {
       currentAppInstallation {
@@ -138,15 +143,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     appHandle,
   );
 
-  const testUpgradeAllowed = isTestUpgradeStore(shopDomain);
+      const testUpgradeAllowed = isTestUpgradeStore(shopDomain);
 
-  return data({
-    activePlan: finalPlanCode,
-    activeSubscriptions,
-    embeddedHost,
-    billingMode,
-    managedPricingUrl,
-    testUpgradeAllowed,
+      return data({
+        activePlan: finalPlanCode,
+        activeSubscriptions,
+        embeddedHost,
+        billingMode,
+        managedPricingUrl,
+        testUpgradeAllowed,
+      });
+    } catch (err) {
+      log.error("admin_plans_loader_failed", err, { path: "/app/plans" });
+      throw err;
+    }
   });
 };
 
@@ -182,94 +192,112 @@ function embeddedPlansSearchParams(
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  if (getBillingMode() !== "api") {
-    return data(
-      {
-        error:
-          "PrintDock uses Shopify-hosted managed pricing. Use the plan buttons on this page to open Shopify’s billing page. In-app Billing API checkout is only available when SHOPIFY_BILLING_MODE=api (not used in production).",
-      },
-      { status: 400 },
-    );
-  }
-
-  const { admin, session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") || "");
-  const selectedPlan = String(formData.get("planCode") || "") as PlanCode;
-  const shopDomain = session.shop;
-
-  if (intent !== "select_plan") {
-    return data({ error: "Unsupported action" }, { status: 400 });
-  }
-
-  if (!PLANS[selectedPlan]) {
-    return data({ error: "Invalid plan selection" }, { status: 400 });
-  }
-
-  if (selectedPlan === "free") {
-    await saveBillingPlan(shopDomain, {
-      planCode: "free",
-      status: "active",
-      subscriptionId: null,
-    });
-    const query = embeddedPlansSearchParams(request, formData, shopDomain, {});
-    return redirect(`/app/plans?${query.toString()}`);
-  }
-
-  const persistedForAction = await getBillingPlan(shopDomain);
-  const installationForAction = await admin.graphql(`
-    #graphql
-    query PrintDockPlansAction {
-      currentAppInstallation {
-        activeSubscriptions {
-          name
-        }
+  return runWithRequestContext(request, async () => {
+    try {
+      if (getBillingMode() !== "api") {
+        log.event("billing_mode_mismatch", {
+          actualMode: getBillingMode(),
+          reason: "in_app_checkout_blocked",
+        });
+        return data(
+          {
+            error:
+              "PrintDock uses Shopify-hosted managed pricing. Use the plan buttons on this page to open Shopify’s billing page. In-app Billing API checkout is only available when SHOPIFY_BILLING_MODE=api (not used in production).",
+          },
+          { status: 400 },
+        );
       }
+
+      const { admin, session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const formData = await request.formData();
+      const intent = String(formData.get("intent") || "");
+      const selectedPlan = String(formData.get("planCode") || "") as PlanCode;
+      const shopDomain = session.shop;
+
+      if (intent !== "select_plan") {
+        return data({ error: "Unsupported action" }, { status: 400 });
+      }
+
+      if (!PLANS[selectedPlan]) {
+        return data({ error: "Invalid plan selection" }, { status: 400 });
+      }
+
+      log.event("plan_selected", { planCode: selectedPlan, intent });
+
+      if (selectedPlan === "free") {
+        await saveBillingPlan(shopDomain, {
+          planCode: "free",
+          status: "active",
+          subscriptionId: null,
+        });
+        const query = embeddedPlansSearchParams(request, formData, shopDomain, {});
+        return redirect(`/app/plans?${query.toString()}`);
+      }
+
+      const persistedForAction = await getBillingPlan(shopDomain);
+      const installationForAction = await admin.graphql(`
+        #graphql
+        query PrintDockPlansAction {
+          currentAppInstallation {
+            activeSubscriptions {
+              name
+            }
+          }
+        }
+      `);
+      const installationJsonForAction = await installationForAction.json();
+      const subsForAction =
+        installationJsonForAction?.data?.currentAppInstallation
+          ?.activeSubscriptions ?? [];
+      const subscriptionPlanForAction =
+        derivePlanFromSubscriptions(subsForAction);
+      const activePlanForAction: PlanCode =
+        subscriptionPlanForAction === "free"
+          ? persistedForAction.planCode
+          : subscriptionPlanForAction;
+
+      if (
+        isUpgradeSelection(activePlanForAction, selectedPlan) &&
+        !isTestUpgradeStore(shopDomain)
+      ) {
+        return data(
+          {
+            error:
+              "Test mode: plan upgrades are only available for development stores whose shop name includes “printdock”.",
+          },
+          { status: 403 },
+        );
+      }
+
+      const url = new URL(request.url);
+      const returnParams = embeddedPlansSearchParams(request, formData, shopDomain, {
+        activated: selectedPlan,
+      });
+      const returnUrl = `${url.origin}/app/plans?${returnParams.toString()}`;
+      const subscriptionResult = await createSubscription(admin, selectedPlan, returnUrl);
+      if (subscriptionResult.userErrors?.length) {
+        log.warn("subscription_create_user_error", subscriptionResult.userErrors[0].message, {
+          planCode: selectedPlan,
+        });
+        return data(
+          { error: subscriptionResult.userErrors[0].message },
+          { status: 400 },
+        );
+      }
+
+      await saveBillingPlan(shopDomain, {
+        planCode: selectedPlan,
+        status: "trial",
+      });
+
+      log.event("subscription_created", { planCode: selectedPlan });
+      return redirect(subscriptionResult.confirmationUrl);
+    } catch (err) {
+      log.error("admin_plans_action_failed", err, { path: "/app/plans" });
+      throw err;
     }
-  `);
-  const installationJsonForAction = await installationForAction.json();
-  const subsForAction =
-    installationJsonForAction?.data?.currentAppInstallation
-      ?.activeSubscriptions ?? [];
-  const subscriptionPlanForAction =
-    derivePlanFromSubscriptions(subsForAction);
-  const activePlanForAction: PlanCode =
-    subscriptionPlanForAction === "free"
-      ? persistedForAction.planCode
-      : subscriptionPlanForAction;
-
-  if (
-    isUpgradeSelection(activePlanForAction, selectedPlan) &&
-    !isTestUpgradeStore(shopDomain)
-  ) {
-    return data(
-      {
-        error:
-          "Test mode: plan upgrades are only available for development stores whose shop name includes “printdock”.",
-      },
-      { status: 403 },
-    );
-  }
-
-  const url = new URL(request.url);
-  const returnParams = embeddedPlansSearchParams(request, formData, shopDomain, {
-    activated: selectedPlan,
   });
-  const returnUrl = `${url.origin}/app/plans?${returnParams.toString()}`;
-  const subscriptionResult = await createSubscription(admin, selectedPlan, returnUrl);
-  if (subscriptionResult.userErrors?.length) {
-    return data(
-      { error: subscriptionResult.userErrors[0].message },
-      { status: 400 },
-    );
-  }
-
-  await saveBillingPlan(shopDomain, {
-    planCode: selectedPlan,
-    status: "trial",
-  });
-
-  return redirect(subscriptionResult.confirmationUrl);
 };
 
 function planActionLabel(

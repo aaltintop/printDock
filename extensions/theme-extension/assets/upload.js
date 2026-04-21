@@ -30,11 +30,58 @@
   let isRequired = BLOCK_REQUIRED;
   let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || null;
   let sessionExpiresAt = localStorage.getItem(SESSION_EXPIRES_STORAGE_KEY) || null;
+  if (sessionExpiresAt) {
+    const ts = Date.parse(sessionExpiresAt);
+    if (!Number.isNaN(ts) && ts <= Date.now()) {
+      clearStoredSession();
+    }
+  }
   let uploadedFiles = [];
   let isUploading = false;
   let isBlocked = false;
   const boundForms = new WeakSet();
   let formObserver = null;
+
+  function clearStoredSession() {
+    sessionToken = null;
+    sessionExpiresAt = null;
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      localStorage.removeItem(SESSION_EXPIRES_STORAGE_KEY);
+    } catch (_) {}
+  }
+
+  async function fetchUploadSession(file, tokenToUse) {
+    const res = await fetch(`${PROXY_URL}/api/proxy/upload/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        productId: PRODUCT_ID,
+        variantId: root.dataset.variantId || "",
+        fieldId: fieldConfig.id || "",
+        sessionToken: tokenToUse || undefined,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+      }),
+    });
+    const text = await res.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`Failed to get upload session (${res.status}): invalid response`);
+    }
+    return { ok: res.ok, status: res.status, json, text };
+  }
+
+  function isStaleSessionError(status, json) {
+    if (status !== 400) return false;
+    const msg = String(json?.error || "").toLowerCase();
+    return (
+      msg.includes("maximum file count reached") ||
+      msg.includes("session product mismatch")
+    );
+  }
 
   // ─── INIT ────────────────────────────────────────────────────────────
   async function init() {
@@ -45,6 +92,11 @@
       root.style.display = "none";
       root.setAttribute("aria-hidden", "true");
       return;
+    }
+    // Cart/uploads state is not rehydrated from the server on reload, so any stored
+    // session token is effectively orphaned — drop it so the next upload starts fresh.
+    if (uploadedFiles.length === 0 && sessionToken) {
+      clearStoredSession();
     }
     renderUI();
     setupAddToCartGuard();
@@ -150,23 +202,20 @@
     updateCartState();
 
     try {
-      // Step 1: Get presigned URL from our App Proxy
-      const sessionRes = await fetch(`${PROXY_URL}/api/proxy/upload/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: PRODUCT_ID,
-          variantId: root.dataset.variantId || "",
-          fieldId: fieldConfig.id || "",
-          sessionToken: sessionToken || undefined,
-          fileName: file.name,
-          mimeType: file.type,
-        }),
-      });
-      
-      if (!sessionRes.ok) throw new Error("Failed to get upload session");
-      
-      const sessionData = await sessionRes.json();
+      // Step 1: Get presigned URL from our App Proxy (auto-retry once without a stale token).
+      let sessionResult = await fetchUploadSession(file, sessionToken);
+      if (!sessionResult.ok && sessionToken && isStaleSessionError(sessionResult.status, sessionResult.json)) {
+        clearStoredSession();
+        sessionResult = await fetchUploadSession(file, null);
+      }
+      if (!sessionResult.ok) {
+        const hint =
+          sessionResult.json?.detail ||
+          sessionResult.json?.error ||
+          sessionResult.text.slice(0, 200);
+        throw new Error(`Failed to get upload session (${sessionResult.status}): ${hint}`);
+      }
+      const sessionData = sessionResult.json;
       sessionToken = sessionData.sessionToken;
       sessionExpiresAt = sessionData.expiresAt || null;
       localStorage.setItem(SESSION_STORAGE_KEY, sessionToken);
@@ -218,7 +267,9 @@
 
     } catch (err) {
       fileEntry.status = "error";
-      fileEntry.error = "Upload failed. Please try again.";
+      const msg = err instanceof Error ? err.message : String(err);
+      fileEntry.error =
+        msg.length > 180 ? `${msg.slice(0, 180)}…` : msg || "Upload failed. Please try again.";
       console.error("PrintDock upload error:", err);
     }
 
@@ -231,7 +282,10 @@
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("PUT", presignedUrl, true);
-      xhr.setRequestHeader("Content-Type", file.type);
+      xhr.setRequestHeader(
+        "Content-Type",
+        file.type && file.type.trim() !== "" ? file.type : "application/octet-stream",
+      );
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));

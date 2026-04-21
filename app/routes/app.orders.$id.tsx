@@ -22,6 +22,7 @@ import {
   listOrderJobs,
   saveOrderJob,
 } from "../services/shop-data.server";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function normalizeStatus(status: string) {
   return status === "ready_for_production" ? "approved" : status;
@@ -44,30 +45,45 @@ async function downloadFileWithoutNavigation(downloadUrl: string, fileName: stri
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const jobId = String(params.id || "");
-  const jobs = await listOrderJobs(session.shop);
-  const job = jobs.find((item) => item.id === jobId);
-  if (!job) {
-    throw data({ error: "Order job not found" }, { status: 404 });
-  }
-  const audit = await listOrderJobAuditEvents(session.shop, jobId, 30);
-  return data({ job, audit });
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const jobId = String(params.id || "");
+      log.event("admin_page_view", { path: `/app/orders/${jobId}` });
+      const jobs = await listOrderJobs(session.shop);
+      const job = jobs.find((item) => item.id === jobId);
+      if (!job) {
+        throw data({ error: "Order job not found" }, { status: 404 });
+      }
+      const audit = await listOrderJobAuditEvents(session.shop, jobId, 30);
+      return data({ job, audit });
+    } catch (err) {
+      log.error("admin_order_detail_loader_failed", err, {
+        path: `/app/orders/${params.id || ""}`,
+      });
+      throw err;
+    }
+  });
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const jobId = String(params.id || "");
-  const jobs = await listOrderJobs(session.shop);
-  const job = jobs.find((item) => item.id === jobId);
-  if (!job) {
-    return data({ error: "Order job not found" }, { status: 404 });
-  }
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const jobId = String(params.id || "");
+      const jobs = await listOrderJobs(session.shop);
+      const job = jobs.find((item) => item.id === jobId);
+      if (!job) {
+        return data({ error: "Order job not found" }, { status: 404 });
+      }
 
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") || "");
+      const formData = await request.formData();
+      const intent = String(formData.get("intent") || "");
 
-  if (intent === "download") {
+      if (intent === "download") {
+        log.event("order_job_download_requested", { jobId });
     const storagePath = String(formData.get("storagePath") || "");
     if (!storagePath || !storagePath.startsWith(`uploads/${session.shop}/`)) {
       return data({ error: "Invalid storage path" }, { status: 400 });
@@ -78,53 +94,63 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         { status: 410 },
       );
     }
-    const downloadUrl = await getSignedDownloadUrl(storagePath);
-    return data({ downloadUrl, storagePath });
-  }
+        const downloadUrl = await getSignedDownloadUrl(storagePath);
+        return data({ downloadUrl, storagePath });
+      }
 
-  if (intent === "update_status") {
-    const status = normalizeStatus(String(formData.get("status") || job.status));
-    await saveOrderJob(session.shop, { ...job, status });
-    await appendOrderJobAuditEvent(session.shop, jobId, {
-      eventType: "job_updated",
-      message: `status changed to ${status}`,
-      metadata: { status },
-      actor: "admin-ui",
-    });
-    return data({ ok: true, message: "Status updated" });
-  }
+      if (intent === "update_status") {
+        log.event("order_job_status_updated", { jobId });
+        const status = normalizeStatus(String(formData.get("status") || job.status));
+        await saveOrderJob(session.shop, { ...job, status });
+        await appendOrderJobAuditEvent(session.shop, jobId, {
+          eventType: "job_updated",
+          message: `status changed to ${status}`,
+          metadata: { status },
+          actor: "admin-ui",
+        });
+        return data({ ok: true, message: "Status updated" });
+      }
 
-  if (intent === "save_note") {
-    const internalNotes = String(formData.get("internalNotes") || "");
-    await saveOrderJob(session.shop, { ...job, internalNotes });
-    await appendOrderJobAuditEvent(session.shop, jobId, {
-      eventType: "job_updated",
-      message: "internal note updated",
-      metadata: { internalNotes },
-      actor: "admin-ui",
-    });
-    return data({ ok: true, message: "Internal note saved" });
-  }
+      if (intent === "save_note") {
+        log.event("order_job_note_saved", { jobId });
+        const internalNotes = String(formData.get("internalNotes") || "");
+        await saveOrderJob(session.shop, { ...job, internalNotes });
+        await appendOrderJobAuditEvent(session.shop, jobId, {
+          eventType: "job_updated",
+          message: "internal note updated",
+          metadata: { internalNotes },
+          actor: "admin-ui",
+        });
+        return data({ ok: true, message: "Internal note saved" });
+      }
 
-  if (intent === "request_reupload") {
-    const token = await createReuploadRequest(session.shop, jobId);
-    await saveOrderJob(session.shop, { ...job, status: "reupload_requested" });
-    await appendOrderJobAuditEvent(session.shop, jobId, {
-      eventType: "job_updated",
-      message: "re-upload requested",
-      metadata: { status: "reupload_requested", token },
-      actor: "admin-ui",
-    });
-    
-    // Construct the re-upload URL
-    const url = new URL(request.url);
-    const origin = url.origin;
-    const reuploadUrl = `${origin}/api/reupload/${token}`;
-    
-    return data({ ok: true, message: "Re-upload requested", reuploadUrl });
-  }
+      if (intent === "request_reupload") {
+        log.event("order_job_reupload_requested", { jobId });
+        const token = await createReuploadRequest(session.shop, jobId);
+        await saveOrderJob(session.shop, { ...job, status: "reupload_requested" });
+        await appendOrderJobAuditEvent(session.shop, jobId, {
+          eventType: "job_updated",
+          message: "re-upload requested",
+          metadata: { status: "reupload_requested", token },
+          actor: "admin-ui",
+        });
 
-  return data({ error: "Unsupported action" }, { status: 400 });
+        const url = new URL(request.url);
+        const origin = url.origin;
+        const reuploadUrl = `${origin}/api/reupload/${token}`;
+
+        return data({ ok: true, message: "Re-upload requested", reuploadUrl });
+      }
+
+      log.warn("order_detail_unknown_intent", "Unsupported order detail intent", { intent });
+      return data({ error: "Unsupported action" }, { status: 400 });
+    } catch (err) {
+      log.error("admin_order_detail_action_failed", err, {
+        path: `/app/orders/${params.id || ""}`,
+      });
+      throw err;
+    }
+  });
 };
 
 export default function OrderJobDetailPage() {

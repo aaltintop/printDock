@@ -48,6 +48,7 @@ import type {
   UploadFieldDimensionRule,
 } from "../types/printdock";
 import { DEFAULT_FILE_RENAME_PATTERN, previewRenamedFileName } from "../utils/file-rename-pattern";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function extractNumericId(gid: string): string {
   return gid.split("/").pop() ?? gid;
@@ -95,34 +96,45 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const id = params.id || "new";
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const id = params.id || "new";
+      log.event("admin_page_view", { path: `/app/fields/${id}` });
 
-  let field = emptyFieldConfig(id);
-  if (id !== "new") {
-    const existing = await getUploadField(session.shop, id);
-    if (!existing) {
-      throw data({ error: "Field not found" }, { status: 404 });
+      let field = emptyFieldConfig(id);
+      if (id !== "new") {
+        const existing = await getUploadField(session.shop, id);
+        if (!existing) {
+          throw data({ error: "Field not found" }, { status: 404 });
+        }
+        field = existing;
+      }
+
+      const billingPlan = await getEffectiveBillingPlan(session.shop);
+      const planLimits = getPlan(billingPlan.planCode);
+      const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+
+      const allFields = await listUploadFields(session.shop);
+      const fieldCreationBlocked =
+        id === "new" ? !isWithinFieldLimit(billingPlan.planCode, allFields.length) : false;
+
+      return data({
+        field,
+        isNew: id === "new",
+        shopDomain: session.shop,
+        planCode: billingPlan.planCode,
+        maxFileMBFromPlan,
+        fieldCreationBlocked,
+        allFields,
+      });
+    } catch (err) {
+      log.error("admin_field_editor_loader_failed", err, {
+        path: `/app/fields/${params.id || "new"}`,
+      });
+      throw err;
     }
-    field = existing;
-  }
-
-  const billingPlan = await getEffectiveBillingPlan(session.shop);
-  const planLimits = getPlan(billingPlan.planCode);
-  const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
-
-  const allFields = await listUploadFields(session.shop);
-  const fieldCreationBlocked =
-    id === "new" ? !isWithinFieldLimit(billingPlan.planCode, allFields.length) : false;
-
-  return data({
-    field,
-    isNew: id === "new",
-    shopDomain: session.shop,
-    planCode: billingPlan.planCode,
-    maxFileMBFromPlan,
-    fieldCreationBlocked,
-    allFields,
   });
 };
 
@@ -146,8 +158,11 @@ function parseJsonArray<T>(raw: string, fallback: T[]): T[] {
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const formData = await request.formData();
   const id = params.id || "new";
   const nowIso = new Date().toISOString();
   const billingPlan = await getEffectiveBillingPlan(session.shop);
@@ -279,8 +294,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     updatedAt: nowIso,
   };
 
-  await saveUploadField(session.shop, nextField);
-  return redirect(`/app/fields?toast=field_saved`);
+      await saveUploadField(session.shop, nextField);
+      log.event(id === "new" ? "field_created" : "field_updated", {
+        fieldId: nextField.id,
+        isNew: id === "new",
+      });
+      return redirect(`/app/fields?toast=field_saved`);
+    } catch (err) {
+      log.error("admin_field_editor_action_failed", err, {
+        path: `/app/fields/${params.id || "new"}`,
+      });
+      throw err;
+    }
+  });
 };
 
 export default function FieldEditorPage() {

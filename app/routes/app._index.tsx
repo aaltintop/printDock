@@ -18,12 +18,17 @@ import {
   listUploadSessions,
 } from "../services/shop-data.server";
 import { authenticate } from "../shopify.server";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      const shopDomain = session.shop;
+      setLogShopDomain(shopDomain);
+      log.event("admin_page_view", { path: "/app" });
 
-  const [stats, sessions, jobs] = await Promise.all([
+      const [stats, sessions, jobs] = await Promise.all([
     computeDashboardStats(shopDomain),
     listUploadSessions(shopDomain),
     listOrderJobs(shopDomain),
@@ -53,10 +58,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       createdAt: job.createdAt,
     }));
 
-  return data({
-    stats,
-    recentUploads,
-    recentOrders,
+      return data({
+        stats,
+        recentUploads,
+        recentOrders,
+      });
+    } catch (err) {
+      log.error("admin_dashboard_loader_failed", err, { path: "/app" });
+      throw err;
+    }
   });
 };
 

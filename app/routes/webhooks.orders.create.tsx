@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { processBillableOrder } from "../services/billing.server";
 import { authenticate } from "../shopify.server";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 import {
   appendOrderJobAuditEvent,
   getUploadField,
@@ -81,23 +82,24 @@ function parsePerFileQuantities(lineProperties: any[]): Record<string, number> {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  // authenticate.webhook handles HMAC verification automatically
-  const { topic, shop, payload } = await authenticate.webhook(request);
+  return runWithRequestContext(request, async () => {
+    try {
+      // authenticate.webhook handles HMAC verification automatically
+      const { topic, shop, payload } = await authenticate.webhook(request);
 
-  if (topic !== "ORDERS_CREATE") {
-    return new Response("Ignored", { status: 200 });
-  }
+      if (topic !== "ORDERS_CREATE") {
+        return new Response("Ignored", { status: 200 });
+      }
 
-  const order = payload as any;
-  const shopDomain = shop;
-  console.info(
-    JSON.stringify({
-      event: "orders_create_received",
-      shopDomain,
-      orderId: String(order.id),
-      lineItemCount: Array.isArray(order.line_items) ? order.line_items.length : 0,
-    }),
-  );
+      const order = payload as any;
+      const shopDomain = shop;
+      setLogShopDomain(shopDomain);
+      log.event("webhook_received", { topic, shopDomain });
+      log.event("orders_create_received", {
+        shopDomain,
+        orderId: String(order.id),
+        lineItemCount: Array.isArray(order.line_items) ? order.line_items.length : 0,
+      });
 
   // Process each line item
   for (const line of order.line_items ?? []) {
@@ -117,15 +119,12 @@ export async function action({ request }: ActionFunctionArgs) {
         ].includes(String(p?.name || "")),
       );
       if (hasPrintDockHints) {
-        console.warn(
-          JSON.stringify({
-            event: "orders_create_missing_uc_session",
-            shopDomain,
-            orderId: String(order.id),
-            lineItemId: String(line.id),
-            propertyNames: props.map((p: any) => String(p?.name || "")).slice(0, 20),
-          }),
-        );
+        log.warn("orders_create_missing_uc_session", "PrintDock hints without session token", {
+          shopDomain,
+          orderId: String(order.id),
+          lineItemId: String(line.id),
+          propertyNames: props.map((p: any) => String(p?.name || "")).slice(0, 20),
+        });
       }
       continue;
     }
@@ -133,15 +132,12 @@ export async function action({ request }: ActionFunctionArgs) {
     // Find the session
     const sessionData = await getUploadSession(shopDomain, String(sessionToken));
     if (!sessionData || !sessionData.asset) {
-      console.warn(
-        JSON.stringify({
-          event: "orders_create_session_not_found",
-          shopDomain,
-          orderId: String(order.id),
-          lineItemId: String(line.id),
-          sessionToken: String(sessionToken),
-        }),
-      );
+      log.warn("orders_create_session_not_found", "Upload session missing for line item", {
+        shopDomain,
+        orderId: String(order.id),
+        lineItemId: String(line.id),
+        sessionToken: String(sessionToken),
+      });
       continue;
     }
     const sessionAssets = sessionData.assets.length > 0 ? sessionData.assets : [sessionData.asset];
@@ -155,15 +151,12 @@ export async function action({ request }: ActionFunctionArgs) {
       const jobId = `${order.id}_${line.id}_${asset.id || assetIndex}`;
       const existingJobDoc = await jobsCollection(shopDomain).doc(jobId).get();
       if (existingJobDoc.exists) {
-        console.info(
-          JSON.stringify({
-            event: "orders_create_duplicate_job_skipped",
-            shopDomain,
-            orderId: String(order.id),
-            lineItemId: String(line.id),
-            jobId,
-          }),
-        );
+        log.event("orders_create_duplicate_job_skipped", {
+          shopDomain,
+          orderId: String(order.id),
+          lineItemId: String(line.id),
+          jobId,
+        });
         continue;
       }
 
@@ -257,8 +250,14 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
-  // Process billing
-  await processBillableOrder(shopDomain, order);
+      // Process billing
+      await processBillableOrder(shopDomain, order);
 
-  return new Response("OK", { status: 200 });
+      log.event("webhook_processed", { topic: "ORDERS_CREATE", shopDomain });
+      return new Response("OK", { status: 200 });
+    } catch (err) {
+      log.error("webhook_orders_create_failed", err, {});
+      return new Response("Error", { status: 500 });
+    }
+  });
 }

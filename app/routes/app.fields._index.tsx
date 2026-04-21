@@ -43,10 +43,15 @@ import {
 import type { UploadFieldConfig } from "../types/printdock";
 import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
 import { analyzeActiveFieldTargetOverlaps } from "../utils/field-target-overlaps";
+import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const url = new URL(request.url);
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      log.event("admin_page_view", { path: "/app/fields" });
+      const url = new URL(request.url);
   const query = (url.searchParams.get("q") || "").trim().toLowerCase();
   const statusFilter = url.searchParams.get("status") || "all";
 
@@ -75,21 +80,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
-  return data({
-    fields: filteredFields,
-    filters: {
-      q: query,
-      status: statusFilter,
-    },
-    shopDomain: session.shop,
-    canCreateMoreFields,
-    targetOverlapAnalysis,
+      return data({
+        fields: filteredFields,
+        filters: {
+          q: query,
+          status: statusFilter,
+        },
+        shopDomain: session.shop,
+        canCreateMoreFields,
+        targetOverlapAnalysis,
+      });
+    } catch (err) {
+      log.error("admin_fields_index_loader_failed", err, { path: "/app/fields" });
+      throw err;
+    }
   });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
+  return runWithRequestContext(request, async () => {
+    try {
+      const { session } = await authenticate.admin(request);
+      setLogShopDomain(session.shop);
+      const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const fieldId = String(formData.get("fieldId") || "");
 
@@ -102,44 +115,53 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return data({ error: "Field not found" }, { status: 404 });
   }
 
-  if (intent === "toggle_active") {
-    await saveUploadField(session.shop, {
-      ...field,
-      isActive: !field.isActive,
-      updatedAt: new Date().toISOString(),
-    });
-    return data({ ok: true });
-  }
+      if (intent === "toggle_active") {
+        log.event("field_updated", { fieldId, action: "toggle_active" });
+        await saveUploadField(session.shop, {
+          ...field,
+          isActive: !field.isActive,
+          updatedAt: new Date().toISOString(),
+        });
+        return data({ ok: true });
+      }
 
-  if (intent === "duplicate") {
-    const billingPlan = await getEffectiveBillingPlan(session.shop);
-    const allFields = await listUploadFields(session.shop);
-    if (!isWithinFieldLimit(billingPlan.planCode, allFields.length)) {
-      return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
+      if (intent === "duplicate") {
+        const billingPlan = await getEffectiveBillingPlan(session.shop);
+        const allFields = await listUploadFields(session.shop);
+        if (!isWithinFieldLimit(billingPlan.planCode, allFields.length)) {
+          return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
+        }
+
+        const nowIso = new Date().toISOString();
+        const duplicateId = crypto.randomUUID();
+        log.event("field_created", { sourceFieldId: fieldId, newFieldId: duplicateId, via: "duplicate" });
+        await saveUploadField(session.shop, {
+          ...field,
+          id: duplicateId,
+          isActive: false,
+          adminTitle: `${field.adminTitle} (Copy)`,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+        return redirect(`/app/fields/${duplicateId}?toast=duplicated`);
+      }
+
+      if (intent === "delete") {
+        log.event("field_soft_deleted", { fieldId });
+        const removed = await softDeleteUploadField(session.shop, fieldId);
+        if (!removed) {
+          return data({ error: "Could not delete this field." }, { status: 404 });
+        }
+        return data({ deleted: true as const });
+      }
+
+      log.warn("fields_index_unknown_intent", "Unknown fields index intent", { intent });
+      return data({ error: "Unknown action" }, { status: 400 });
+    } catch (err) {
+      log.error("admin_fields_index_action_failed", err, { path: "/app/fields" });
+      throw err;
     }
-
-    const nowIso = new Date().toISOString();
-    const duplicateId = crypto.randomUUID();
-    await saveUploadField(session.shop, {
-      ...field,
-      id: duplicateId,
-      isActive: false,
-      adminTitle: `${field.adminTitle} (Copy)`,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    });
-    return redirect(`/app/fields/${duplicateId}?toast=duplicated`);
-  }
-
-  if (intent === "delete") {
-    const removed = await softDeleteUploadField(session.shop, fieldId);
-    if (!removed) {
-      return data({ error: "Could not delete this field." }, { status: 404 });
-    }
-    return data({ deleted: true as const });
-  }
-
-  return data({ error: "Unknown action" }, { status: 400 });
+  });
 };
 
 export default function FieldsIndexPage() {

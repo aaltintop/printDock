@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { PassThrough } from "stream";
 import { renderToPipeableStream } from "react-dom/server";
 import { ServerRouter } from "react-router";
@@ -5,6 +6,7 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { log } from "./lib/logger.server";
 
 export const streamTimeout = 5000;
 
@@ -19,6 +21,13 @@ export default async function handleRequest(
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
     : "onShellReady";
+
+  const pageUrl = new URL(request.url);
+  const streamLogMeta = {
+    requestId: randomUUID(),
+    route: pageUrl.pathname,
+    method: request.method,
+  };
 
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
@@ -41,11 +50,12 @@ export default async function handleRequest(
           pipe(body);
         },
         onShellError(error) {
+          log.error("ssr_shell_error", error, streamLogMeta);
           reject(error);
         },
         onError(error) {
           responseStatusCode = 500;
-          console.error(error);
+          log.error("ssr_render_chunk_error", error, streamLogMeta);
         },
       }
     );

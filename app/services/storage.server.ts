@@ -7,17 +7,21 @@ export async function getPresignedUploadUrl(
   fileName: string,
   mimeType: string
 ): Promise<{ presignedUrl: string; storagePath: string }> {
-  const ext = fileName.split(".").pop();
-  const storagePath = `uploads/${shopDomain}/${sessionId}/${Date.now()}.${ext}`;
+  const ext = fileName.includes(".") ? fileName.split(".").pop() : "";
+  const suffix = ext && ext.length <= 32 ? ext : "bin";
+  const storagePath = `uploads/${shopDomain}/${sessionId}/${Date.now()}.${suffix}`;
 
   const bucket = storage.bucket();
   const file = bucket.file(storagePath);
+
+  const contentType =
+    mimeType && mimeType.trim() !== "" ? mimeType.trim() : "application/octet-stream";
 
   const [presignedUrl] = await file.getSignedUrl({
     version: "v4",
     action: "write",
     expires: Date.now() + 5 * 60 * 1000, // 5 minutes
-    contentType: mimeType,
+    contentType,
   });
 
   return { presignedUrl, storagePath };
