@@ -52,6 +52,7 @@ requests. Does not host any code.
 | `FIREBASE_PROJECT_ID` | Firebase Console → Project settings |
 | `FIREBASE_STORAGE_BUCKET` | Firebase Console → Storage bucket name |
 | `NODE_ENV` | Set to `production` |
+| `SHOPIFY_BILLING_MODE` | `managed` by default (set by `./scripts/deploy-cloudrun-two-phase.sh`). Use `api` only for local/dev in-app Billing API when the app uses manual pricing in Partners. |
 
 `FIREBASE_SERVICE_ACCOUNT_JSON` is **not required** when Cloud Run and Firebase
 share the same GCP project. ADC handles authentication automatically.

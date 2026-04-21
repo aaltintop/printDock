@@ -5,13 +5,17 @@ set -euo pipefail
 # 1) Deploy without SHOPIFY_APP_URL to create/get service URL
 # 2) Deploy again with SHOPIFY_APP_URL set
 #
-# Expected env vars (typically from: source .cloudrun.env):
+# Expected env vars (auto-loaded from repo-root .cloudrun.env if PROJECT_ID is unset,
+# or set manually / via: source .cloudrun.env):
 #   PROJECT_ID
 #   SERVICE_NAME
 #   SERVICE_REGION
 #   FIREBASE_PROJECT_ID
 #   FIREBASE_STORAGE_BUCKET
 #   SCOPES
+#
+# Cloud Run receives SHOPIFY_BILLING_MODE=managed (Shopify-hosted plan selection).
+# Set SHOPIFY_BILLING_MODE=api on the service only for dev/emergency in-app Billing API.
 #
 # Secret behavior:
 # - Uses Secret Manager secrets `shopify-api-key` and `shopify-api-secret`
@@ -23,6 +27,18 @@ SECRET_API_SECRET_NAME="${SECRET_API_SECRET_NAME:-shopify-api-secret}"
 PORT="${PORT:-8080}"
 MIN_INSTANCES="${MIN_INSTANCES:-1}"
 ALLOW_UNAUTH="${ALLOW_UNAUTH:-1}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLOUDRUN_ENV_FILE="$REPO_ROOT/.cloudrun.env"
+# Allow running the script without `source .cloudrun.env` first (common mistake).
+if [[ -z "${PROJECT_ID:-}" && -f "$CLOUDRUN_ENV_FILE" ]]; then
+  echo "Loading Cloud Run defaults from .cloudrun.env"
+  set -a
+  # shellcheck disable=SC1090
+  source "$CLOUDRUN_ENV_FILE"
+  set +a
+fi
 
 require_cmd() {
   local cmd="$1"
@@ -36,6 +52,12 @@ require_env() {
   local key="$1"
   if [[ -z "${!key:-}" ]]; then
     echo "Missing required env var: $key"
+    if [[ ! -f "$CLOUDRUN_ENV_FILE" ]]; then
+      echo "Create $CLOUDRUN_ENV_FILE by running: source scripts/setup-cloudrun-env.sh"
+    else
+      echo "From repo root run: source .cloudrun.env"
+      echo "You still need Shopify scopes in the shell, e.g.: eval \"\$(shopify app info --web-env)\""
+    fi
     exit 1
   fi
 }
@@ -76,6 +98,7 @@ deploy_base() {
   {
     echo "SCOPES: \"$SCOPES\""
     echo "NODE_ENV: \"production\""
+    echo "SHOPIFY_BILLING_MODE: \"managed\""
     echo "FIREBASE_PROJECT_ID: \"$FIREBASE_PROJECT_ID\""
     echo "FIREBASE_STORAGE_BUCKET: \"$FIREBASE_STORAGE_BUCKET\""
     if [[ "$include_shopify_url" == "1" ]]; then
@@ -110,6 +133,8 @@ require_env SERVICE_REGION
 require_env FIREBASE_PROJECT_ID
 require_env FIREBASE_STORAGE_BUCKET
 require_env SCOPES
+
+cd "$REPO_ROOT"
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 

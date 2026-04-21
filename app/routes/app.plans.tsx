@@ -186,7 +186,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return data(
       {
         error:
-          "Billing is set to managed (Shopify-hosted) mode. Use the plan buttons on this page, or set SHOPIFY_BILLING_MODE=api to use in-app billing.",
+          "PrintDock uses Shopify-hosted managed pricing. Use the plan buttons on this page to open Shopify’s billing page. In-app Billing API checkout is only available when SHOPIFY_BILLING_MODE=api (not used in production).",
       },
       { status: 400 },
     );
@@ -395,27 +395,27 @@ export default function PlansPage() {
                 <Text as="span" fontWeight="semibold">
                   locale
                 </Text>{" "}
-                on the listing and the dev store). If you bill with the Billing API instead, set
-                environment variable{" "}
-                <Text as="span" variant="bodySm" fontWeight="semibold">
-                  SHOPIFY_BILLING_MODE=api
-                </Text>{" "}
-                and use manual pricing in the Partner Dashboard so plan buttons use in-app checkout.
+                on the listing and the dev store). The app default is managed pricing; do not use manual
+                pricing in Partners if you rely on this page.
               </p>
             </BlockStack>
           </Banner>
         ) : (
-          <Banner tone="info" title="In-app billing (Billing API)">
+          <Banner tone="warning" title="In-app billing (Billing API) — dev only">
             <p>
               Plan changes use Shopify&apos;s approval screen via{" "}
               <Text as="span" fontWeight="semibold">
                 appSubscriptionCreate
               </Text>
-              . For Shopify&apos;s hosted managed-pricing page instead, set{" "}
+              . Production uses managed pricing by default. This mode is enabled only because{" "}
               <Text as="span" variant="bodySm" fontWeight="semibold">
-                SHOPIFY_BILLING_MODE=managed
+                SHOPIFY_BILLING_MODE=api
+              </Text>{" "}
+              is set; remove it (or set{" "}
+              <Text as="span" variant="bodySm" fontWeight="semibold">
+                managed
               </Text>
-              .
+              ) for Shopify-hosted plans. Your app must use manual pricing in Partners for API billing to work.
             </p>
           </Banner>
         )}

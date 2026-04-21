@@ -6,17 +6,21 @@
  */
 export type BillingMode = "managed" | "api";
 
+/** Billing integration when `SHOPIFY_BILLING_MODE` is unset, empty, or any value other than exact `api`. */
+export const DEFAULT_BILLING_MODE: BillingMode = "managed";
+
 /**
- * - `SHOPIFY_BILLING_MODE=api` — in-app plan buttons use `appSubscriptionCreate` (Billing API / manual pricing).
- * - `SHOPIFY_BILLING_MODE=managed` — buttons open Shopify’s hosted plan page (`/charges/{app}/pricing_plans`).
- * - When unset: **`api`**, because this app implements Billing API charges. Use `managed` only after you enable
- *   managed pricing and public plans in the Partner Dashboard; otherwise Shopify often shows
- *   “This feature isn’t currently available for your store” on the hosted page.
+ * - Default (no env, empty, unknown, or `managed`): **Shopify-hosted** plan selection
+ *   (`/charges/{app}/pricing_plans`). Requires managed pricing + public plans in Partner Dashboard.
+ * - `SHOPIFY_BILLING_MODE=api` — only this exact value enables Billing API (`appSubscriptionCreate`) in-app.
+ *   Use for local/dev only when the app is not registered as managed pricing in Partners.
  */
 export function getBillingMode(): BillingMode {
-  const mode = process.env.SHOPIFY_BILLING_MODE?.trim().toLowerCase();
-  if (mode === "managed") return "managed";
-  return "api";
+  const mode = (process.env.SHOPIFY_BILLING_MODE ?? "").trim().toLowerCase();
+  if (mode === "api") {
+    return "api";
+  }
+  return DEFAULT_BILLING_MODE;
 }
 
 /** Admin URL segment: /admin/store/.../apps/{handle}/... — usually matches app name; override if yours differs. */
