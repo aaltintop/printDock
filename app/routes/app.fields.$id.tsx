@@ -301,6 +301,7 @@ export default function FieldEditorPage() {
       storefrontTitle: field.storefrontTitle,
       storefrontDescription: field.storefrontDescription,
       fileRenamingPattern: field.fileRenamingPattern,
+      contentTypeRestricted: field.allowedExtensions.length > 0,
       allowedExtensions: field.allowedExtensions,
       maxFileMB: String(field.maxFileMB),
       fileQuantityEnabled: field.fileQuantityManagement.enabled,
@@ -342,7 +343,7 @@ export default function FieldEditorPage() {
   const [storefrontTitle, setStorefrontTitle] = useState(initialState.storefrontTitle);
   const [storefrontDescription, setStorefrontDescription] = useState(initialState.storefrontDescription);
   const [fileRenamingPattern, setFileRenamingPattern] = useState(initialState.fileRenamingPattern);
-  const [contentTypeRestricted, setContentTypeRestricted] = useState(initialState.allowedExtensions.length > 0);
+  const [contentTypeRestricted, setContentTypeRestricted] = useState(initialState.contentTypeRestricted);
   const [allowedExtensions, setAllowedExtensions] = useState<string[]>(initialState.allowedExtensions);
   const [newExtension, setNewExtension] = useState("");
   const [maxFileMB, setMaxFileMB] = useState(initialState.maxFileMB);
@@ -429,7 +430,7 @@ export default function FieldEditorPage() {
     setStorefrontTitle(initialState.storefrontTitle);
     setStorefrontDescription(initialState.storefrontDescription);
     setFileRenamingPattern(initialState.fileRenamingPattern);
-    setContentTypeRestricted(initialState.allowedExtensions.length > 0);
+    setContentTypeRestricted(initialState.contentTypeRestricted);
     setAllowedExtensions(initialState.allowedExtensions);
     setMaxFileMB(initialState.maxFileMB);
     setFileQuantityEnabled(initialState.fileQuantityEnabled);
