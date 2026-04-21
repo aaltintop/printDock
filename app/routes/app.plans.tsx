@@ -186,7 +186,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return data(
       {
         error:
-          "This app uses Shopify managed pricing. Open the plan selection page using the buttons on this screen.",
+          "Billing is set to managed (Shopify-hosted) mode. Use the plan buttons on this page, or set SHOPIFY_BILLING_MODE=api to use in-app billing.",
       },
       { status: 400 },
     );
@@ -256,11 +256,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     activated: selectedPlan,
   });
   const returnUrl = `${url.origin}/app/plans?${returnParams.toString()}`;
-  const subscriptionResult = await createSubscription(
-    admin,
-    selectedPlan,
-    returnUrl,
-  );
+  const subscriptionResult = await createSubscription(admin, selectedPlan, returnUrl);
   if (subscriptionResult.userErrors?.length) {
     return data(
       { error: subscriptionResult.userErrors[0].message },
@@ -380,17 +376,49 @@ export default function PlansPage() {
         ) : null}
 
         {billingMode === "managed" ? (
-          <Banner tone="info">
+          <Banner tone="info" title="Shopify-hosted plan selection">
+            <BlockStack gap="200">
+              <p>
+                Upgrades open Shopify&apos;s billing page (not this app&apos;s API). Plan names on that page
+                should match{" "}
+                <Text as="span" fontWeight="semibold">
+                  PrintDock Starter / Pro / Business
+                </Text>{" "}
+                so limits stay in sync with the app.
+              </p>
+              <p>
+                If Shopify shows that billing is not available for this store, enable{" "}
+                <Text as="span" fontWeight="semibold">
+                  Managed pricing
+                </Text>{" "}
+                with public plans in the Partner Dashboard (draft apps often need the same{" "}
+                <Text as="span" fontWeight="semibold">
+                  locale
+                </Text>{" "}
+                on the listing and the dev store). If you bill with the Billing API instead, set
+                environment variable{" "}
+                <Text as="span" variant="bodySm" fontWeight="semibold">
+                  SHOPIFY_BILLING_MODE=api
+                </Text>{" "}
+                and use manual pricing in the Partner Dashboard so plan buttons use in-app checkout.
+              </p>
+            </BlockStack>
+          </Banner>
+        ) : (
+          <Banner tone="info" title="In-app billing (Billing API)">
             <p>
-              Subscriptions are purchased on Shopify&apos;s plan page. Use the actions below;
-              ensure Partner Dashboard plan names match{" "}
+              Plan changes use Shopify&apos;s approval screen via{" "}
               <Text as="span" fontWeight="semibold">
-                PrintDock Starter / Pro / Business
-              </Text>{" "}
-              so limits sync correctly.
+                appSubscriptionCreate
+              </Text>
+              . For Shopify&apos;s hosted managed-pricing page instead, set{" "}
+              <Text as="span" variant="bodySm" fontWeight="semibold">
+                SHOPIFY_BILLING_MODE=managed
+              </Text>
+              .
             </p>
           </Banner>
-        ) : null}
+        )}
 
         {!testUpgradeAllowed ? (
           <Banner tone="warning" title="Test: upgrades restricted">

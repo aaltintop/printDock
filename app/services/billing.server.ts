@@ -8,6 +8,16 @@ const USAGE_FEE_BPS: Partial<Record<PlanCode, { bps: number; cap: number }>> = {
   business: { bps: 50, cap: 500 },
 };
 
+function appSubscriptionUsesTestCharge(): boolean {
+  if (process.env.SHOPIFY_APP_SUBSCRIPTION_TEST?.trim().toLowerCase() === "false") {
+    return false;
+  }
+  if (process.env.SHOPIFY_APP_SUBSCRIPTION_TEST?.trim().toLowerCase() === "true") {
+    return true;
+  }
+  return process.env.NODE_ENV !== "production";
+}
+
 export async function createSubscription(
   admin: any,
   planCode: Exclude<PlanCode, "free">,
@@ -16,6 +26,7 @@ export async function createSubscription(
   const plan = PLANS[planCode];
   const subscriptionName = PLAN_SUBSCRIPTION_NAMES[planCode];
   const usageFee = USAGE_FEE_BPS[planCode];
+  const test = appSubscriptionUsesTestCharge();
 
   const lineItems: any[] = [
     {
@@ -41,8 +52,8 @@ export async function createSubscription(
 
   const response = await admin.graphql(
     `
-    mutation AppSubscriptionCreate($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!) {
-      appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: false) {
+    mutation AppSubscriptionCreate($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!, $test: Boolean) {
+      appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: $test) {
         confirmationUrl
         appSubscription { id }
         userErrors { field message }
@@ -54,6 +65,7 @@ export async function createSubscription(
         name: subscriptionName,
         returnUrl,
         lineItems,
+        test,
       },
     },
   );
