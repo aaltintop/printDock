@@ -62,6 +62,18 @@ function planTier(code: PlanCode): number {
   return PLAN_ORDER.indexOf(code);
 }
 
+/** Temporary test gate: paid upgrades only when shop domain includes this substring. */
+function isTestUpgradeStore(shopDomain: string): boolean {
+  return shopDomain.toLowerCase().includes("printdock");
+}
+
+function isUpgradeSelection(
+  activePlan: PlanCode,
+  selectedPlan: PlanCode,
+): boolean {
+  return planTier(selectedPlan) > planTier(activePlan);
+}
+
 const PLAN_HEADER_THEME: Record<
   PlanCode,
   { background: string; color: string }
@@ -126,12 +138,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     appHandle,
   );
 
+  const testUpgradeAllowed = isTestUpgradeStore(shopDomain);
+
   return data({
     activePlan: finalPlanCode,
     activeSubscriptions,
     embeddedHost,
     billingMode,
     managedPricingUrl,
+    testUpgradeAllowed,
   });
 };
 
@@ -199,6 +214,41 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
     const query = embeddedPlansSearchParams(request, formData, shopDomain, {});
     return redirect(`/app/plans?${query.toString()}`);
+  }
+
+  const persistedForAction = await getBillingPlan(shopDomain);
+  const installationForAction = await admin.graphql(`
+    #graphql
+    query PrintDockPlansAction {
+      currentAppInstallation {
+        activeSubscriptions {
+          name
+        }
+      }
+    }
+  `);
+  const installationJsonForAction = await installationForAction.json();
+  const subsForAction =
+    installationJsonForAction?.data?.currentAppInstallation
+      ?.activeSubscriptions ?? [];
+  const subscriptionPlanForAction =
+    derivePlanFromSubscriptions(subsForAction);
+  const activePlanForAction: PlanCode =
+    subscriptionPlanForAction === "free"
+      ? persistedForAction.planCode
+      : subscriptionPlanForAction;
+
+  if (
+    isUpgradeSelection(activePlanForAction, selectedPlan) &&
+    !isTestUpgradeStore(shopDomain)
+  ) {
+    return data(
+      {
+        error:
+          "Test mode: plan upgrades are only available for development stores whose shop name includes “printdock”.",
+      },
+      { status: 403 },
+    );
   }
 
   const url = new URL(request.url);
@@ -284,6 +334,7 @@ export default function PlansPage() {
     billingMode,
     managedPricingUrl,
     activeSubscriptions,
+    testUpgradeAllowed,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
@@ -341,6 +392,18 @@ export default function PlansPage() {
           </Banner>
         ) : null}
 
+        {!testUpgradeAllowed ? (
+          <Banner tone="warning" title="Test: upgrades restricted">
+            <p>
+              Plan upgrades are temporarily limited to shops whose domain includes{" "}
+              <Text as="span" fontWeight="semibold">
+                printdock
+              </Text>
+              . Downgrades and the free plan still work.
+            </p>
+          </Banner>
+        ) : null}
+
         <InlineStack align="space-between" blockAlign="center" wrap>
           <BlockStack gap="100">
             <Text as="h1" variant="headingLg">
@@ -392,6 +455,9 @@ export default function PlansPage() {
                 : action === "downgrade"
                   ? "secondary"
                   : "primary";
+
+            const upgradeBlocked =
+              action === "upgrade" && !testUpgradeAllowed;
 
             return (
               <Card key={code} padding="0">
@@ -462,9 +528,9 @@ export default function PlansPage() {
 
                       {billingMode === "managed" ? (
                         <Button
-                          url={managedPricingUrl}
+                          url={upgradeBlocked ? undefined : managedPricingUrl}
                           target="_top"
-                          disabled={isActive}
+                          disabled={isActive || upgradeBlocked}
                           variant={buttonVariant}
                           fullWidth
                         >
@@ -486,7 +552,9 @@ export default function PlansPage() {
                           <input type="hidden" name="host" value={embeddedHost} />
                           <Button
                             submit
-                            disabled={isActive || isSubmitting}
+                            disabled={
+                              isActive || isSubmitting || upgradeBlocked
+                            }
                             variant={buttonVariant}
                             fullWidth
                           >

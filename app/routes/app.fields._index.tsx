@@ -1,4 +1,13 @@
-import { data, Form, redirect, useFetcher, useLoaderData, useNavigation, useSearchParams } from "react-router";
+import {
+  data,
+  Form,
+  redirect,
+  useFetcher,
+  useLoaderData,
+  useNavigation,
+  useRevalidator,
+  useSearchParams,
+} from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -10,6 +19,7 @@ import {
   EmptyState,
   IndexTable,
   InlineStack,
+  Modal,
   Page,
   Popover,
   Select,
@@ -27,7 +37,9 @@ import {
   getUploadField,
   listUploadFields,
   saveUploadField,
+  softDeleteUploadField,
 } from "../services/shop-data.server";
+import type { UploadFieldConfig } from "../types/printdock";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -113,6 +125,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return redirect(`/app/fields/${duplicateId}?toast=duplicated`);
   }
 
+  if (intent === "delete") {
+    const removed = await softDeleteUploadField(session.shop, fieldId);
+    if (!removed) {
+      return data({ error: "Could not delete this field." }, { status: 404 });
+    }
+    return data({ deleted: true as const });
+  }
+
   return data({ error: "Unknown action" }, { status: 400 });
 };
 
@@ -120,11 +140,13 @@ export default function FieldsIndexPage() {
   const { fields, filters, shopDomain, canCreateMoreFields } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const fetcher = useFetcher<typeof action>();
+  const revalidator = useRevalidator();
   const appBridge = useAppBridge();
   const [searchParams] = useSearchParams();
   const [queryText, setQueryText] = useState(filters.q);
   const [statusFilter, setStatusFilter] = useState(filters.status);
   const [activePopoverId, setActivePopoverId] = useState<string | null>(null);
+  const [fieldPendingDelete, setFieldPendingDelete] = useState<UploadFieldConfig | null>(null);
   const toast = searchParams.get("toast");
 
   useEffect(() => {
@@ -132,6 +154,14 @@ export default function FieldsIndexPage() {
       appBridge.toast.show("Field saved");
     }
   }, [appBridge, toast]);
+
+  useEffect(() => {
+    if (fetcher.data && "deleted" in fetcher.data && fetcher.data.deleted) {
+      appBridge.toast.show("Field deleted");
+      setFieldPendingDelete(null);
+      revalidator.revalidate();
+    }
+  }, [appBridge, fetcher.data, revalidator]);
 
   useEffect(() => {
     if (fetcher.data && "ok" in fetcher.data && fetcher.data.ok) {
@@ -305,7 +335,11 @@ export default function FieldsIndexPage() {
                                 fullWidth
                                 textAlign="left"
                                 variant="plain"
-                                loading={fetcher.state === "submitting"}
+                                loading={
+                                  fetcher.state === "submitting" &&
+                                  String(fetcher.formData?.get("intent")) === "toggle_active" &&
+                                  String(fetcher.formData?.get("fieldId")) === field.id
+                                }
                               >
                                 {field.isActive ? "Disable" : "Enable"}
                               </Button>
@@ -319,10 +353,27 @@ export default function FieldsIndexPage() {
                                 textAlign="left"
                                 variant="plain"
                                 disabled={!canCreateMoreFields}
+                                loading={
+                                  fetcher.state === "submitting" &&
+                                  String(fetcher.formData?.get("intent")) === "duplicate" &&
+                                  String(fetcher.formData?.get("fieldId")) === field.id
+                                }
                               >
                                 Duplicate
                               </Button>
                             </fetcher.Form>
+                            <Button
+                              fullWidth
+                              textAlign="left"
+                              variant="plain"
+                              tone="critical"
+                              onClick={() => {
+                                setFieldPendingDelete(field);
+                                setActivePopoverId(null);
+                              }}
+                            >
+              Remove field
+            </Button>
                             {previewUrl ? (
                               <Button url={previewUrl} target="_blank" fullWidth textAlign="left" variant="plain">
                                 Preview storefront
@@ -343,6 +394,52 @@ export default function FieldsIndexPage() {
           )}
         </Card>
       </BlockStack>
+
+      <Modal
+        open={fieldPendingDelete !== null}
+        onClose={() => {
+          if (fetcher.state === "submitting") return;
+          setFieldPendingDelete(null);
+        }}
+        title="Remove field?"
+        primaryAction={{
+          content: "Remove field",
+          destructive: true,
+          loading:
+            fetcher.state === "submitting" &&
+            String(fetcher.formData?.get("intent")) === "delete",
+          onAction: () => {
+            if (!fieldPendingDelete || fetcher.state === "submitting") return;
+            fetcher.submit(
+              { intent: "delete", fieldId: fieldPendingDelete.id },
+              { method: "post" },
+            );
+          },
+        }}
+        secondaryActions={[
+          {
+            content: "Cancel",
+            onAction: () => {
+              if (fetcher.state === "submitting") return;
+              setFieldPendingDelete(null);
+            },
+          },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="200">
+            <Text as="p">
+              Remove{" "}
+              <Text as="span" fontWeight="semibold">
+                {fieldPendingDelete?.adminTitle ?? "this field"}
+              </Text>{" "}
+              from your admin and storefront? It will no longer appear in your field list or on
+              products. Configuration is kept in our systems for about one year for operational
+              purposes, then removed automatically.
+            </Text>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
     </Page>
   );
 }

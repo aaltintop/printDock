@@ -185,6 +185,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   const existingField = id !== "new" ? await getUploadField(session.shop, id) : null;
+  if (id !== "new" && !existingField) {
+    return data({ error: "This field no longer exists or was removed." }, { status: 404 });
+  }
   const fieldId = id === "new" ? crypto.randomUUID() : id;
   const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
   const maxFileMB = Math.max(1, parseNumber(formData.get("maxFileMB"), 50));
@@ -502,6 +505,7 @@ export default function FieldEditorPage() {
   const pageTitle = isNew ? "Create Field" : (adminTitle || "Edit Field");
   const hasTargets = targetProducts.length > 0 || targetCollections.length > 0;
   const firstProductHandle = targetProducts[0]?.handle;
+  const isSaving = navigation.state === "submitting";
 
   if (navigation.state === "loading") {
     return (
@@ -524,13 +528,22 @@ export default function FieldEditorPage() {
         <ContextualSaveBar
           message="Unsaved changes"
           saveAction={{
+            content: "Save field",
+            loading: isSaving,
+            disabled: fieldCreationBlocked || isSaving,
             onAction: () => {
-              if (fieldCreationBlocked) return;
+              if (fieldCreationBlocked || isSaving) return;
               const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
               form?.requestSubmit();
             },
           }}
-          discardAction={{ onAction: resetForm }}
+          discardAction={{
+            disabled: isSaving,
+            onAction: () => {
+              if (isSaving) return;
+              resetForm();
+            },
+          }}
         />
       ) : null}
       <Form
@@ -545,6 +558,8 @@ export default function FieldEditorPage() {
         <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
         <input type="hidden" name="allowedExtensions" value={contentTypeRestricted ? allowedExtensions.join(",") : ""} />
         <input type="hidden" name="dimensionRules" value={JSON.stringify(dimensionRules)} />
+        <input type="hidden" name="isActive" value={isActive ? "true" : "false"} />
+        <input type="hidden" name="fileQuantityEnabled" value={fileQuantityEnabled ? "true" : "false"} />
 
         <BlockStack gap="400">
           {fieldCreationBlocked ? (
@@ -571,7 +586,11 @@ export default function FieldEditorPage() {
                   onChange={setAdminTitle}
                   requiredIndicator
                 />
-                <Checkbox label="Active" name="isActive" checked={isActive} onChange={setIsActive} />
+                <Checkbox
+                  label="Active"
+                  checked={isActive}
+                  onChange={() => setIsActive((prev) => !prev)}
+                />
               </FormLayout>
             </BlockStack>
           </Card>
@@ -872,10 +891,9 @@ export default function FieldEditorPage() {
                   </Banner>
                 )}
                 <Checkbox
-                  name="fileQuantityEnabled"
                   label="Enable custom quantity management"
                   checked={fileQuantityEnabled}
-                  onChange={setFileQuantityEnabled}
+                  onChange={() => setFileQuantityEnabled((prev) => !prev)}
                 />
                 <Select
                   name="quantityMode"
@@ -905,15 +923,16 @@ export default function FieldEditorPage() {
 
               {!planAllowsDynamicPricing ? (
                 <input type="hidden" name="pricingEnabled" value="" />
-              ) : null}
+              ) : (
+                <input type="hidden" name="pricingEnabled" value={pricingEnabled ? "true" : "false"} />
+              )}
 
               {planAllowsDynamicPricing ? (
                 <Checkbox
-                  name="pricingEnabled"
                   label="Charge using dynamic pricing"
                   helpText="When off, no upload fee is added from this field."
                   checked={pricingEnabled}
-                  onChange={setPricingEnabled}
+                  onChange={() => setPricingEnabled((prev) => !prev)}
                 />
               ) : (
                 <Box padding="300" background="bg-surface-secondary" borderRadius="200">
@@ -951,7 +970,7 @@ export default function FieldEditorPage() {
                   <input type="hidden" name="minPrice" value={minPrice} />
                   <input type="hidden" name="dpi" value={dpi} />
                   <input type="hidden" name="printWidth" value={printWidth} />
-                  <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "on" : ""} />
+                  <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
                 </>
               ) : null}
 
@@ -1040,11 +1059,11 @@ export default function FieldEditorPage() {
                         />
                       </Box>
                     </InlineStack>
+                    <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
                     <Checkbox
-                      name="roundingEnabled"
                       label="Round calculated price to a cleaner amount"
                       checked={roundingEnabled}
-                      onChange={setRoundingEnabled}
+                      onChange={() => setRoundingEnabled((prev) => !prev)}
                       helpText="Helps avoid long decimal prices on the storefront."
                     />
                   </FormLayout>
@@ -1184,17 +1203,18 @@ export default function FieldEditorPage() {
             </BlockStack>
           </Card>
 
-          <InlineStack gap="200">
-            <Button submit variant="primary" disabled={fieldCreationBlocked}>
-              Save Field
-            </Button>
-            <Button url="/app/fields">Back to Fields</Button>
-            {firstProductHandle ? (
-              <Button url={`https://${shopDomain}/products/${firstProductHandle}`} target="_blank">
-                Preview Product
-              </Button>
-            ) : null}
-          </InlineStack>
+          {firstProductHandle ? (
+            <Card>
+              <InlineStack gap="300" align="space-between" blockAlign="center" wrap>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Open the storefront product page to see how this field appears to customers.
+                </Text>
+                <Button url={`https://${shopDomain}/products/${firstProductHandle}`} target="_blank">
+                  Preview product
+                </Button>
+              </InlineStack>
+            </Card>
+          ) : null}
         </BlockStack>
       </Form>
     </Page>

@@ -74,6 +74,8 @@ export interface UploadFieldConfig {
   planRequirement: import("../config/plans").PlanCode;
   createdAt: string;
   updatedAt: string;
+  /** When set, the field is hidden from the merchant admin and storefront; data kept for retention. */
+  deletedAt?: string;
 }
 
 export interface UploadAsset {
