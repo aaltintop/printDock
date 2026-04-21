@@ -100,22 +100,17 @@ export function ErrorBoundary() {
     error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
   const stack = error instanceof Error ? error.stack : undefined;
 
-  if (typeof window === "undefined") {
-    const err = error instanceof Error ? error : new Error(message);
-    log.error("admin_error_boundary", err, { route: "/app" });
-  } else {
-    console.error(
-      JSON.stringify({
-        severity: "ERROR",
-        event: "admin_error_boundary",
-        message,
-        stack,
-        timestamp: new Date().toISOString(),
-        note:
-          "Client-side admin errors appear here in DevTools; SSR uses app/lib/logger.server.ts (Cloud Logging).",
-      }),
-    );
-  }
+  console.error(
+    JSON.stringify({
+      severity: "ERROR",
+      event: "admin_error_boundary",
+      surface: typeof window === "undefined" ? "ssr" : "client",
+      message,
+      stack,
+      timestamp: new Date().toISOString(),
+      route: "/app",
+    }),
+  );
   return boundary.error(error);
 }
 

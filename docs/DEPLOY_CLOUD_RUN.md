@@ -58,6 +58,32 @@ requests. Does not host any code.
 `FIREBASE_SERVICE_ACCOUNT_JSON` is **not required** when Cloud Run and Firebase
 share the same GCP project. ADC handles authentication automatically.
 
+### Required IAM: v4 signed uploads
+
+Firebase Storage presigned (v4) upload URLs are generated from Cloud Run using
+ADC. Because ADC has no private key, `@google-cloud/storage` signs via IAM's
+`signBlob` API. The Cloud Run runtime service account must therefore be able to
+sign tokens for itself, or upload session requests fail with:
+
+```
+SigningError: Permission 'iam.serviceAccounts.signBlob' denied on resource (or it may not exist).
+```
+
+Grant the role once per project (substitute the project number):
+
+```bash
+RUNTIME_SA="$(gcloud run services describe printdock-service \
+  --region us-central1 \
+  --format='value(spec.template.spec.serviceAccountName)')"
+
+gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
+  --member="serviceAccount:$RUNTIME_SA" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+If Cloud Run runs as the default Compute SA (`PROJECT_NUMBER-compute@developer.gserviceaccount.com`),
+use that as both the target and the member.
+
 ---
 
 ## Step 1 — Gather Shopify App Configuration
