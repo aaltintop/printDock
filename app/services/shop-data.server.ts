@@ -3,7 +3,7 @@ import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
 import { unauthenticated } from "../shopify.server";
 import type { PlanCode } from "../config/plans";
-import { migratePlanCode } from "../config/plans";
+import { migratePlanCode, planCodeFromSubscriptionName } from "../config/plans";
 import type {
   AppSettings,
   BillingPlan,
@@ -738,7 +738,7 @@ export async function createReuploadRequest(shopDomain: string, jobId: string): 
 }
 
 export async function getShopPlan(shopDomain: string): Promise<PlanCode> {
-  const billing = await getBillingPlan(shopDomain);
+  const billing = await getEffectiveBillingPlan(shopDomain);
   return billing.planCode;
 }
 
@@ -787,6 +787,85 @@ export async function getEffectiveBillingPlan(shopDomain: string): Promise<Billi
     ...DEFAULT_BILLING_PLAN,
     ...resetPlan,
   };
+}
+
+function normalizeShopifySubscriptionStatus(status: unknown): string {
+  return String(status ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Align Firestore `shops/{shop}/billing/plan` with Shopify Admin `currentAppInstallation.activeSubscriptions`.
+ * Webhooks remain primary; this catches missed/late updates when the merchant opens the embedded app.
+ */
+export async function reconcileBillingPlanFromShopifySubscriptions(
+  shopDomain: string,
+  subscriptions: Array<{ id?: string; name?: string; status?: string }> | null | undefined,
+): Promise<void> {
+  const subs = Array.isArray(subscriptions) ? subscriptions : [];
+  const activeSub = subs.find((s) => {
+    const st = normalizeShopifySubscriptionStatus(s?.status);
+    return st === "ACTIVE" || st === "ACCEPTED";
+  });
+
+  const current = await getEffectiveBillingPlan(shopDomain);
+
+  if (activeSub) {
+    const subscriptionName = String(activeSub.name ?? "");
+    const planCode = planCodeFromSubscriptionName(subscriptionName);
+    const subscriptionId =
+      activeSub.id != null && String(activeSub.id).trim() !== "" ? String(activeSub.id) : null;
+
+    if (planCode === "free" && subscriptionName.trim().length > 0) {
+      log.warn(
+        "subscription_name_unrecognized",
+        `No plan mapping for subscription name: ${subscriptionName}`,
+        { shopDomain, subscriptionName, source: "admin_reconcile" },
+      );
+    }
+
+    const changed =
+      current.planCode !== planCode ||
+      current.status !== "active" ||
+      (current.subscriptionId ?? null) !== subscriptionId;
+
+    if (!changed) return;
+
+    log.event("billing_plan_reconciled", {
+      shopDomain,
+      source: "admin_load",
+      fromPlanCode: current.planCode,
+      fromStatus: current.status,
+      toPlanCode: planCode,
+      toStatus: "active",
+    });
+
+    await updateShopPlan(shopDomain, planCode);
+    await saveBillingPlan(shopDomain, {
+      planCode,
+      status: "active",
+      subscriptionId,
+    });
+    return;
+  }
+
+  if (current.status === "active") {
+    log.event("billing_plan_reconciled", {
+      shopDomain,
+      source: "admin_load",
+      fromPlanCode: current.planCode,
+      fromStatus: current.status,
+      toPlanCode: "free",
+      toStatus: "inactive",
+    });
+    await updateShopPlan(shopDomain, "free");
+    await saveBillingPlan(shopDomain, {
+      planCode: "free",
+      status: "inactive",
+      subscriptionId: null,
+    });
+  }
 }
 
 export async function incrementBillingUsage(shopDomain: string, incrementBy = 1): Promise<BillingPlan> {

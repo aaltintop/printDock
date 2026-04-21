@@ -58,11 +58,15 @@ Filter in Cloud Logging: `jsonPayload.event="admin_page_view"`.
 |-------|----------------|
 | `admin_page_view` | `{ path }` |
 | `field_created`, `field_updated`, `field_soft_deleted` | field ids / labels as appropriate |
-| `plan_selected`, `subscription_created`, `billing_mode_mismatch` | plan / billing context |
+| `plans_redirect_to_shopify` | `{ url }` — `/app/plans` opens Shopify managed pricing |
+| `billing_plan_reconciled` | `{ source: "admin_load", fromPlanCode, toPlanCode, ... }` — Firestore billing/plan synced from Admin API |
 | `upload_session_requested`, `upload_session_failed`, `upload_confirmed`, `upload_blocked`, `upload_failed` | proxy upload flow |
 | `webhook_received`, `webhook_processed`, `webhook_failed` | webhook topic / shop |
 | `cron_retention_run` | summary counts (`purgedFields`, `deletedStorageObjects`, etc.) |
 | `collection_id_resolve_failed` | `shopDomain`, `productId` (WARN — GraphQL collection resolver) |
+| `subscription_name_unrecognized` | (WARN) Shopify subscription `name` did not map to Starter/Pro/Business |
+| `subscription_update_unhandled_status` | (WARN) `APP_SUBSCRIPTIONS_UPDATE` status not handled |
+| `billing_reconcile_failed` | (ERROR) admin-load reconciliation threw |
 | `admin_error_boundary` | admin shell SSR errors |
 
 ---

@@ -86,14 +86,22 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
   },
 };
 
+/**
+ * Canonical names as returned by Shopify Managed Pricing / webhooks (after normalization).
+ * `planCodeFromSubscriptionName` also accepts optional `PrintDock ` prefix and monthly/yearly suffixes.
+ */
 export const PLAN_SUBSCRIPTION_NAMES: Record<
   Exclude<PlanCode, "free">,
   string
 > = {
-  starter: "PrintDock Starter",
-  pro: "PrintDock Pro",
-  business: "PrintDock Business",
+  starter: "Starter",
+  pro: "Pro",
+  business: "Business",
 };
+
+/** Strips optional frequency suffix from managed-pricing plan titles, e.g. "Pro Monthly". */
+const SUBSCRIPTION_NAME_FREQUENCY_SUFFIX =
+  /\s*(monthly|yearly|annual|annually|per\s+month|per\s+year)$/i;
 
 type BooleanFeature = keyof Pick<
   PlanLimits,
@@ -153,7 +161,12 @@ export function migratePlanCode(raw: string): PlanCode {
 }
 
 export function planCodeFromSubscriptionName(name: string): PlanCode {
-  const normalized = name.toLowerCase();
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/^printdock\s+/, "")
+    .replace(SUBSCRIPTION_NAME_FREQUENCY_SUFFIX, "")
+    .trim();
   for (const [code, subName] of Object.entries(PLAN_SUBSCRIPTION_NAMES)) {
     if (normalized === subName.toLowerCase()) return code as PlanCode;
   }

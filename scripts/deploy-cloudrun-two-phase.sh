@@ -14,9 +14,6 @@ set -euo pipefail
 #   FIREBASE_STORAGE_BUCKET
 #   SCOPES
 #
-# Cloud Run receives SHOPIFY_BILLING_MODE=managed (Shopify-hosted plan selection).
-# Set SHOPIFY_BILLING_MODE=api on the service only for dev/emergency in-app Billing API.
-#
 # Secret behavior:
 # - Uses Secret Manager secrets `shopify-api-key` and `shopify-api-secret`
 # - If secrets do not exist, creates them from SHOPIFY_API_KEY / SHOPIFY_API_SECRET env vars.
@@ -98,7 +95,6 @@ deploy_base() {
   {
     echo "SCOPES: \"$SCOPES\""
     echo "NODE_ENV: \"production\""
-    echo "SHOPIFY_BILLING_MODE: \"managed\""
     echo "LOG_LEVEL: \"${LOG_LEVEL:-info}\""
     echo "FIREBASE_PROJECT_ID: \"$FIREBASE_PROJECT_ID\""
     echo "FIREBASE_STORAGE_BUCKET: \"$FIREBASE_STORAGE_BUCKET\""

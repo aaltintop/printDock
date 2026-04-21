@@ -38,7 +38,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         subscriptionId: subscriptionId ?? "",
       });
 
-      if (status === "CANCELLED" || status === "DECLINED" || status === "EXPIRED") {
+      if (
+        status === "CANCELLED" ||
+        status === "DECLINED" ||
+        status === "EXPIRED" ||
+        status === "FROZEN" ||
+        status === "ON_HOLD"
+      ) {
         await updateShopPlan(shop, "free");
         await saveBillingPlan(shop, {
           planCode: "free",
@@ -51,7 +57,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       const planCode = planCodeFromSubscriptionName(subscriptionName);
 
-      if (status === "ACTIVE") {
+      if (status === "ACTIVE" || status === "ACCEPTED") {
+        if (planCode === "free" && subscriptionName.trim().length > 0) {
+          log.warn(
+            "subscription_name_unrecognized",
+            `No plan mapping for subscription name: ${subscriptionName}`,
+            { shopDomain: shop, subscriptionName, status },
+          );
+        }
         await updateShopPlan(shop, planCode);
         await saveBillingPlan(shop, {
           planCode,
@@ -59,10 +72,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           subscriptionId,
         });
       } else if (status === "PENDING") {
+        if (planCode === "free" && subscriptionName.trim().length > 0) {
+          log.warn(
+            "subscription_name_unrecognized",
+            `No plan mapping for subscription name: ${subscriptionName}`,
+            { shopDomain: shop, subscriptionName, status },
+          );
+        }
         await saveBillingPlan(shop, {
           planCode,
           status: "trial",
           subscriptionId,
+        });
+      } else {
+        log.warn("subscription_update_unhandled_status", `Unhandled subscription status: ${status}`, {
+          shopDomain: shop,
+          subscriptionName,
+          status,
         });
       }
 

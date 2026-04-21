@@ -23,7 +23,7 @@ import { canUseFeature } from "../config/plans";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
-  getBillingPlan,
+  getEffectiveBillingPlan,
   listOrderJobAuditEvents,
   listOrderJobs,
   saveOrderJob,
@@ -175,7 +175,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const billingPlan = await getBillingPlan(session.shop);
+  const billingPlan = await getEffectiveBillingPlan(session.shop);
   const bulkDownloadAllowed = canUseFeature(billingPlan.planCode, "bulkDownload");
 
   if (url.searchParams.get("export") === "csv") {

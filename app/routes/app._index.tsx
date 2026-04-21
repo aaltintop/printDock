@@ -12,8 +12,10 @@ import {
   SkeletonPage,
   Text,
 } from "@shopify/polaris";
+import { getPlan } from "../config/plans";
 import {
   computeDashboardStats,
+  getEffectiveBillingPlan,
   listOrderJobs,
   listUploadSessions,
 } from "../services/shop-data.server";
@@ -28,11 +30,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       setLogShopDomain(shopDomain);
       log.event("admin_page_view", { path: "/app" });
 
-      const [stats, sessions, jobs] = await Promise.all([
-    computeDashboardStats(shopDomain),
-    listUploadSessions(shopDomain),
-    listOrderJobs(shopDomain),
-  ]);
+      const [stats, sessions, jobs, billingPlan] = await Promise.all([
+        computeDashboardStats(shopDomain),
+        listUploadSessions(shopDomain),
+        listOrderJobs(shopDomain),
+        getEffectiveBillingPlan(shopDomain),
+      ]);
+
+      const planLimits = getPlan(billingPlan.planCode);
+      const ordersCap = planLimits.maxOrdersPerMonth;
+      const ordersUsageLabel =
+        ordersCap === -1
+          ? `${billingPlan.usageThisMonth} billable orders this month`
+          : `${billingPlan.usageThisMonth} / ${ordersCap} billable orders this month`;
 
   const recentUploads = sessions
     .flatMap((uploadSession) => {
@@ -62,6 +72,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         stats,
         recentUploads,
         recentOrders,
+        currentPlan: {
+          planCode: billingPlan.planCode,
+          displayName: planLimits.displayName,
+          status: billingPlan.status,
+          ordersUsageLabel,
+          fileStorageDays: planLimits.fileStorageDays,
+        },
       });
     } catch (err) {
       log.error("admin_dashboard_loader_failed", err, { path: "/app" });
@@ -72,7 +89,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function Index() {
   const navigation = useNavigation();
-  const { stats, recentUploads, recentOrders } = useLoaderData<typeof loader>();
+  const { stats, recentUploads, recentOrders, currentPlan } = useLoaderData<typeof loader>();
+
+  const planStatusTone =
+    currentPlan.status === "active"
+      ? "success"
+      : currentPlan.status === "trial"
+        ? "attention"
+        : "critical";
+  const planStatusLabel =
+    currentPlan.status === "active"
+      ? "Active"
+      : currentPlan.status === "trial"
+        ? "Trial"
+        : "Inactive";
 
   if (navigation.state === "loading") {
     return (
@@ -98,6 +128,35 @@ export default function Index() {
   return (
     <Page title="PrintDock Dashboard">
       <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="start" wrap gap="300">
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingMd">
+                    Current plan
+                  </Text>
+                  <InlineStack gap="200" blockAlign="center" wrap>
+                    <Text as="p" variant="headingLg">
+                      {currentPlan.displayName}
+                    </Text>
+                    <Badge tone={planStatusTone}>{planStatusLabel}</Badge>
+                  </InlineStack>
+                  <Text as="p" tone="subdued">
+                    {currentPlan.ordersUsageLabel}
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Uploaded files kept {currentPlan.fileStorageDays} days on this plan.
+                  </Text>
+                </BlockStack>
+                <Button url="/app/plans" variant="secondary">
+                  Manage plan
+                </Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
         <Layout.Section>
           <InlineStack gap="400" wrap>
             {[

@@ -8,6 +8,10 @@ import enTranslations from "@shopify/polaris/locales/en.json";
 import { authenticate } from "../shopify.server";
 import { db } from "../firebase.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import {
+  getEffectiveBillingPlan,
+  reconcileBillingPlanFromShopifySubscriptions,
+} from "../services/shop-data.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
@@ -37,14 +41,35 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const data = await response.json();
   const appInstallation = data.data?.currentAppInstallation;
 
-    // Persist shop details to Firestore
     if (session.shop) {
+      try {
+        await reconcileBillingPlanFromShopifySubscriptions(
+          session.shop,
+          appInstallation?.activeSubscriptions,
+        );
+      } catch (reconcileErr) {
+        log.error("billing_reconcile_failed", reconcileErr, { shopDomain: session.shop });
+      }
+
+      const billingAfter = await getEffectiveBillingPlan(session.shop);
+      const subs = appInstallation?.activeSubscriptions ?? [];
+      const hasShopifyActiveRow = subs.some((s: { status?: string }) => {
+        const st = String(s?.status ?? "")
+          .trim()
+          .toUpperCase();
+        return st === "ACTIVE" || st === "ACCEPTED";
+      });
+      const billingStatus =
+        hasShopifyActiveRow ||
+        (billingAfter.status === "active" && billingAfter.planCode !== "free")
+          ? "active"
+          : "trial";
+
       await db.collection("shops").doc(session.shop).set(
         {
           accessToken: session.accessToken,
           installedAt: new Date().toISOString(),
-          billingStatus:
-            appInstallation?.activeSubscriptions?.length > 0 ? "active" : "trial",
+          billingStatus,
           scopes: appInstallation?.accessScopes?.map((s: any) => s.handle) || [],
         },
         { merge: true },

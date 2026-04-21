@@ -1,85 +1,19 @@
 import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
 import type { PlanCode } from "../config/plans";
-import { PLANS, PLAN_SUBSCRIPTION_NAMES } from "../config/plans";
-import { billableLinesCollection, getBillingPlan, jobsCollection } from "./shop-data.server";
+import {
+  billableLinesCollection,
+  getEffectiveBillingPlan,
+  jobsCollection,
+} from "./shop-data.server";
 
 const USAGE_FEE_BPS: Partial<Record<PlanCode, { bps: number; cap: number }>> = {
   pro: { bps: 75, cap: 200 },
   business: { bps: 50, cap: 500 },
 };
 
-function appSubscriptionUsesTestCharge(): boolean {
-  if (process.env.SHOPIFY_APP_SUBSCRIPTION_TEST?.trim().toLowerCase() === "false") {
-    return false;
-  }
-  if (process.env.SHOPIFY_APP_SUBSCRIPTION_TEST?.trim().toLowerCase() === "true") {
-    return true;
-  }
-  return process.env.NODE_ENV !== "production";
-}
-
-export async function createSubscription(
-  admin: any,
-  planCode: Exclude<PlanCode, "free">,
-  returnUrl: string,
-) {
-  const plan = PLANS[planCode];
-  const subscriptionName = PLAN_SUBSCRIPTION_NAMES[planCode];
-  const usageFee = USAGE_FEE_BPS[planCode];
-  const test = appSubscriptionUsesTestCharge();
-
-  const lineItems: any[] = [
-    {
-      plan: {
-        appRecurringPricingDetails: {
-          price: { amount: plan.monthlyPriceUsd, currencyCode: "USD" },
-          interval: "EVERY_30_DAYS",
-        },
-      },
-    },
-  ];
-
-  if (usageFee) {
-    lineItems.push({
-      plan: {
-        appUsagePricingDetails: {
-          terms: `${usageFee.bps / 100}% of uploader-generated sales`,
-          cappedAmount: { amount: usageFee.cap, currencyCode: "USD" },
-        },
-      },
-    });
-  }
-
-  const response = await admin.graphql(
-    `
-    mutation AppSubscriptionCreate($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!, $test: Boolean) {
-      appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: $test) {
-        confirmationUrl
-        appSubscription { id }
-        userErrors { field message }
-      }
-    }
-  `,
-    {
-      variables: {
-        name: subscriptionName,
-        returnUrl,
-        lineItems,
-        test,
-      },
-    },
-  );
-
-  const data = await response.json();
-  return data.data.appSubscriptionCreate;
-}
-
-export async function processBillableOrder(
-  shopDomain: string,
-  order: any,
-) {
-  const billingPlan = await getBillingPlan(shopDomain);
+export async function processBillableOrder(shopDomain: string, order: any) {
+  const billingPlan = await getEffectiveBillingPlan(shopDomain);
   if (billingPlan.status !== "active") return;
 
   const usageFee = USAGE_FEE_BPS[billingPlan.planCode];
