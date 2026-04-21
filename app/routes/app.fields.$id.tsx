@@ -33,6 +33,12 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { canUseFeature, getPlan, isWithinFieldLimit } from "../config/plans";
 import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
+import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
+import {
+  activeFieldParticipatesInTargetOverlap,
+  analyzeActiveFieldTargetOverlaps,
+  fieldWithEditorTargets,
+} from "../utils/field-target-overlaps";
 import type {
   FieldDimensionType,
   FieldOperator,
@@ -105,11 +111,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const planLimits = getPlan(billingPlan.planCode);
   const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
 
-  let fieldCreationBlocked = false;
-  if (id === "new") {
-    const allFields = await listUploadFields(session.shop);
-    fieldCreationBlocked = !isWithinFieldLimit(billingPlan.planCode, allFields.length);
-  }
+  const allFields = await listUploadFields(session.shop);
+  const fieldCreationBlocked =
+    id === "new" ? !isWithinFieldLimit(billingPlan.planCode, allFields.length) : false;
 
   return data({
     field,
@@ -118,6 +122,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     planCode: billingPlan.planCode,
     maxFileMBFromPlan,
     fieldCreationBlocked,
+    allFields,
   });
 };
 
@@ -279,7 +284,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function FieldEditorPage() {
-  const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked } =
+  const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked, allFields } =
     useLoaderData<typeof loader>();
   const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
   const planAllowsAdvancedValidation = canUseFeature(planCode, "advancedValidation");
@@ -360,6 +365,17 @@ export default function FieldEditorPage() {
   const [dimensionRules, setDimensionRules] = useState<UploadFieldDimensionRule[]>(
     initialState.dimensionRules,
   );
+
+  const targetOverlapFromEditor = useMemo(() => {
+    const current = fieldWithEditorTargets(field, isActive, targetProducts, targetCollections);
+    const mergedList = isNew
+      ? [...allFields, current]
+      : allFields.map((f) => (f.id === field.id ? current : f));
+    return {
+      analysis: analyzeActiveFieldTargetOverlaps(mergedList),
+      thisFieldOverlaps: activeFieldParticipatesInTargetOverlap(current, mergedList),
+    };
+  }, [allFields, field, isNew, isActive, targetProducts, targetCollections]);
 
   const renamePreviewExample = useMemo(() => {
     const pattern = planAllowsFileRenaming
@@ -570,6 +586,14 @@ export default function FieldEditorPage() {
               action={{ content: "View plans", url: "/app/plans" }}
             >
               Upgrade your plan to add more fields.
+            </Banner>
+          ) : null}
+          {targetOverlapFromEditor.analysis.hasOverlap ? (
+            <Banner tone="info" title="Some products or collections are covered by more than one active field">
+              <FieldTargetOverlapBannerContent
+                analysis={targetOverlapFromEditor.analysis}
+                thisFieldOverlaps={targetOverlapFromEditor.thisFieldOverlaps}
+              />
             </Banner>
           ) : null}
           <Card>

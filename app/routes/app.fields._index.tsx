@@ -11,6 +11,7 @@ import {
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
+  ActionList,
   Badge,
   Banner,
   BlockStack,
@@ -40,6 +41,8 @@ import {
   softDeleteUploadField,
 } from "../services/shop-data.server";
 import type { UploadFieldConfig } from "../types/printdock";
+import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
+import { analyzeActiveFieldTargetOverlaps } from "../utils/field-target-overlaps";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -50,6 +53,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const allFields = await listUploadFields(session.shop);
   const billingPlan = await getEffectiveBillingPlan(session.shop);
   const canCreateMoreFields = isWithinFieldLimit(billingPlan.planCode, allFields.length);
+
+  const targetOverlapAnalysis = analyzeActiveFieldTargetOverlaps(allFields);
 
   const filteredFields = allFields
     .filter((field) => {
@@ -78,6 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     shopDomain: session.shop,
     canCreateMoreFields,
+    targetOverlapAnalysis,
   });
 };
 
@@ -137,7 +143,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function FieldsIndexPage() {
-  const { fields, filters, shopDomain, canCreateMoreFields } = useLoaderData<typeof loader>();
+  const { fields, filters, shopDomain, canCreateMoreFields, targetOverlapAnalysis } =
+    useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const fetcher = useFetcher<typeof action>();
   const revalidator = useRevalidator();
@@ -212,6 +219,11 @@ export default function FieldsIndexPage() {
             action={{ content: "View plans", url: "/app/plans" }}
           >
             Upgrade your plan to add more fields.
+          </Banner>
+        ) : null}
+        {targetOverlapAnalysis.hasOverlap ? (
+          <Banner tone="info" title="Some products or collections are covered by more than one active field">
+            <FieldTargetOverlapBannerContent analysis={targetOverlapAnalysis} />
           </Banner>
         ) : null}
         <Card>
@@ -314,11 +326,17 @@ export default function FieldsIndexPage() {
                         </Button>
                         <Popover
                           active={activePopoverId === field.id}
+                          fixed
+                          preferredPosition="mostSpace"
+                          preferredAlignment="right"
+                          autofocusTarget="first-node"
+                          ariaHaspopup="menu"
                           onClose={() => setActivePopoverId(null)}
                           activator={
                             <Button
                               size="slim"
                               icon={MenuHorizontalIcon}
+                              pressed={activePopoverId === field.id}
                               onClick={() =>
                                 setActivePopoverId((prev) => (prev === field.id ? null : field.id))
                               }
@@ -326,64 +344,76 @@ export default function FieldsIndexPage() {
                             />
                           }
                         >
-                          <BlockStack gap="100">
-                            <fetcher.Form method="post">
-                              <input type="hidden" name="intent" value="toggle_active" />
-                              <input type="hidden" name="fieldId" value={field.id} />
-                              <Button
-                                submit
-                                fullWidth
-                                textAlign="left"
-                                variant="plain"
-                                loading={
-                                  fetcher.state === "submitting" &&
-                                  String(fetcher.formData?.get("intent")) === "toggle_active" &&
-                                  String(fetcher.formData?.get("fieldId")) === field.id
-                                }
-                              >
-                                {field.isActive ? "Disable" : "Enable"}
-                              </Button>
-                            </fetcher.Form>
-                            <fetcher.Form method="post">
-                              <input type="hidden" name="intent" value="duplicate" />
-                              <input type="hidden" name="fieldId" value={field.id} />
-                              <Button
-                                submit
-                                fullWidth
-                                textAlign="left"
-                                variant="plain"
-                                disabled={!canCreateMoreFields}
-                                loading={
-                                  fetcher.state === "submitting" &&
-                                  String(fetcher.formData?.get("intent")) === "duplicate" &&
-                                  String(fetcher.formData?.get("fieldId")) === field.id
-                                }
-                              >
-                                Duplicate
-                              </Button>
-                            </fetcher.Form>
-                            <Button
-                              fullWidth
-                              textAlign="left"
-                              variant="plain"
-                              tone="critical"
-                              onClick={() => {
-                                setFieldPendingDelete(field);
-                                setActivePopoverId(null);
-                              }}
-                            >
-              Remove field
-            </Button>
-                            {previewUrl ? (
-                              <Button url={previewUrl} target="_blank" fullWidth textAlign="left" variant="plain">
-                                Preview storefront
-                              </Button>
-                            ) : (
-                              <Text as="p" tone="subdued">
-                                No preview available
-                              </Text>
-                            )}
-                          </BlockStack>
+                          <ActionList
+                            actionRole="menuitem"
+                            sections={[
+                              {
+                                items: [
+                                  {
+                                    content: field.isActive ? "Disable" : "Enable",
+                                    variant: "menu",
+                                    onAction: () => {
+                                      setActivePopoverId(null);
+                                      fetcher.submit(
+                                        { intent: "toggle_active", fieldId: field.id },
+                                        { method: "post" },
+                                      );
+                                    },
+                                  },
+                                  {
+                                    content: "Duplicate",
+                                    variant: "menu",
+                                    disabled: !canCreateMoreFields,
+                                    onAction: () => {
+                                      setActivePopoverId(null);
+                                      fetcher.submit(
+                                        { intent: "duplicate", fieldId: field.id },
+                                        { method: "post" },
+                                      );
+                                    },
+                                  },
+                                ],
+                              },
+                              {
+                                items: [
+                                  {
+                                    content: "Remove field",
+                                    variant: "menu",
+                                    destructive: true,
+                                    onAction: () => {
+                                      setFieldPendingDelete(field);
+                                      setActivePopoverId(null);
+                                    },
+                                  },
+                                ],
+                              },
+                              {
+                                items: previewUrl
+                                  ? [
+                                      {
+                                        content: "View on storefront",
+                                        variant: "menu",
+                                        onAction: () => {
+                                          setActivePopoverId(null);
+                                          window.open(
+                                            previewUrl,
+                                            "_blank",
+                                            "noopener,noreferrer",
+                                          );
+                                        },
+                                      },
+                                    ]
+                                  : [
+                                      {
+                                        content: "No preview available",
+                                        variant: "menu",
+                                        disabled: true,
+                                        helpText: "Assign a product with a storefront URL",
+                                      },
+                                    ],
+                              },
+                            ]}
+                          />
                         </Popover>
                       </InlineStack>
                     </IndexTable.Cell>
