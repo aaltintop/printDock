@@ -71,14 +71,18 @@ export interface UploadFieldConfig {
   };
   pricing: UploadFieldPricing;
   dimensionRules: UploadFieldDimensionRule[];
-  planRequirement: "free" | "basic_plus" | "pro_plus";
+  planRequirement: import("../config/plans").PlanCode;
   createdAt: string;
   updatedAt: string;
+  /** When set, the field is hidden from the merchant admin and storefront; data kept for retention. */
+  deletedAt?: string;
 }
 
 export interface UploadAsset {
   id: string;
   storagePath: string;
+  /** Set when the blob was removed per retention purge; downloads should be disabled */
+  storageExpired?: boolean;
   originalName: string;
   mimeType: string;
   fileExtension: string;
@@ -165,13 +169,9 @@ export interface AppSettings {
 }
 
 export interface BillingPlan {
-  planCode: "free" | "basic_plus" | "pro_plus";
+  planCode: import("../config/plans").PlanCode;
   status: "active" | "inactive" | "trial";
   subscriptionId: string | null;
-  monthlyUploadsLimit: number;
-  maxFileMBLimit: number;
-  allowAdvancedRules: boolean;
-  allowAutoPricing: boolean;
   usageThisMonth: number;
   usageMonthKey: string;
   updatedAt: string;

@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 import { data, useFetcher, useLoaderData } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { BlockStack, Button, Card, Layout, Modal, Page, Select, Text, TextField } from "@shopify/polaris";
+import {
+  BlockStack,
+  Button,
+  Card,
+  Layout,
+  Modal,
+  Page,
+  Select,
+  Text,
+  TextField,
+} from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
@@ -61,6 +71,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const storagePath = String(formData.get("storagePath") || "");
     if (!storagePath || !storagePath.startsWith(`uploads/${session.shop}/`)) {
       return data({ error: "Invalid storage path" }, { status: 400 });
+    }
+    if (job.assetSnapshot?.storageExpired) {
+      return data(
+        { error: "This file is no longer stored (retention period ended)." },
+        { status: 410 },
+      );
     }
     const downloadUrl = await getSignedDownloadUrl(storagePath);
     return data({ downloadUrl, storagePath });
@@ -165,6 +181,12 @@ export default function OrderJobDetailPage() {
               <Text as="h2" variant="headingMd">
                 File Preview
               </Text>
+              {job.assetSnapshot?.storageExpired ? (
+                <Text as="p" tone="subdued">
+                  This file is no longer stored (retention period ended). The order record is kept for
+                  your history.
+                </Text>
+              ) : null}
               <Text as="p">{job.assetSnapshot?.originalName || "No file attached"}</Text>
               <Text as="p" tone="subdued">
                 {(job.assetSnapshot?.widthInch || 0).toFixed(1)}&quot; x {(job.assetSnapshot?.heightInch || 0).toFixed(1)}
@@ -180,7 +202,7 @@ export default function OrderJobDetailPage() {
                 <Button
                   submit
                   loading={isDownloading}
-                  disabled={!job.assetSnapshot?.storagePath}
+                  disabled={!job.assetSnapshot?.storagePath || Boolean(job.assetSnapshot?.storageExpired)}
                   onClick={() => setIsDownloading(true)}
                 >
                   {isDownloading ? "Downloading..." : "Download Original"}

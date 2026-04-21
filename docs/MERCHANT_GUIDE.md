@@ -50,9 +50,9 @@ Click **Mark as Verified** to confirm that your cart setup is compatible with Pr
 
 If you plan to use upload-based dynamic pricing, the Cart Transform function must be enabled. Click **Mark as Verified** after confirming.
 
-### Step 4: Create your first Upload Field
+### Step 4: Create your first field
 
-Click **Create Field** to set up your first upload field configuration. This links to the Fields editor page. See Section 3 below.
+Click **Create Field** to set up your first field configuration. This links to the Fields editor page. See Section 3 below.
 
 ---
 
@@ -67,9 +67,9 @@ The main dashboard (`/app`) shows:
 
 ---
 
-## 3. Upload Fields
+## 3. Fields
 
-Upload Fields are the core configuration of PrintDock. Each field defines **which product** gets an upload widget, what file rules apply, and how pricing works.
+Fields are the core configuration of PrintDock. Each field defines **which product** gets an upload widget, what file rules apply, and how pricing works.
 
 ### Creating a Field
 
@@ -77,7 +77,7 @@ Go to **Fields** (`/app/fields`) and click **Create Field**.
 
 **Field Basics:**
 - **Admin title:** Internal name for this field (e.g., "DTF Gang Sheet Upload").
-- **Product:** Select which product this upload field applies to.
+- **Product:** Select which product this field applies to.
 - **Target variants:** Optionally restrict the upload widget to specific variants.
 - **Active:** Toggle the field on/off without deleting it.
 - **Required:** Whether the customer must upload a file before adding to cart.
@@ -259,7 +259,7 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 |------|-----|---------|
 | Dashboard | `/app` | KPIs, recent activity, quick links |
 | Setup | `/app/onboarding` | Installation wizard |
-| Fields | `/app/fields` | Manage upload field configurations |
+| Fields | `/app/fields` | Manage field configurations |
 | Uploads | `/app/uploads` | View all customer upload sessions |
 | Orders | `/app/orders` | Manage order jobs and fulfillment |
 | Plans | `/app/plans` | Billing plan selection |

@@ -23,7 +23,7 @@ This document defines the line item properties PrintDock writes so merchants can
 | `_pd_file_quantities` | Internal/support | `[{\"fileName\":\"logo.png\",\"quantity\":1}]` | Per-file quantity map used by job pipeline. | Stable |
 | `_pd_session` | Internal | `8f963f7e-...` | Session key used by pricing/function flow. | Stable |
 | `_uc_session` | Internal (critical) | `8f963f7e-...` | Primary webhook/billing lookup key. | Stable |
-| `_pd_field_id` | Internal | `field_...` | Upload field configuration id used during processing. | Stable |
+| `_pd_field_id` | Internal | `field_...` | Field configuration id used during processing. | Stable |
 | `_pd_calculated_price` | Internal | `29.68` | Upload-derived total used by Cart Transform pricing. | Stable |
 
 ## Operational Notes

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getPresignedUploadUrl } from "../services/storage.server";
 import { authenticate } from "../shopify.server";
 import crypto from "crypto";
+import { getPlan, isWithinOrderLimit } from "../config/plans";
 import {
   createCollectionIdResolver,
   createUploadSession,
@@ -24,10 +25,11 @@ const schema = z.object({
   mimeType: z.string(),
 });
 
-const planRank: Record<string, number> = {
+const PLAN_RANK: Record<string, number> = {
   free: 0,
-  basic_plus: 1,
-  pro_plus: 2,
+  starter: 1,
+  pro: 2,
+  business: 3,
 };
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -61,24 +63,30 @@ export async function action({ request }: ActionFunctionArgs) {
     (await getActiveFieldForProduct(shopDomain, productId, normalizedVariantId, createCollectionIdResolver()));
 
   const billingPlan = await getEffectiveBillingPlan(shopDomain);
-  if (
-    billingPlan.monthlyUploadsLimit > 0 &&
-    billingPlan.usageThisMonth >= billingPlan.monthlyUploadsLimit
-  ) {
+  const planCode = billingPlan.planCode;
+  const planLimits = getPlan(planCode);
+
+  if (!isWithinOrderLimit(planCode, billingPlan.usageThisMonth)) {
     return data(
-      { error: "Monthly upload limit reached for your active plan" },
-      { status: 402 },
+      { error: "Monthly order limit reached" },
+      { status: 403 },
     );
   }
 
   if (selectedField) {
-    const requiredRank = planRank[selectedField.planRequirement] ?? 0;
-    const currentRank = planRank[billingPlan.planCode] ?? 0;
+    const requiredRank = PLAN_RANK[selectedField.planRequirement] ?? 0;
+    const currentRank = PLAN_RANK[planCode] ?? 0;
     if (currentRank < requiredRank) {
       return data(
-        { error: `This upload field requires the ${selectedField.planRequirement} plan` },
+        { error: `This field requires the ${selectedField.planRequirement} plan` },
         { status: 402 },
       );
+    }
+
+    if (selectedField.maxFileMB) {
+      const fieldMaxBytes = selectedField.maxFileMB * 1024 * 1024;
+      const effectiveMax = Math.min(fieldMaxBytes, planLimits.maxFileSizeBytes);
+      selectedField.maxFileMB = Math.floor(effectiveMax / (1024 * 1024));
     }
   }
 
@@ -111,12 +119,11 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
-  // Generate presigned URL for direct browser → Storage upload
   const { presignedUrl, storagePath } = await getPresignedUploadUrl(
     shopDomain,
     sessionToken,
     fileName,
-    mimeType
+    mimeType,
   );
 
   return data({

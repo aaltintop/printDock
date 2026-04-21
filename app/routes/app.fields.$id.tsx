@@ -10,7 +10,9 @@ import {
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Banner,
   BlockStack,
+  Box,
   Button,
   Card,
   Checkbox,
@@ -29,8 +31,17 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
-import { getEffectiveBillingPlan, getUploadField, saveUploadField } from "../services/shop-data.server";
-import type { UploadFieldConfig, UploadFieldDimensionRule, FieldTargetProduct, FieldTargetCollection } from "../types/printdock";
+import { canUseFeature, getPlan, isWithinFieldLimit } from "../config/plans";
+import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
+import type {
+  FieldDimensionType,
+  FieldOperator,
+  FieldTargetCollection,
+  FieldTargetProduct,
+  UploadFieldConfig,
+  UploadFieldDimensionRule,
+} from "../types/printdock";
+import { DEFAULT_FILE_RENAME_PATTERN, previewRenamedFileName } from "../utils/file-rename-pattern";
 
 function extractNumericId(gid: string): string {
   return gid.split("/").pop() ?? gid;
@@ -49,10 +60,10 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
     targetCollectionIds: [],
     isActive: true,
     isRequired: true,
-    adminTitle: "Artwork Upload Field",
+    adminTitle: "Artwork Field",
     storefrontTitle: "Upload your artwork",
     storefrontDescription: "Supported files: PNG, JPG, PDF",
-    fileRenamingPattern: "{orderId}_{lineItemId}_{originalName}",
+    fileRenamingPattern: DEFAULT_FILE_RENAME_PATTERN,
     minFiles: 1,
     maxFiles: 1,
     allowedExtensions: ["png", "jpg", "jpeg", "pdf"],
@@ -90,10 +101,23 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     field = existing;
   }
 
+  const billingPlan = await getEffectiveBillingPlan(session.shop);
+  const planLimits = getPlan(billingPlan.planCode);
+  const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+
+  let fieldCreationBlocked = false;
+  if (id === "new") {
+    const allFields = await listUploadFields(session.shop);
+    fieldCreationBlocked = !isWithinFieldLimit(billingPlan.planCode, allFields.length);
+  }
+
   return data({
     field,
     isNew: id === "new",
     shopDomain: session.shop,
+    planCode: billingPlan.planCode,
+    maxFileMBFromPlan,
+    fieldCreationBlocked,
   });
 };
 
@@ -161,21 +185,47 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   const existingField = id !== "new" ? await getUploadField(session.shop, id) : null;
+  if (id !== "new" && !existingField) {
+    return data({ error: "This field no longer exists or was removed." }, { status: 404 });
+  }
   const fieldId = id === "new" ? crypto.randomUUID() : id;
   const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
   const maxFileMB = Math.max(1, parseNumber(formData.get("maxFileMB"), 50));
 
-  if (pricingEnabled && !billingPlan.allowAutoPricing) {
-    return data({ error: "Auto pricing requires a higher plan." }, { status: 402 });
+  const planCode = billingPlan.planCode;
+  const planLimits = getPlan(planCode);
+  const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+
+  if (!canUseFeature(planCode, "advancedValidation")) {
+    dimensionRules = [];
   }
-  if (dimensionRules.length > 0 && !billingPlan.allowAdvancedRules) {
-    return data({ error: "Advanced dimension rules require a higher plan." }, { status: 402 });
+
+  if (id === "new") {
+    const allFields = await listUploadFields(session.shop);
+    if (!isWithinFieldLimit(planCode, allFields.length)) {
+      return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
+    }
   }
-  if (maxFileMB > billingPlan.maxFileMBLimit) {
+
+  if (pricingEnabled && !canUseFeature(planCode, "dynamicPricing")) {
+    return data({ error: "Dynamic pricing requires a higher plan." }, { status: 402 });
+  }
+  if (maxFileMB > maxFileMBFromPlan) {
     return data(
-      { error: `Your current plan supports up to ${billingPlan.maxFileMBLimit}MB per file.` },
+      { error: `Your current plan supports up to ${maxFileMBFromPlan}MB per file.` },
       { status: 402 },
     );
+  }
+
+  const planAllowsRenaming = canUseFeature(planCode, "fileRenaming");
+  let resolvedFileRenamingPattern: string;
+  if (planAllowsRenaming) {
+    const raw = String(formData.get("fileRenamingPattern") ?? "").trim();
+    resolvedFileRenamingPattern = raw ? raw.slice(0, 200) : DEFAULT_FILE_RENAME_PATTERN;
+  } else if (id === "new" || !existingField) {
+    resolvedFileRenamingPattern = DEFAULT_FILE_RENAME_PATTERN;
+  } else {
+    resolvedFileRenamingPattern = existingField.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
   }
 
   const firstProduct = targetProducts[0];
@@ -191,10 +241,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     targetCollectionIds,
     isActive: parseBoolean(formData.get("isActive")),
     isRequired: true,
-    adminTitle: String(formData.get("adminTitle") || "Upload Field"),
+    adminTitle: String(formData.get("adminTitle") || "Field"),
     storefrontTitle: String(formData.get("storefrontTitle") || "Upload your file"),
     storefrontDescription: String(formData.get("storefrontDescription") || ""),
-    fileRenamingPattern: String(formData.get("fileRenamingPattern") || "{orderId}_{originalName}"),
+    fileRenamingPattern: resolvedFileRenamingPattern,
     minFiles: 1,
     maxFiles: 1,
     allowedExtensions,
@@ -229,7 +279,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function FieldEditorPage() {
-  const { field, isNew, shopDomain } = useLoaderData<typeof loader>();
+  const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked } =
+    useLoaderData<typeof loader>();
+  const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
+  const planAllowsAdvancedValidation = canUseFeature(planCode, "advancedValidation");
+  const planAllowsFileRenaming = canUseFeature(planCode, "fileRenaming");
+  const patternIsCustom =
+    !isNew && field.fileRenamingPattern.trim() !== DEFAULT_FILE_RENAME_PATTERN;
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const appBridge = useAppBridge();
@@ -249,16 +305,33 @@ export default function FieldEditorPage() {
       maxFileMB: String(field.maxFileMB),
       fileQuantityEnabled: field.fileQuantityManagement.enabled,
       quantityMode: field.fileQuantityManagement.mode,
-      pricingEnabled: field.pricing.enabled,
+      pricingEnabled: canUseFeature(planCode, "dynamicPricing") && field.pricing.enabled,
       pricingUnitType: field.pricing.unitType,
       unitPrice: String(field.pricing.unitPrice),
       minPrice: String(field.pricing.minPrice),
       dpi: String(field.pricing.dpi),
       printWidth: String(field.pricing.printWidth),
       roundingEnabled: field.pricing.roundingEnabled,
-      dimensionRules: field.dimensionRules,
+      dimensionRules: (() => {
+        if (!canUseFeature(planCode, "advancedValidation")) {
+          return [];
+        }
+        if (field.dimensionRules.length > 0) {
+          return field.dimensionRules;
+        }
+        return [
+          {
+            id: crypto.randomUUID(),
+            dimensionType: "widthInch" as const,
+            operator: "lte" as const,
+            value: 1,
+            action: "prevent" as const,
+            warningMessage: "",
+          },
+        ];
+      })(),
     }),
-    [field],
+    [field, planCode],
   );
 
   const [adminTitle, setAdminTitle] = useState(initialState.adminTitle);
@@ -284,18 +357,41 @@ export default function FieldEditorPage() {
   const [roundingEnabled, setRoundingEnabled] = useState(initialState.roundingEnabled);
   const [renameHelpOpen, setRenameHelpOpen] = useState(false);
   const [dimensionRules, setDimensionRules] = useState<UploadFieldDimensionRule[]>(
-    initialState.dimensionRules.length > 0
-      ? initialState.dimensionRules
-      : [
-          {
-            id: crypto.randomUUID(),
-            dimensionType: "widthInch",
-            operator: "lte",
-            value: 1,
-            action: "prevent",
-            warningMessage: "",
-          },
-        ],
+    initialState.dimensionRules,
+  );
+
+  const renamePreviewExample = useMemo(() => {
+    const pattern = planAllowsFileRenaming
+      ? fileRenamingPattern
+      : patternIsCustom
+        ? field.fileRenamingPattern
+        : DEFAULT_FILE_RENAME_PATTERN;
+    return previewRenamedFileName(pattern);
+  }, [planAllowsFileRenaming, fileRenamingPattern, patternIsCustom, field.fileRenamingPattern]);
+
+  const renameTokensHelp = (
+    <Card>
+      <BlockStack gap="200">
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{orderId}`}</Text> — Shopify order ID (numeric).
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{orderName}`}</Text> — Order name (e.g. #1001).
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{lineItemId}`}</Text> — Line item ID.
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{variantName}`}</Text> — Variant title.
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{originalName}`}</Text> — File name without extension.
+        </Text>
+        <Text as="p" variant="bodySm">
+          <Text as="span" fontWeight="semibold">{`{fileIndex}`}</Text> — 1-based index when multiple files.
+        </Text>
+      </BlockStack>
+    </Card>
   );
 
   const serializedCurrent = JSON.stringify({
@@ -406,9 +502,10 @@ export default function FieldEditorPage() {
     }
   }, [appBridge, searchParams]);
 
-  const pageTitle = isNew ? "Create Upload Field" : (adminTitle || "Edit Upload Field");
+  const pageTitle = isNew ? "Create Field" : (adminTitle || "Edit Field");
   const hasTargets = targetProducts.length > 0 || targetCollections.length > 0;
   const firstProductHandle = targetProducts[0]?.handle;
+  const isSaving = navigation.state === "submitting";
 
   if (navigation.state === "loading") {
     return (
@@ -431,22 +528,49 @@ export default function FieldEditorPage() {
         <ContextualSaveBar
           message="Unsaved changes"
           saveAction={{
+            content: "Save field",
+            loading: isSaving,
+            disabled: fieldCreationBlocked || isSaving,
             onAction: () => {
+              if (fieldCreationBlocked || isSaving) return;
               const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
               form?.requestSubmit();
             },
           }}
-          discardAction={{ onAction: resetForm }}
+          discardAction={{
+            disabled: isSaving,
+            onAction: () => {
+              if (isSaving) return;
+              resetForm();
+            },
+          }}
         />
       ) : null}
-      <Form method="post" id="field-editor-form">
+      <Form
+        method="post"
+        id="field-editor-form"
+        onSubmit={(event) => {
+          if (fieldCreationBlocked) event.preventDefault();
+        }}
+      >
         <input type="hidden" name="targetProducts" value={JSON.stringify(targetProducts)} />
         <input type="hidden" name="targetCollections" value={JSON.stringify(targetCollections)} />
         <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
         <input type="hidden" name="allowedExtensions" value={contentTypeRestricted ? allowedExtensions.join(",") : ""} />
         <input type="hidden" name="dimensionRules" value={JSON.stringify(dimensionRules)} />
+        <input type="hidden" name="isActive" value={isActive ? "true" : "false"} />
+        <input type="hidden" name="fileQuantityEnabled" value={fileQuantityEnabled ? "true" : "false"} />
 
         <BlockStack gap="400">
+          {fieldCreationBlocked ? (
+            <Banner
+              tone="warning"
+              title="Field limit reached"
+              action={{ content: "View plans", url: "/app/plans" }}
+            >
+              Upgrade your plan to add more fields.
+            </Banner>
+          ) : null}
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
@@ -462,7 +586,11 @@ export default function FieldEditorPage() {
                   onChange={setAdminTitle}
                   requiredIndicator
                 />
-                <Checkbox label="Active" name="isActive" checked={isActive} onChange={setIsActive} />
+                <Checkbox
+                  label="Active"
+                  checked={isActive}
+                  onChange={() => setIsActive((prev) => !prev)}
+                />
               </FormLayout>
             </BlockStack>
           </Card>
@@ -473,7 +601,7 @@ export default function FieldEditorPage() {
                 Display Target
               </Text>
               <Text as="p" tone="subdued">
-                Choose where this upload field appears on your storefront. Products and collections
+                Choose where this field appears on your storefront. Products and collections
                 are combined — the field shows on any product that is directly selected or belongs
                 to a selected collection.
               </Text>
@@ -526,7 +654,7 @@ export default function FieldEditorPage() {
                 )}
                 {targetCollections.length > 0 ? (
                   <Text as="p" tone="subdued">
-                    All products in these collections will automatically show this upload field.
+                    All products in these collections will automatically show this field.
                   </Text>
                 ) : null}
               </BlockStack>
@@ -563,29 +691,90 @@ export default function FieldEditorPage() {
                   value={storefrontDescription}
                   onChange={setStorefrontDescription}
                 />
-                <TextField
-                  label="File rename pattern"
-                  name="fileRenamingPattern"
-                  autoComplete="off"
-                  value={fileRenamingPattern}
-                  onChange={setFileRenamingPattern}
-                  connectedRight={
-                    <Popover
-                      active={renameHelpOpen}
-                      onClose={() => setRenameHelpOpen(false)}
-                      activator={<Button onClick={() => setRenameHelpOpen(true)}>Tokens</Button>}
-                    >
-                      <Card>
-                        <BlockStack gap="100">
-                          <Text as="p">{`{orderId}`}</Text>
-                          <Text as="p">{`{lineItem}`}</Text>
-                          <Text as="p">{`{fileName}`}</Text>
-                          <Text as="p">{`{timestamp}`}</Text>
-                        </BlockStack>
-                      </Card>
-                    </Popover>
-                  }
-                />
+                {planAllowsFileRenaming ? (
+                  <BlockStack gap="200">
+                    <TextField
+                      label="File rename pattern"
+                      name="fileRenamingPattern"
+                      autoComplete="off"
+                      value={fileRenamingPattern}
+                      onChange={setFileRenamingPattern}
+                      helpText="Applied when an order is placed. Characters are sanitized for safe file names."
+                      connectedRight={
+                        <Popover
+                          active={renameHelpOpen}
+                          onClose={() => setRenameHelpOpen(false)}
+                          activator={<Button onClick={() => setRenameHelpOpen(true)}>Tokens</Button>}
+                        >
+                          {renameTokensHelp}
+                        </Popover>
+                      }
+                    />
+                    <Text as="p" tone="subdued" variant="bodySm">
+                      Example file name: {renamePreviewExample}
+                    </Text>
+                  </BlockStack>
+                ) : patternIsCustom ? (
+                  <BlockStack gap="300">
+                    <Banner tone="info" title="Your custom pattern is still in use">
+                      <p>
+                        When customers check out, files are still renamed using the pattern below. File
+                        renaming on Starter and higher plans lets you edit this pattern any time and use
+                        placeholders (tokens) for order ID, line item, variant, and more. On your current
+                        plan the pattern is read-only so nothing breaks for orders already using it—upgrade
+                        when you are ready to customize it again.
+                      </p>
+                    </Banner>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade plan
+                    </Button>
+                    <TextField
+                      label="File rename pattern"
+                      autoComplete="off"
+                      value={field.fileRenamingPattern}
+                      disabled
+                      helpText="Applied when an order is placed."
+                      connectedRight={
+                        <Popover
+                          active={renameHelpOpen}
+                          onClose={() => setRenameHelpOpen(false)}
+                          activator={<Button onClick={() => setRenameHelpOpen(true)}>Tokens</Button>}
+                        >
+                          {renameTokensHelp}
+                        </Popover>
+                      }
+                    />
+                    <Text as="p" tone="subdued" variant="bodySm">
+                      Example file name: {renamePreviewExample}
+                    </Text>
+                  </BlockStack>
+                ) : (
+                  <BlockStack gap="300">
+                    <Banner tone="info" title="Custom file names are a paid feature">
+                      <p>
+                        On your current plan, PrintDock uses a single default pattern for files attached to
+                        orders so names stay safe and consistent. Upgrading unlocks a custom rename pattern:
+                        you choose how filenames are built using tokens (for example order ID, line item,
+                        and original upload name), which helps production, downloads, and archive searches
+                        match how your team works.
+                      </p>
+                    </Banner>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade plan
+                    </Button>
+                    <BlockStack gap="200">
+                      <Text as="p" tone="subdued">
+                        Default pattern on your plan:{" "}
+                        <Text as="span" variant="bodySm">
+                          {DEFAULT_FILE_RENAME_PATTERN}
+                        </Text>
+                      </Text>
+                      <Text as="p" tone="subdued" variant="bodySm">
+                        Example file name: {renamePreviewExample}
+                      </Text>
+                    </BlockStack>
+                  </BlockStack>
+                )}
               </FormLayout>
             </BlockStack>
           </Card>
@@ -689,12 +878,22 @@ export default function FieldEditorPage() {
                   autoComplete="off"
                   value={maxFileMB}
                   onChange={setMaxFileMB}
+                  helpText={`Your plan allows up to ${maxFileMBFromPlan}MB`}
                 />
+                {Number(maxFileMB) > maxFileMBFromPlan && (
+                  <Banner
+                    title="File size exceeds your plan limit"
+                    tone="warning"
+                    action={{ content: "Upgrade plan", url: "/app/plans" }}
+                  >
+                    Your {planCode} plan supports up to {maxFileMBFromPlan}MB per
+                    file. Upgrade to increase this limit.
+                  </Banner>
+                )}
                 <Checkbox
-                  name="fileQuantityEnabled"
                   label="Enable custom quantity management"
                   checked={fileQuantityEnabled}
-                  onChange={setFileQuantityEnabled}
+                  onChange={() => setFileQuantityEnabled((prev) => !prev)}
                 />
                 <Select
                   name="quantityMode"
@@ -711,181 +910,311 @@ export default function FieldEditorPage() {
           </Card>
 
           <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Pricing
-              </Text>
-              <FormLayout>
+            <BlockStack gap="400">
+              <BlockStack gap="150">
+                <Text as="h2" variant="headingMd">
+                  Dynamic pricing
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Optional add-on fees for this upload field, calculated when the customer
+                  uploads a file. Shown before checkout with the rest of the line item.
+                </Text>
+              </BlockStack>
+
+              {!planAllowsDynamicPricing ? (
+                <input type="hidden" name="pricingEnabled" value="" />
+              ) : (
+                <input type="hidden" name="pricingEnabled" value={pricingEnabled ? "true" : "false"} />
+              )}
+
+              {planAllowsDynamicPricing ? (
                 <Checkbox
-                  name="pricingEnabled"
-                  label="Enable dynamic pricing"
+                  label="Charge using dynamic pricing"
+                  helpText="When off, no upload fee is added from this field."
                   checked={pricingEnabled}
-                  onChange={setPricingEnabled}
+                  onChange={() => setPricingEnabled((prev) => !prev)}
                 />
-                <Select
-                  name="pricingUnitType"
-                  label="Unit type"
-                  value={pricingUnitType}
-                  options={[
-                    { label: "Flat", value: "flat" },
-                    { label: "Per file", value: "per_file" },
-                    { label: "Per inch height", value: "inch_height" },
-                    { label: "Per square inch", value: "inch_square" },
-                  ]}
-                  onChange={(value) => setPricingUnitType(value as UploadFieldConfig["pricing"]["unitType"])}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="unitPrice"
-                  label="Unit price"
-                  type="number"
-                  prefix="$"
-                  autoComplete="off"
-                  value={unitPrice}
-                  onChange={setUnitPrice}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="minPrice"
-                  label="Minimum price"
-                  type="number"
-                  prefix="$"
-                  autoComplete="off"
-                  value={minPrice}
-                  onChange={setMinPrice}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="dpi"
-                  label="Target DPI"
-                  type="number"
-                  suffix="DPI"
-                  helpText="Used to calculate physical print dimensions from pixel size."
-                  autoComplete="off"
-                  value={dpi}
-                  onChange={setDpi}
-                  disabled={!pricingEnabled}
-                />
-                <TextField
-                  name="printWidth"
-                  label="Print width"
-                  type="number"
-                  suffix="inch"
-                  autoComplete="off"
-                  value={printWidth}
-                  onChange={setPrintWidth}
-                  disabled={!pricingEnabled}
-                />
-                <Checkbox
-                  name="roundingEnabled"
-                  label="Enable rounding"
-                  checked={roundingEnabled}
-                  onChange={setRoundingEnabled}
-                  disabled={!pricingEnabled}
-                />
-              </FormLayout>
+              ) : (
+                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+                  <BlockStack gap="300">
+                    <InlineStack gap="400" align="space-between" blockAlign="center" wrap>
+                      <Checkbox
+                        label="Charge using dynamic pricing"
+                        checked={false}
+                        onChange={setPricingEnabled}
+                        disabled
+                      />
+                      <Button url="/app/plans" variant="primary">
+                        Upgrade plan
+                      </Button>
+                    </InlineStack>
+                    <Text as="p" variant="bodyMd">
+                      Per-file and dimension-based rates are on{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Pro
+                      </Text>{" "}
+                      and{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Business
+                      </Text>
+                      . Upgrade to unlock this section.
+                    </Text>
+                  </BlockStack>
+                </Box>
+              )}
+
+              {!(planAllowsDynamicPricing && pricingEnabled) ? (
+                <>
+                  <input type="hidden" name="pricingUnitType" value={pricingUnitType} />
+                  <input type="hidden" name="unitPrice" value={unitPrice} />
+                  <input type="hidden" name="minPrice" value={minPrice} />
+                  <input type="hidden" name="dpi" value={dpi} />
+                  <input type="hidden" name="printWidth" value={printWidth} />
+                  <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
+                </>
+              ) : null}
+
+              {planAllowsDynamicPricing && !pricingEnabled ? (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Turn on dynamic pricing to set how the upload fee is calculated.
+                </Text>
+              ) : null}
+
+              {planAllowsDynamicPricing && pricingEnabled ? (
+                <BlockStack gap="300">
+                  <Divider />
+                  <Text as="h3" variant="headingSm">
+                    Rate settings
+                  </Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {
+                      "These values are used together with the customer's file metadata (size, dimensions) where applicable."
+                    }
+                  </Text>
+                  <FormLayout>
+                    <Select
+                      name="pricingUnitType"
+                      label="Calculation method"
+                      helpText="Pick how the fee scales with the uploaded file."
+                      value={pricingUnitType}
+                      options={[
+                        { label: "Flat — fixed price per upload", value: "flat" },
+                        { label: "Per file — price × number of files", value: "per_file" },
+                        { label: "Per inch height — price × print height", value: "inch_height" },
+                        { label: "Per square inch — price × print area", value: "inch_square" },
+                      ]}
+                      onChange={(value) =>
+                        setPricingUnitType(value as UploadFieldConfig["pricing"]["unitType"])
+                      }
+                    />
+                    <InlineStack gap="400" align="start" blockAlign="start" wrap>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="unitPrice"
+                          label="Rate"
+                          type="number"
+                          prefix="$"
+                          autoComplete="off"
+                          value={unitPrice}
+                          onChange={setUnitPrice}
+                          helpText="Base unit for the method above (e.g. per inch or per file)."
+                        />
+                      </Box>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="minPrice"
+                          label="Floor price"
+                          type="number"
+                          prefix="$"
+                          autoComplete="off"
+                          value={minPrice}
+                          onChange={setMinPrice}
+                          helpText="Minimum fee charged for an upload (0 = no floor)."
+                        />
+                      </Box>
+                    </InlineStack>
+                    <InlineStack gap="400" align="start" blockAlign="start" wrap>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="dpi"
+                          label="Assumed DPI"
+                          type="number"
+                          suffix="DPI"
+                          helpText="Used to convert pixels to physical inches for area/height pricing."
+                          autoComplete="off"
+                          value={dpi}
+                          onChange={setDpi}
+                        />
+                      </Box>
+                      <Box minWidth="200px" width="100%">
+                        <TextField
+                          name="printWidth"
+                          label="Roll / print width"
+                          type="number"
+                          suffix="in"
+                          helpText="Reference width for layout calculations (e.g. wide-format rolls)."
+                          autoComplete="off"
+                          value={printWidth}
+                          onChange={setPrintWidth}
+                        />
+                      </Box>
+                    </InlineStack>
+                    <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
+                    <Checkbox
+                      label="Round calculated price to a cleaner amount"
+                      checked={roundingEnabled}
+                      onChange={() => setRoundingEnabled((prev) => !prev)}
+                      helpText="Helps avoid long decimal prices on the storefront."
+                    />
+                  </FormLayout>
+                </BlockStack>
+              ) : null}
             </BlockStack>
           </Card>
 
           <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Dimension Rules
-              </Text>
-              {dimensionRules.map((rule, index) => (
-                <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
-                  <div style={{ minWidth: 180 }}>
-                    <Select
-                      label="Dimension"
-                      value={rule.dimensionType}
-                      options={[
-                        { label: "Width", value: "widthInch" },
-                        { label: "Height", value: "heightInch" },
-                        { label: "DPI", value: "dpi" },
-                      ]}
-                      onChange={(value) =>
-                        setDimensionRules((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, dimensionType: value as any } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
-                  <div style={{ minWidth: 160 }}>
-                    <Select
-                      label="Rule"
-                      value={rule.operator}
-                      options={[
-                        { label: "Min (>=)", value: "gte" },
-                        { label: "Max (<=)", value: "lte" },
-                        { label: "Equals", value: "eq" },
-                      ]}
-                      onChange={(value) =>
-                        setDimensionRules((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, operator: value as any } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
-                  <div style={{ minWidth: 120 }}>
-                    <TextField
-                      label="Value"
-                      type="number"
-                      autoComplete="off"
-                      value={String(rule.value)}
-                      onChange={(value) =>
-                        setDimensionRules((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, value: Number(value) } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
+            <BlockStack gap="400">
+              <BlockStack gap="150">
+                <Text as="h2" variant="headingMd">
+                  Dimension rules
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Block uploads or show warnings when artwork does not meet DPI, size, or
+                  other limits. Evaluated when the customer uploads a file.
+                </Text>
+              </BlockStack>
+
+              {planAllowsAdvancedValidation ? (
+                <BlockStack gap="300">
+                  {dimensionRules.length === 0 ? (
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      No rules yet. Add a rule to enforce limits on uploaded files.
+                    </Text>
+                  ) : null}
+                  {dimensionRules.map((rule, index) => (
+                    <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
+                      <div style={{ minWidth: 180 }}>
+                        <Select
+                          label="Dimension"
+                          value={rule.dimensionType}
+                          options={[
+                            { label: "Width", value: "widthInch" },
+                            { label: "Height", value: "heightInch" },
+                            { label: "DPI", value: "dpi" },
+                          ]}
+                          onChange={(value) =>
+                            setDimensionRules((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, dimensionType: value as FieldDimensionType }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <div style={{ minWidth: 160 }}>
+                        <Select
+                          label="Rule"
+                          value={rule.operator}
+                          options={[
+                            { label: "Min (>=)", value: "gte" },
+                            { label: "Max (<=)", value: "lte" },
+                            { label: "Equals", value: "eq" },
+                          ]}
+                          onChange={(value) =>
+                            setDimensionRules((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, operator: value as FieldOperator } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <div style={{ minWidth: 120 }}>
+                        <TextField
+                          label="Value"
+                          type="number"
+                          autoComplete="off"
+                          value={String(rule.value)}
+                          onChange={(value) =>
+                            setDimensionRules((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, value: Number(value) } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <Button
+                        tone="critical"
+                        onClick={() =>
+                          setDimensionRules((prev) =>
+                            prev.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </InlineStack>
+                  ))}
                   <Button
-                    tone="critical"
                     onClick={() =>
-                      setDimensionRules((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                      setDimensionRules((prev) => [
+                        ...prev,
+                        {
+                          id: crypto.randomUUID(),
+                          dimensionType: "widthInch",
+                          operator: "gte",
+                          value: 1,
+                          action: "prevent",
+                          warningMessage: "",
+                        },
+                      ])
                     }
                   >
-                    Remove
+                    Add rule
                   </Button>
-                </InlineStack>
-              ))}
-              <Button
-                onClick={() =>
-                  setDimensionRules((prev) => [
-                    ...prev,
-                    {
-                      id: crypto.randomUUID(),
-                      dimensionType: "widthInch",
-                      operator: "gte",
-                      value: 1,
-                      action: "prevent",
-                      warningMessage: "",
-                    },
-                  ])
-                }
-              >
-                Add Rule
-              </Button>
+                </BlockStack>
+              ) : (
+                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+                  <BlockStack gap="300">
+                    <Text as="p" variant="bodyMd">
+                      DPI, pixel size, print dimensions, and page-count rules are on{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Starter
+                      </Text>
+                      ,{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Pro
+                      </Text>
+                      , and{" "}
+                      <Text as="span" variant="bodyMd" fontWeight="semibold">
+                        Business
+                      </Text>
+                      . Upgrade to add dimension rules for this field.
+                    </Text>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade plan
+                    </Button>
+                  </BlockStack>
+                </Box>
+              )}
             </BlockStack>
           </Card>
 
-          <InlineStack gap="200">
-            <Button submit variant="primary">
-              Save Field
-            </Button>
-            <Button url="/app/fields">Back to Fields</Button>
-            {firstProductHandle ? (
-              <Button url={`https://${shopDomain}/products/${firstProductHandle}`} target="_blank">
-                Preview Product
-              </Button>
-            ) : null}
-          </InlineStack>
+          {firstProductHandle ? (
+            <Card>
+              <InlineStack gap="300" align="space-between" blockAlign="center" wrap>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Open the storefront product page to see how this field appears to customers.
+                </Text>
+                <Button url={`https://${shopDomain}/products/${firstProductHandle}`} target="_blank">
+                  Preview product
+                </Button>
+              </InlineStack>
+            </Card>
+          ) : null}
         </BlockStack>
       </Form>
     </Page>

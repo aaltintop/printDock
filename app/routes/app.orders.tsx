@@ -19,9 +19,11 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { canUseFeature } from "../config/plans";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
+  getBillingPlan,
   listOrderJobAuditEvents,
   listOrderJobs,
   saveOrderJob,
@@ -168,7 +170,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  const billingPlan = await getBillingPlan(session.shop);
+  const bulkDownloadAllowed = canUseFeature(billingPlan.planCode, "bulkDownload");
+
   if (url.searchParams.get("export") === "csv") {
+    if (!bulkDownloadAllowed) {
+      throw new Response("CSV export requires a Pro or Business plan", {
+        status: 402,
+      });
+    }
+
     const csvRows = [
       ["Order", "File", "Dimensions", "Price", "Status", "Assignee", "Date"].join(","),
       ...allOrders.map((order) =>
@@ -233,6 +244,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     quickStats,
     availableStatuses,
     shopDomain: session.shop,
+    canBulkDownload: bulkDownloadAllowed,
   });
 };
 
@@ -329,6 +341,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return data({ error: "Invalid storage path" }, { status: 400 });
   }
 
+  const allJobs = await listOrderJobs(session.shop);
+  const jobForPath = allJobs.find((j) => j.assetSnapshot?.storagePath === storagePath);
+  if (jobForPath?.assetSnapshot?.storageExpired) {
+    return data(
+      { error: "This file is no longer stored (retention period ended)." },
+      { status: 410 },
+    );
+  }
+
   try {
     const downloadUrl = await getSignedDownloadUrl(storagePath);
     return data({ downloadUrl, storagePath });
@@ -339,7 +360,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Orders() {
-  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain } =
+  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain, canBulkDownload } =
     useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const actionFetcher = useFetcher<typeof action>();
@@ -572,17 +593,23 @@ export default function Orders() {
                 <input type="hidden" name="startDate" value={startDateValue} />
                 <input type="hidden" name="endDate" value={endDateValue} />
                 <Button submit>Apply filters</Button>
-                <Button
-                  url={buildOrdersUrl({
-                    q: filters.q,
-                    status: filters.status,
-                    startDate: filters.startDate,
-                    endDate: filters.endDate,
-                    exportCsv: true,
-                  })}
-                >
-                  Export CSV
-                </Button>
+                {canBulkDownload ? (
+                  <Button
+                    url={buildOrdersUrl({
+                      q: filters.q,
+                      status: filters.status,
+                      startDate: filters.startDate,
+                      endDate: filters.endDate,
+                      exportCsv: true,
+                    })}
+                  >
+                    Export CSV
+                  </Button>
+                ) : (
+                  <Tooltip content="CSV export requires a Pro or Business plan">
+                    <Button url="/app/plans">Upgrade to export</Button>
+                  </Tooltip>
+                )}
               </InlineStack>
             </BlockStack>
           </form>
@@ -666,17 +693,24 @@ export default function Orders() {
                     </Badge>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    {(() => {
-                      const fileName = order.asset?.originalName || "No File";
-                      const truncated = fileName.length > 40 ? `${fileName.slice(0, 40)}...` : fileName;
-                      return fileName.length > 40 ? (
-                        <Tooltip content={fileName}>
-                          <Text as="span">{truncated}</Text>
-                        </Tooltip>
-                      ) : (
-                        truncated
-                      );
-                    })()}
+                    {order.asset?.storageExpired ? (
+                      <Text as="span" tone="subdued">
+                        File no longer stored
+                      </Text>
+                    ) : (
+                      (() => {
+                        const fileName = order.asset?.originalName || "No File";
+                        const truncated =
+                          fileName.length > 40 ? `${fileName.slice(0, 40)}...` : fileName;
+                        return fileName.length > 40 ? (
+                          <Tooltip content={fileName}>
+                            <Text as="span">{truncated}</Text>
+                          </Tooltip>
+                        ) : (
+                          truncated
+                        );
+                      })()
+                    )}
                   </IndexTable.Cell>
                   <IndexTable.Cell>{formatFileSize(order.asset?.sizeBytes)}</IndexTable.Cell>
                   <IndexTable.Cell>{order.dimensions}</IndexTable.Cell>
@@ -704,13 +738,14 @@ export default function Orders() {
                       <Button
                         onClick={() =>
                           order.asset?.storagePath &&
+                          !order.asset?.storageExpired &&
                           handleDownload(order.asset.storagePath, order.asset?.originalName || "printdock-file")
                         }
                         loading={
                           downloadFetcher.state === "submitting" &&
                           downloadingStoragePath === order.asset?.storagePath
                         }
-                        disabled={!order.asset?.storagePath}
+                        disabled={!order.asset?.storagePath || Boolean(order.asset?.storageExpired)}
                       >
                         {downloadingStoragePath === order.asset?.storagePath
                           ? "Downloading..."

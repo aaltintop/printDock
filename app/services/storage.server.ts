@@ -85,6 +85,16 @@ export async function deleteFile(storagePath: string): Promise<void> {
   await file.delete({ ignoreNotFound: true });
 }
 
+/** Delete every object whose name starts with prefix (e.g. uploads/shop.example.com/). */
+export async function deleteStorageByPrefix(prefix: string): Promise<number> {
+  const bucket = storage.bucket();
+  const [files] = await bucket.getFiles({ prefix });
+  await Promise.all(
+    files.map((f) => f.delete({ ignoreNotFound: true })),
+  );
+  return files.length;
+}
+
 // Copy a file to another path in the same bucket.
 export async function copyFile(sourcePath: string, targetPath: string): Promise<void> {
   const bucket = storage.bucket();

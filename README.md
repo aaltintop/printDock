@@ -117,6 +117,19 @@ Using pnpm:
 pnpm run build
 ```
 
+### File storage retention (PrintDock)
+
+Uploads are purged based on each shop’s billing plan (`fileStorageDays` in `app/config/plans.ts`). Schedule a daily or weekly HTTP `POST` (or `GET`) to:
+
+`https://<your-app-host>/cron/storage-retention`
+
+Set `STORAGE_RETENTION_CRON_SECRET` in the environment to a long random string. Send the same value as either:
+
+- Header `Authorization: Bearer <secret>`, or
+- Header `X-Cron-Secret: <secret>`
+
+The handler iterates documents in the Firestore `shops` collection and runs retention per shop. Shops that only have legacy top-level `sessions` / `jobs` rows without a `shops/{shop}` document are not processed by this job; those tenants are rare and can be migrated or handled separately.
+
 ## Hosting
 
 When you're ready to set up your app in production, you can follow [our deployment documentation](https://shopify.dev/docs/apps/launch/deployment) to host it externally. From there, you have a few options:

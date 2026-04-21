@@ -39,6 +39,13 @@
   // ─── INIT ────────────────────────────────────────────────────────────
   async function init() {
     await loadFieldConfig();
+    // No field targets this product (or collection) — hide the block entirely.
+    if (!fieldConfig.id) {
+      root.innerHTML = "";
+      root.style.display = "none";
+      root.setAttribute("aria-hidden", "true");
+      return;
+    }
     renderUI();
     setupAddToCartGuard();
     setupCartAddFetchInterceptor();

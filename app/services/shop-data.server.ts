@@ -1,5 +1,8 @@
+import { DEFAULT_FILE_RENAME_PATTERN } from "../utils/file-rename-pattern";
 import { db } from "../firebase.server";
 import { unauthenticated } from "../shopify.server";
+import type { PlanCode } from "../config/plans";
+import { migratePlanCode } from "../config/plans";
 import type {
   AppSettings,
   BillingPlan,
@@ -12,6 +15,13 @@ import type {
 } from "../types/printdock";
 
 const DEFAULT_ALLOWED_EXTENSIONS = ["png", "jpg", "jpeg", "pdf"];
+
+/** After this duration from `deletedAt`, hard-delete helpers may remove the document from Firestore. */
+export const UPLOAD_FIELD_SOFT_DELETE_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
+
+function isFieldVisibleToMerchant(field: UploadFieldConfig): boolean {
+  return !field.deletedAt?.trim();
+}
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   language: "en",
@@ -29,10 +39,6 @@ export const DEFAULT_BILLING_PLAN: BillingPlan = {
   planCode: "free",
   status: "trial",
   subscriptionId: null,
-  monthlyUploadsLimit: 100,
-  maxFileMBLimit: 50,
-  allowAdvancedRules: false,
-  allowAutoPricing: false,
   usageThisMonth: 0,
   usageMonthKey: "1970-01",
   updatedAt: new Date(0).toISOString(),
@@ -86,6 +92,7 @@ function normalizeAsset(id: string, raw: unknown): UploadAsset {
         }
       : null,
     blocked: Boolean(asset.blocked),
+    ...(asset.storageExpired === true ? { storageExpired: true as const } : {}),
   };
 }
 
@@ -124,6 +131,12 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
     ? field.targetCollectionIds.map((v) => String(v))
     : targetCollections.map((c) => c.id).filter(Boolean);
 
+  const deletedAtRaw = field.deletedAt;
+  const deletedAt =
+    typeof deletedAtRaw === "string" && deletedAtRaw.trim() !== ""
+      ? deletedAtRaw.trim()
+      : undefined;
+
   return {
     id: docId,
     productId: legacyProductId,
@@ -137,14 +150,12 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
     targetCollectionIds,
     isActive: field.isActive !== false,
     isRequired: Boolean(field.isRequired),
-    adminTitle: String(field.adminTitle ?? "Upload Field"),
+    adminTitle: String(field.adminTitle ?? "Field"),
     storefrontTitle: String(field.storefrontTitle ?? "Upload your artwork"),
     storefrontDescription: String(
       field.storefrontDescription ?? "Upload your design file before checkout.",
     ),
-    fileRenamingPattern: String(
-      field.fileRenamingPattern ?? "{orderId}_{lineItemId}_{originalName}",
-    ),
+    fileRenamingPattern: String(field.fileRenamingPattern ?? DEFAULT_FILE_RENAME_PATTERN),
     minFiles: Math.max(1, Number(field.minFiles ?? 1)),
     maxFiles: Math.max(1, Number(field.maxFiles ?? 1)),
     allowedExtensions: Array.isArray(field.allowedExtensions)
@@ -176,12 +187,10 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
     dimensionRules: Array.isArray(field.dimensionRules)
       ? (field.dimensionRules as UploadFieldConfig["dimensionRules"])
       : [],
-    planRequirement:
-      field.planRequirement === "basic_plus" || field.planRequirement === "pro_plus"
-        ? (field.planRequirement as "basic_plus" | "pro_plus")
-        : "free",
+    planRequirement: migratePlanCode(String(field.planRequirement ?? "free")),
     createdAt: toIsoDate(field.createdAt),
     updatedAt: toIsoDate(field.updatedAt),
+    ...(deletedAt ? { deletedAt } : {}),
   };
 }
 
@@ -280,27 +289,33 @@ export function reuploadRequestsCollection(shopDomain: string, jobId: string) {
 export async function listUploadFields(shopDomain: string): Promise<UploadFieldConfig[]> {
   const nestedSnapshot = await fieldsCollection(shopDomain).get();
   if (!nestedSnapshot.empty) {
-    return nestedSnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
+    return nestedSnapshot.docs
+      .map((doc) => normalizeField(doc.id, doc.data()))
+      .filter(isFieldVisibleToMerchant);
   }
 
   const legacySnapshot = await db
     .collection("uploadFields")
     .where("shopDomain", "==", shopDomain)
     .get();
-  return legacySnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
+  return legacySnapshot.docs
+    .map((doc) => normalizeField(doc.id, doc.data()))
+    .filter(isFieldVisibleToMerchant);
 }
 
 export async function getUploadField(shopDomain: string, fieldId: string): Promise<UploadFieldConfig | null> {
   const nestedDoc = await fieldsCollection(shopDomain).doc(fieldId).get();
   if (nestedDoc.exists) {
-    return normalizeField(nestedDoc.id, nestedDoc.data());
+    const normalized = normalizeField(nestedDoc.id, nestedDoc.data());
+    return isFieldVisibleToMerchant(normalized) ? normalized : null;
   }
 
   const legacyDoc = await db.collection("uploadFields").doc(fieldId).get();
   if (!legacyDoc.exists) return null;
   const legacyData = legacyDoc.data();
   if (!legacyData || legacyData.shopDomain !== shopDomain) return null;
-  return normalizeField(fieldId, legacyData);
+  const normalized = normalizeField(fieldId, legacyData);
+  return isFieldVisibleToMerchant(normalized) ? normalized : null;
 }
 
 const COLLECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -389,7 +404,9 @@ export async function getActiveFieldForProduct(
     .where("isActive", "==", true)
     .limit(15)
     .get();
-  const directFields = directSnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
+  const directFields = directSnapshot.docs
+    .map((doc) => normalizeField(doc.id, doc.data()))
+    .filter(isFieldVisibleToMerchant);
   if (directFields.length > 0) {
     return pickVariantMatch(directFields, variantId);
   }
@@ -400,7 +417,9 @@ export async function getActiveFieldForProduct(
     .where("isActive", "==", true)
     .limit(15)
     .get();
-  const legacyFields = legacySnapshot.docs.map((doc) => normalizeField(doc.id, doc.data()));
+  const legacyFields = legacySnapshot.docs
+    .map((doc) => normalizeField(doc.id, doc.data()))
+    .filter(isFieldVisibleToMerchant);
   if (legacyFields.length > 0) {
     return pickVariantMatch(legacyFields, variantId);
   }
@@ -422,9 +441,9 @@ export async function getActiveFieldForProduct(
           .where("isActive", "==", true)
           .limit(15)
           .get();
-        const collectionFields = collectionSnapshot.docs.map((doc) =>
-          normalizeField(doc.id, doc.data()),
-        );
+        const collectionFields = collectionSnapshot.docs
+          .map((doc) => normalizeField(doc.id, doc.data()))
+          .filter(isFieldVisibleToMerchant);
         if (collectionFields.length > 0) {
           return pickVariantMatch(collectionFields, variantId);
         }
@@ -440,9 +459,9 @@ export async function getActiveFieldForProduct(
     .where("isActive", "==", true)
     .limit(15)
     .get();
-  const topLevelLegacyFields = topLevelLegacySnapshot.docs.map((doc) =>
-    normalizeField(doc.id, doc.data()),
-  );
+  const topLevelLegacyFields = topLevelLegacySnapshot.docs
+    .map((doc) => normalizeField(doc.id, doc.data()))
+    .filter(isFieldVisibleToMerchant);
   if (topLevelLegacyFields.length > 0) {
     return pickVariantMatch(topLevelLegacyFields, variantId);
   }
@@ -460,6 +479,76 @@ export async function saveUploadField(shopDomain: string, field: UploadFieldConf
     },
     { merge: true },
   );
+}
+
+/**
+ * Merchant-facing delete: marks the field as removed (`deletedAt`, `isActive: false`) but keeps
+ * the Firestore document for ~{@link UPLOAD_FIELD_SOFT_DELETE_RETENTION_MS} before optional purge.
+ */
+export async function softDeleteUploadField(shopDomain: string, fieldId: string): Promise<boolean> {
+  const nowIso = new Date().toISOString();
+  const nestedRef = fieldsCollection(shopDomain).doc(fieldId);
+  const legacyRef = db.collection("uploadFields").doc(fieldId);
+
+  const [nestedSnap, legacySnap] = await Promise.all([nestedRef.get(), legacyRef.get()]);
+
+  let found = false;
+
+  if (nestedSnap.exists) {
+    await nestedRef.set(
+      {
+        shopDomain,
+        deletedAt: nowIso,
+        updatedAt: nowIso,
+        isActive: false,
+      },
+      { merge: true },
+    );
+    found = true;
+  }
+  if (legacySnap.exists) {
+    const data = legacySnap.data();
+    if (data && String(data.shopDomain) === shopDomain) {
+      await legacyRef.set(
+        {
+          deletedAt: nowIso,
+          updatedAt: nowIso,
+          isActive: false,
+        },
+        { merge: true },
+      );
+      found = true;
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Hard-deletes nested shop field docs whose `deletedAt` is older than the retention window.
+ * Call from a scheduled job (e.g. monthly). Legacy `uploadFields` rows may need a composite index
+ * if you extend this to cover that collection.
+ */
+export async function purgeUploadFieldsPastSoftDeleteRetention(shopDomain: string): Promise<number> {
+  const cutoffIso = new Date(Date.now() - UPLOAD_FIELD_SOFT_DELETE_RETENTION_MS).toISOString();
+  let removed = 0;
+
+  for (;;) {
+    const snap = await fieldsCollection(shopDomain)
+      .where("deletedAt", "<=", cutoffIso)
+      .limit(400)
+      .get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    for (const doc of snap.docs) {
+      batch.delete(doc.ref);
+    }
+    await batch.commit();
+    removed += snap.size;
+    if (snap.size < 400) break;
+  }
+
+  return removed;
 }
 
 export async function createUploadSession(shopDomain: string, session: UploadSession): Promise<void> {
@@ -568,6 +657,35 @@ export async function saveOrderJob(shopDomain: string, job: OrderJob): Promise<v
   );
 }
 
+/** Patch order job on nested path if present, otherwise top-level legacy `jobs` collection. */
+export async function mergeOrderJob(shopDomain: string, jobId: string, patch: Partial<OrderJob>): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const nestedRef = jobsCollection(shopDomain).doc(jobId);
+  const nestedDoc = await nestedRef.get();
+  if (nestedDoc.exists) {
+    await nestedRef.set(
+      {
+        ...patch,
+        updatedAt: nowIso,
+        shopDomain,
+      },
+      { merge: true },
+    );
+    return;
+  }
+  const legacyRef = db.collection("jobs").doc(jobId);
+  const legacyDoc = await legacyRef.get();
+  if (!legacyDoc.exists) return;
+  await legacyRef.set(
+    {
+      ...patch,
+      updatedAt: nowIso,
+      shopDomain,
+    },
+    { merge: true },
+  );
+}
+
 export async function appendOrderJobAuditEvent(
   shopDomain: string,
   jobId: string,
@@ -614,21 +732,36 @@ export async function createReuploadRequest(shopDomain: string, jobId: string): 
   return token;
 }
 
+export async function getShopPlan(shopDomain: string): Promise<PlanCode> {
+  const billing = await getBillingPlan(shopDomain);
+  return billing.planCode;
+}
+
+export async function updateShopPlan(
+  shopDomain: string,
+  planCode: PlanCode,
+): Promise<void> {
+  await saveBillingPlan(shopDomain, { planCode });
+}
+
 export async function getBillingPlan(shopDomain: string): Promise<BillingPlan> {
   const nestedDoc = await shopDoc(shopDomain).collection("billing").doc("plan").get();
   if (nestedDoc.exists) {
+    const raw = nestedDoc.data() as Record<string, unknown>;
     return {
       ...DEFAULT_BILLING_PLAN,
-      ...(nestedDoc.data() as Partial<BillingPlan>),
+      ...raw,
+      planCode: migratePlanCode(String(raw?.planCode ?? "free")),
     };
   }
 
   const legacyDoc = await db.collection("billingPlans").doc(shopDomain).get();
   if (!legacyDoc.exists) return DEFAULT_BILLING_PLAN;
-  const legacyData = legacyDoc.data() as Partial<BillingPlan>;
+  const raw = legacyDoc.data() as Record<string, unknown>;
   return {
     ...DEFAULT_BILLING_PLAN,
-    ...legacyData,
+    ...raw,
+    planCode: migratePlanCode(String(raw?.planCode ?? "free")),
   };
 }
 

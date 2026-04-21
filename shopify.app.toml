@@ -2,7 +2,7 @@
 
 client_id = "53d400d30cdc04626d5b6dc0ed02d0f4"
 name = "printdock"
-application_url = "https://printdock-service-u6yavvnujq-uc.a.run.app"
+application_url = "https://printdock-service-605010372338.us-central1.run.app"
 embedded = true
 
 [build]
@@ -23,14 +23,18 @@ api_version = "2026-07"
   topics = [ "orders/create" ]
   uri = "/webhooks/orders/create"
 
+  [[webhooks.subscriptions]]
+  topics = [ "app_subscriptions/update" ]
+  uri = "/webhooks/app_subscriptions/update"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,read_orders,read_themes"
 
 [auth]
-redirect_urls = [ "https://printdock-service-u6yavvnujq-uc.a.run.app/api/auth" ]
+redirect_urls = [ "https://printdock-service-605010372338.us-central1.run.app/api/auth" ]
 
 [app_proxy]
-url = "https://printdock-service-u6yavvnujq-uc.a.run.app"
+url = "https://printdock-service-605010372338.us-central1.run.app"
 subpath = "printdock"
 prefix = "apps"

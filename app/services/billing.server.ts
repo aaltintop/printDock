@@ -1,20 +1,46 @@
 import { db } from "../firebase.server";
+import type { PlanCode } from "../config/plans";
+import { PLANS, PLAN_SUBSCRIPTION_NAMES } from "../config/plans";
 import { billableLinesCollection, getBillingPlan, jobsCollection } from "./shop-data.server";
 
-const PLANS = {
-  basic_plus: { monthlyFee: 19, percentageBps: 75, cap: 200 }, // 0.75%
-  pro_plus: { monthlyFee: 49, percentageBps: 50, cap: 500 }, // 0.50%
-} as const;
+const USAGE_FEE_BPS: Partial<Record<PlanCode, { bps: number; cap: number }>> = {
+  pro: { bps: 75, cap: 200 },
+  business: { bps: 50, cap: 500 },
+};
 
-// Create a Shopify app subscription (recurring + usage) via GraphQL
 export async function createSubscription(
-  admin: any, // Shopify GraphQL admin client
-  planCode: keyof typeof PLANS,
-  returnUrl: string
+  admin: any,
+  planCode: Exclude<PlanCode, "free">,
+  returnUrl: string,
 ) {
   const plan = PLANS[planCode];
+  const subscriptionName = PLAN_SUBSCRIPTION_NAMES[planCode];
+  const usageFee = USAGE_FEE_BPS[planCode];
 
-  const response = await admin.graphql(`
+  const lineItems: any[] = [
+    {
+      plan: {
+        appRecurringPricingDetails: {
+          price: { amount: plan.monthlyPriceUsd, currencyCode: "USD" },
+          interval: "EVERY_30_DAYS",
+        },
+      },
+    },
+  ];
+
+  if (usageFee) {
+    lineItems.push({
+      plan: {
+        appUsagePricingDetails: {
+          terms: `${usageFee.bps / 100}% of uploader-generated sales`,
+          cappedAmount: { amount: usageFee.cap, currencyCode: "USD" },
+        },
+      },
+    });
+  }
+
+  const response = await admin.graphql(
+    `
     mutation AppSubscriptionCreate($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!) {
       appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: false) {
         confirmationUrl
@@ -22,54 +48,34 @@ export async function createSubscription(
         userErrors { field message }
       }
     }
-  `, {
-    variables: {
-      name: `PrintDock ${planCode.charAt(0).toUpperCase() + planCode.slice(1)}`,
-      returnUrl,
-      lineItems: [
-        {
-          plan: {
-            appRecurringPricingDetails: {
-              price: { amount: plan.monthlyFee, currencyCode: "USD" },
-              interval: "EVERY_30_DAYS",
-            },
-          },
-        },
-        {
-          plan: {
-            appUsagePricingDetails: {
-              terms: `${plan.percentageBps / 100}% of uploader-generated sales`,
-              cappedAmount: { amount: plan.cap, currencyCode: "USD" },
-            },
-          },
-        },
-      ],
+  `,
+    {
+      variables: {
+        name: subscriptionName,
+        returnUrl,
+        lineItems,
+      },
     },
-  });
+  );
 
   const data = await response.json();
   return data.data.appSubscriptionCreate;
 }
 
-// Called after orders/create webhook — record billable line items
 export async function processBillableOrder(
   shopDomain: string,
-  order: any // Shopify order payload
+  order: any,
 ) {
   const billingPlan = await getBillingPlan(shopDomain);
   if (billingPlan.status !== "active") return;
 
-  const percentageRateBps =
-    billingPlan.planCode === "pro_plus"
-      ? 50
-      : billingPlan.planCode === "basic_plus"
-        ? 75
-        : 0;
-  if (percentageRateBps <= 0) return;
+  const usageFee = USAGE_FEE_BPS[billingPlan.planCode];
+  if (!usageFee) return;
+  const percentageRateBps = usageFee.bps;
 
   for (const line of order.line_items) {
     const sessionToken = line.properties?.find(
-      (p: any) => p.name === "_uc_session"
+      (p: any) => p.name === "_uc_session",
     )?.value;
 
     if (!sessionToken) {
@@ -84,9 +90,7 @@ export async function processBillableOrder(
               "_Print Ready File",
               "_View uploads",
               "__ucToken",
-            ].includes(
-              String(p?.name || ""),
-            ),
+            ].includes(String(p?.name || "")),
           )
         : false;
       if (hasPrintDockHints) {
@@ -102,7 +106,6 @@ export async function processBillableOrder(
       continue;
     }
 
-    // Find the job created for this line
     const jobId = `${order.id}_${line.id}`;
     let jobDoc = await jobsCollection(shopDomain).doc(jobId).get();
     if (!jobDoc.exists) {
@@ -122,7 +125,6 @@ export async function processBillableOrder(
       continue;
     }
 
-    // Idempotency: don't double-bill
     const billableLineId = `${jobId}_billing`;
     const existing = await billableLinesCollection(shopDomain).doc(billableLineId).get();
     if (existing.exists) continue;
@@ -130,18 +132,21 @@ export async function processBillableOrder(
     const amount = Number(line.price ?? 0) * Number(line.quantity ?? 1);
     const computedFee = amount * (percentageRateBps / 10000);
 
-    await billableLinesCollection(shopDomain).doc(billableLineId).set({
-      shopDomain,
-      jobId,
-      billingPlanId: billingPlan.subscriptionId ?? null,
-      shopifyOrderId: String(order.id),
-      lineItemId: String(line.id),
-      recognizedAmount: amount,
-      currency: order.currency,
-      computedFee,
-      roundedFee: Math.round(computedFee * 100) / 100,
-      recognitionStatus: "recognized",
-      recognizedAt: new Date().toISOString(),
-    }, { merge: true });
+    await billableLinesCollection(shopDomain).doc(billableLineId).set(
+      {
+        shopDomain,
+        jobId,
+        billingPlanId: billingPlan.subscriptionId ?? null,
+        shopifyOrderId: String(order.id),
+        lineItemId: String(line.id),
+        recognizedAmount: amount,
+        currency: order.currency,
+        computedFee,
+        roundedFee: Math.round(computedFee * 100) / 100,
+        recognitionStatus: "recognized",
+        recognizedAt: new Date().toISOString(),
+      },
+      { merge: true },
+    );
   }
 }

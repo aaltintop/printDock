@@ -1,6 +1,7 @@
 import { data } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { getPlan } from "../config/plans";
 import { createCollectionIdResolver, getActiveFieldForProduct, getEffectiveBillingPlan } from "../services/shop-data.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -20,22 +21,37 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const resolveCollectionIds = createCollectionIdResolver();
   const field = await getActiveFieldForProduct(shopDomain, productId, variantId, resolveCollectionIds);
   const billingPlan = await getEffectiveBillingPlan(shopDomain);
+  const planLimits = getPlan(billingPlan.planCode);
+
+  const planLimitsResponse = {
+    maxFileSizeBytes: planLimits.maxFileSizeBytes,
+    basicValidation: planLimits.basicValidation,
+    advancedValidation: planLimits.advancedValidation,
+    dynamicPricing: planLimits.dynamicPricing,
+  };
+
   if (!field) {
     return data({
       field: null,
       defaults: {
         allowedExtensions: ["png", "jpg", "jpeg", "pdf"],
-        maxFileMB: 50,
+        maxFileMB: Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024)),
         minFiles: 1,
         maxFiles: 1,
       },
       billingPlan: {
         planCode: billingPlan.planCode,
         usageThisMonth: billingPlan.usageThisMonth,
-        monthlyUploadsLimit: billingPlan.monthlyUploadsLimit,
+        maxOrdersPerMonth: planLimits.maxOrdersPerMonth,
       },
+      planLimits: planLimitsResponse,
     });
   }
+
+  const fieldMaxBytes = field.maxFileMB * 1024 * 1024;
+  const effectiveMaxMB = Math.floor(
+    Math.min(fieldMaxBytes, planLimits.maxFileSizeBytes) / (1024 * 1024),
+  );
 
   return data({
     field: {
@@ -44,7 +60,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       storefrontTitle: field.storefrontTitle,
       storefrontDescription: field.storefrontDescription,
       allowedExtensions: field.allowedExtensions,
-      maxFileMB: field.maxFileMB,
+      maxFileMB: effectiveMaxMB,
       minFiles: field.minFiles,
       maxFiles: field.maxFiles,
       fileQuantityManagement: field.fileQuantityManagement,
@@ -56,8 +72,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     billingPlan: {
       planCode: billingPlan.planCode,
       usageThisMonth: billingPlan.usageThisMonth,
-      monthlyUploadsLimit: billingPlan.monthlyUploadsLimit,
+      maxOrdersPerMonth: planLimits.maxOrdersPerMonth,
     },
+    planLimits: planLimitsResponse,
   });
 }
-
