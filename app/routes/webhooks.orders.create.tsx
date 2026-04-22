@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { rethrowIfShopifyWebhookResponse } from "../lib/webhook-action.server";
 import {
   appendOrderJobAuditEvent,
   getUploadField,
@@ -252,6 +253,7 @@ export async function action({ request }: ActionFunctionArgs) {
       log.event("webhook_processed", { topic: "ORDERS_CREATE", shopDomain });
       return new Response("OK", { status: 200 });
     } catch (err) {
+      rethrowIfShopifyWebhookResponse(err);
       log.error("webhook_orders_create_failed", err, {});
       return new Response("Error", { status: 500 });
     }

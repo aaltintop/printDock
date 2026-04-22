@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { db } from "../firebase.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { rethrowIfShopifyWebhookResponse } from "../lib/webhook-action.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   return runWithRequestContext(request, async () => {
@@ -20,6 +21,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       log.event("webhook_processed", { topic, shopDomain: shop });
       return new Response();
     } catch (err) {
+      rethrowIfShopifyWebhookResponse(err);
       log.error("webhook_app_scopes_update_failed", err, {});
       return new Response("Error", { status: 500 });
     }

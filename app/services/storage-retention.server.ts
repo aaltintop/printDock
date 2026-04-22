@@ -228,6 +228,7 @@ async function purgeShopFirestore(shopDomain: string): Promise<void> {
     await billingPlanRef.delete();
   }
 
+  await deleteCollectionInBatches(shopRef.collection("compliance_data_requests"));
   await deleteCollectionInBatches(shopRef.collection("productCollectionCache"));
 
   const shopSnap = await shopRef.get();
@@ -268,7 +269,106 @@ async function purgeShopFirestore(shopDomain: string): Promise<void> {
 export async function purgeShopStorageAndFirestore(shopDomain: string): Promise<{
   storageObjectsDeleted: number;
 }> {
-  const storageObjectsDeleted = await deleteStorageByPrefix(uploadPrefix(shopDomain));
+  const uploadDeleted = await deleteStorageByPrefix(uploadPrefix(shopDomain));
+  const complianceDeleted = await deleteStorageByPrefix(`compliance/${shopDomain}/`);
   await purgeShopFirestore(shopDomain);
+  return { storageObjectsDeleted: uploadDeleted + complianceDeleted };
+}
+
+const FIRESTORE_IN_QUERY_LIMIT = 30;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function storagePathsFromJobRaw(shopDomain: string, raw: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  if (isRecord(raw.assetSnapshot)) {
+    const p = String(raw.assetSnapshot.storagePath ?? "").trim();
+    if (p && isSafeStoragePath(p, shopDomain)) paths.push(p);
+  }
+  const legacy = raw.legacySessionUploadPath;
+  if (typeof legacy === "string" && legacy.trim() && isSafeStoragePath(legacy.trim(), shopDomain)) {
+    paths.push(legacy.trim());
+  }
+  return paths;
+}
+
+async function fullyDeleteOrderJobDocument(
+  shopDomain: string,
+  jobId: string,
+  raw: Record<string, unknown>,
+): Promise<void> {
+  for (const path of storagePathsFromJobRaw(shopDomain, raw)) {
+    await deleteFile(path);
+  }
+  await deleteCollectionInBatches(jobAuditCollection(shopDomain, jobId));
+  await deleteCollectionInBatches(reuploadRequestsCollection(shopDomain, jobId));
+
+  const nestedRef = jobsCollection(shopDomain).doc(jobId);
+  const legacyRef = db.collection("jobs").doc(jobId);
+  const [nestedSnap, legacySnap] = await Promise.all([nestedRef.get(), legacyRef.get()]);
+  if (nestedSnap.exists) await nestedRef.delete();
+  if (legacySnap.exists) await legacyRef.delete();
+}
+
+/**
+ * Deletes PrintDock order jobs (and linked storage) for the given Shopify order IDs.
+ * Used for `customers/redact` compliance webhooks.
+ */
+export async function redactPrintdockJobsForOrderIds(
+  shopDomain: string,
+  orderIds: readonly number[],
+): Promise<{ jobsRemoved: number }> {
+  const unique = [...new Set(orderIds.map((id) => String(id)))].filter(Boolean);
+  let jobsRemoved = 0;
+
+  for (let i = 0; i < unique.length; i += FIRESTORE_IN_QUERY_LIMIT) {
+    const chunk = unique.slice(i, i + FIRESTORE_IN_QUERY_LIMIT);
+
+    const nestedSnap = await jobsCollection(shopDomain).where("shopifyOrderId", "in", chunk).get();
+    const seenIds = new Set<string>();
+    for (const doc of nestedSnap.docs) {
+      seenIds.add(doc.id);
+      await fullyDeleteOrderJobDocument(shopDomain, doc.id, doc.data() as Record<string, unknown>);
+      jobsRemoved++;
+    }
+
+    for (const oid of chunk) {
+      const legacySnap = await db
+        .collection("jobs")
+        .where("shopDomain", "==", shopDomain)
+        .where("shopifyOrderId", "==", oid)
+        .get();
+      for (const doc of legacySnap.docs) {
+        if (seenIds.has(doc.id)) continue;
+        seenIds.add(doc.id);
+        await fullyDeleteOrderJobDocument(shopDomain, doc.id, doc.data() as Record<string, unknown>);
+        jobsRemoved++;
+      }
+    }
+  }
+
+  return { jobsRemoved };
+}
+
+async function deleteShopifySessionsForShop(shopDomain: string): Promise<void> {
+  let snapshot = await db.collection("shopify_sessions").where("shop", "==", shopDomain).limit(400).get();
+  while (!snapshot.empty) {
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    snapshot = await db.collection("shopify_sessions").where("shop", "==", shopDomain).limit(400).get();
+  }
+}
+
+/**
+ * Full shop purge plus removal of offline token rows (used on uninstall and `shop/redact`).
+ */
+export async function purgeShopStorageFirestoreAndSessions(shopDomain: string): Promise<{
+  storageObjectsDeleted: number;
+}> {
+  const { storageObjectsDeleted } = await purgeShopStorageAndFirestore(shopDomain);
+  await deleteShopifySessionsForShop(shopDomain);
   return { storageObjectsDeleted };
 }

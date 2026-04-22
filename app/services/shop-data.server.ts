@@ -628,6 +628,46 @@ export async function listOrderJobs(shopDomain: string): Promise<OrderJob[]> {
   return legacySnapshot.docs.map((doc) => normalizeJob(doc.id, shopDomain, doc.data()));
 }
 
+const SHOPIFY_ORDER_ID_IN_QUERY_LIMIT = 30;
+
+/**
+ * Order jobs whose `shopifyOrderId` matches any of the given Shopify order IDs (REST numeric ids as strings).
+ */
+export async function listOrderJobsByShopifyOrderIds(
+  shopDomain: string,
+  orderIds: readonly number[],
+): Promise<OrderJob[]> {
+  const unique = [...new Set(orderIds.map((id) => String(id)))].filter(Boolean);
+  const jobs: OrderJob[] = [];
+  const seenIds = new Set<string>();
+
+  for (let i = 0; i < unique.length; i += SHOPIFY_ORDER_ID_IN_QUERY_LIMIT) {
+    const chunk = unique.slice(i, i + SHOPIFY_ORDER_ID_IN_QUERY_LIMIT);
+
+    const nestedSnap = await jobsCollection(shopDomain).where("shopifyOrderId", "in", chunk).get();
+    for (const doc of nestedSnap.docs) {
+      if (seenIds.has(doc.id)) continue;
+      seenIds.add(doc.id);
+      jobs.push(normalizeJob(doc.id, shopDomain, doc.data()));
+    }
+
+    for (const oid of chunk) {
+      const legacySnap = await db
+        .collection("jobs")
+        .where("shopDomain", "==", shopDomain)
+        .where("shopifyOrderId", "==", oid)
+        .get();
+      for (const doc of legacySnap.docs) {
+        if (seenIds.has(doc.id)) continue;
+        seenIds.add(doc.id);
+        jobs.push(normalizeJob(doc.id, shopDomain, doc.data()));
+      }
+    }
+  }
+
+  return jobs;
+}
+
 export async function findJobByLegacySessionUploadPath(
   shopDomain: string,
   legacyPath: string,

@@ -106,3 +106,18 @@ export async function copyFile(sourcePath: string, targetPath: string): Promise<
   const targetFile = bucket.file(targetPath);
   await sourceFile.copy(targetFile);
 }
+
+/** Write a UTF-8 JSON (or text) object to Storage — used for compliance exports. */
+export async function saveTextObject(
+  storagePath: string,
+  body: string,
+  contentType = "application/json; charset=utf-8",
+): Promise<void> {
+  const bucket = storage.bucket();
+  const file = bucket.file(storagePath);
+  await file.save(Buffer.from(body, "utf8"), {
+    contentType,
+    resumable: false,
+    metadata: { cacheControl: "private, max-age=0, no-transform" },
+  });
+}

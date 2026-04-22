@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { isRecognizedSubscriptionName, planCodeFromSubscriptionName } from "../config/plans";
 import { authenticate } from "../shopify.server";
+import { rethrowIfShopifyWebhookResponse } from "../lib/webhook-action.server";
 import { saveBillingPlan, updateShopPlan } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
@@ -103,6 +104,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       log.event("webhook_processed", { topic: "APP_SUBSCRIPTIONS_UPDATE", shopDomain: shop });
       return new Response("OK", { status: 200 });
     } catch (err) {
+      rethrowIfShopifyWebhookResponse(err);
       log.error("webhook_app_subscriptions_update_failed", err, {});
       return new Response("Error", { status: 500 });
     }
