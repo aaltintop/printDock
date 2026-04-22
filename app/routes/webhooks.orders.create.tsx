@@ -1,5 +1,4 @@
 import type { ActionFunctionArgs } from "react-router";
-import { processBillableOrder } from "../services/billing.server";
 import { authenticate } from "../shopify.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 import {
@@ -249,9 +248,6 @@ export async function action({ request }: ActionFunctionArgs) {
       status: "converted",
     });
   }
-
-      // Process billing
-      await processBillableOrder(shopDomain, order);
 
       log.event("webhook_processed", { topic: "ORDERS_CREATE", shopDomain });
       return new Response("OK", { status: 200 });

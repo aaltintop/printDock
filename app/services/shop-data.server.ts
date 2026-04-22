@@ -3,7 +3,11 @@ import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
 import { unauthenticated } from "../shopify.server";
 import type { PlanCode } from "../config/plans";
-import { migratePlanCode, planCodeFromSubscriptionName } from "../config/plans";
+import {
+  isRecognizedSubscriptionName,
+  migratePlanCode,
+  planCodeFromSubscriptionName,
+} from "../config/plans";
 import type {
   AppSettings,
   BillingPlan,
@@ -40,16 +44,8 @@ export const DEFAULT_BILLING_PLAN: BillingPlan = {
   planCode: "free",
   status: "trial",
   subscriptionId: null,
-  usageThisMonth: 0,
-  usageMonthKey: "1970-01",
   updatedAt: new Date(0).toISOString(),
 };
-
-export function currentUsageMonthKey(date = new Date()): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
-}
 
 function toIsoDate(value: unknown, fallback = new Date().toISOString()): string {
   if (!value) return fallback;
@@ -273,10 +269,6 @@ export function sessionAssetsCollection(shopDomain: string, sessionToken: string
 
 export function jobsCollection(shopDomain: string) {
   return shopDoc(shopDomain).collection("jobs");
-}
-
-export function billableLinesCollection(shopDomain: string) {
-  return shopDoc(shopDomain).collection("billableLines");
 }
 
 export function jobAuditCollection(shopDomain: string, jobId: string) {
@@ -772,20 +764,9 @@ export async function getBillingPlan(shopDomain: string): Promise<BillingPlan> {
 
 export async function getEffectiveBillingPlan(shopDomain: string): Promise<BillingPlan> {
   const billingPlan = await getBillingPlan(shopDomain);
-  const monthKey = currentUsageMonthKey();
-  if (billingPlan.usageMonthKey === monthKey) {
-    return billingPlan;
-  }
-
-  const resetPlan = {
-    ...billingPlan,
-    usageMonthKey: monthKey,
-    usageThisMonth: 0,
-  };
-  await saveBillingPlan(shopDomain, resetPlan);
   return {
     ...DEFAULT_BILLING_PLAN,
-    ...resetPlan,
+    ...billingPlan,
   };
 }
 
@@ -817,7 +798,11 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
     const subscriptionId =
       activeSub.id != null && String(activeSub.id).trim() !== "" ? String(activeSub.id) : null;
 
-    if (planCode === "free" && subscriptionName.trim().length > 0) {
+    if (
+      planCode === "free" &&
+      subscriptionName.trim().length > 0 &&
+      !isRecognizedSubscriptionName(subscriptionName)
+    ) {
       log.warn(
         "subscription_name_unrecognized",
         `No plan mapping for subscription name: ${subscriptionName}`,
@@ -868,20 +853,6 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
   }
 }
 
-export async function incrementBillingUsage(shopDomain: string, incrementBy = 1): Promise<BillingPlan> {
-  const plan = await getEffectiveBillingPlan(shopDomain);
-  const nextUsage = Math.max(0, Number(plan.usageThisMonth || 0) + incrementBy);
-  const nextPlan = {
-    ...plan,
-    usageThisMonth: nextUsage,
-  };
-  await saveBillingPlan(shopDomain, nextPlan);
-  return {
-    ...DEFAULT_BILLING_PLAN,
-    ...nextPlan,
-  };
-}
-
 export async function saveBillingPlan(shopDomain: string, plan: Partial<BillingPlan>): Promise<void> {
   await shopDoc(shopDomain).collection("billing").doc("plan").set(
     {
@@ -914,6 +885,46 @@ export async function saveAppSettings(shopDomain: string, settings: Partial<AppS
   );
 }
 
+/** Assets that still occupy storage (not purged by retention). */
+export function isBillableStorageAsset(asset: UploadAsset): boolean {
+  if (!asset || asset.storageExpired === true) return false;
+  const path = String(asset.storagePath ?? "").trim();
+  if (!path) return false;
+  const n = Number(asset.sizeBytes);
+  return Number.isFinite(n) && n > 0;
+}
+
+function billableAssetsForSession(session: UploadSession): UploadAsset[] {
+  const list =
+    session.assets.length > 0
+      ? session.assets
+      : session.asset
+        ? [session.asset]
+        : [];
+  return list.filter(isBillableStorageAsset);
+}
+
+/** Bytes that will be freed when replacing this storage path (confirm path). */
+export function billableBytesForStoragePath(session: UploadSession, path: string): number {
+  return billableAssetsForSession(session)
+    .filter((a) => a.storagePath === path)
+    .reduce((s, a) => s + Number(a.sizeBytes), 0);
+}
+
+/** Sum billable bytes across sessions (same rules as dashboard storage). */
+export function sumBillableStorageBytesFromSessions(sessions: UploadSession[]): number {
+  return sessions.reduce(
+    (sum, session) =>
+      sum + billableAssetsForSession(session).reduce((a, x) => a + Number(x.sizeBytes), 0),
+    0,
+  );
+}
+
+export async function getShopStorageUsageBytes(shopDomain: string): Promise<number> {
+  const sessions = await listUploadSessions(shopDomain);
+  return sumBillableStorageBytesFromSessions(sessions);
+}
+
 export async function computeDashboardStats(shopDomain: string): Promise<DashboardStats> {
   const [sessions, jobs] = await Promise.all([
     listUploadSessions(shopDomain),
@@ -922,14 +933,7 @@ export async function computeDashboardStats(shopDomain: string): Promise<Dashboa
 
   const blockedUploads = sessions.filter((session) => session.status === "blocked").length;
   const convertedSessions = sessions.filter((session) => session.status === "converted").length;
-  const storageUsedBytes = sessions.reduce((sum, session) => {
-    return (
-      sum +
-      session.assets.reduce((assetSum, asset) => {
-        return assetSum + Number(asset.sizeBytes || 0);
-      }, 0)
-    );
-  }, 0);
+  const storageUsedBytes = sumBillableStorageBytesFromSessions(sessions);
 
   return {
     totalUploads: sessions.length,

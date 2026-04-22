@@ -57,8 +57,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
           },
           billingPlan: {
             planCode: billingPlan.planCode,
-            usageThisMonth: billingPlan.usageThisMonth,
-            maxOrdersPerMonth: planLimits.maxOrdersPerMonth,
           },
           planLimits: planLimitsResponse,
         });
@@ -87,8 +85,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         },
         billingPlan: {
           planCode: billingPlan.planCode,
-          usageThisMonth: billingPlan.usageThisMonth,
-          maxOrdersPerMonth: planLimits.maxOrdersPerMonth,
         },
         planLimits: planLimitsResponse,
       });

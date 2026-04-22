@@ -18,6 +18,11 @@ set -euo pipefail
 # - Uses Secret Manager secrets `shopify-api-key` and `shopify-api-secret`
 # - If secrets do not exist, creates them from SHOPIFY_API_KEY / SHOPIFY_API_SECRET env vars.
 # - If secrets exist and env vars are set, rotates by adding a new secret version.
+#
+# After deploy, optional interactive next steps (stdin/stdout must be a TTY):
+# - Offer to patch shopify.app.toml (application_url, [auth].redirect_urls, [app_proxy].url)
+# - Offer to run: shopify app deploy
+# Set DEPLOY_NON_INTERACTIVE=1 (or run with piped/non-TTY stdin) to skip prompts and only print hints.
 
 SECRET_API_KEY_NAME="${SECRET_API_KEY_NAME:-shopify-api-key}"
 SECRET_API_SECRET_NAME="${SECRET_API_SECRET_NAME:-shopify-api-secret}"
@@ -84,6 +89,46 @@ create_or_rotate_secret() {
     echo "Creating secret: $secret_name"
     printf "%s" "$secret_value" | gcloud secrets create "$secret_name" --data-file=-
   fi
+}
+
+is_interactive_shell() {
+  if [[ -n "${DEPLOY_NON_INTERACTIVE:-}" ]]; then
+    return 1
+  fi
+  [[ -t 0 ]] && [[ -t 1 ]]
+}
+
+prompt_yes() {
+  local prompt="$1"
+  local reply
+  read -r -p "$prompt [y/N] " reply || return 1
+  [[ "$reply" =~ ^[yY]([eE][sS])?$ ]]
+}
+
+# Updates shopify.app.toml to match Cloud Run's public URL (requires perl).
+patch_shopify_app_toml() {
+  local base_url="${1:?}"
+  local toml="$REPO_ROOT/shopify.app.toml"
+  local auth_url="${base_url}/api/auth"
+
+  if [[ ! -f "$toml" ]]; then
+    echo "Error: missing $toml"
+    return 1
+  fi
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "Error: perl not found; install perl or update shopify.app.toml manually."
+    return 1
+  fi
+
+  SHOPIFY_PATCH_BASE_URL="$base_url" SHOPIFY_PATCH_AUTH_URL="$auth_url" perl -i -pe '
+    if (/^\[app_proxy\]/) { $ap = 1 }
+    elsif (/^\[/ && !/^\[app_proxy\]/) { $ap = 0 }
+    elsif (/^application_url = /) { s|^application_url = ".*"|application_url = "$ENV{SHOPIFY_PATCH_BASE_URL}"| }
+    elsif (/^redirect_urls = /) { s|^redirect_urls = \[ ".*" \]|redirect_urls = [ "$ENV{SHOPIFY_PATCH_AUTH_URL}" ]| }
+    elsif ($ap && /^url = /) { s|^url = ".*"|url = "$ENV{SHOPIFY_PATCH_BASE_URL}"| }
+  ' -- "$toml"
+
+  echo "Patched $toml (application_url, redirect_urls, [app_proxy].url)."
 }
 
 deploy_base() {
@@ -172,3 +217,22 @@ Next steps:
 2) Run: shopify app deploy
 3) Reinstall app on target store if URL changed.
 EOF
+
+if is_interactive_shell; then
+  echo ""
+  if prompt_yes "Patch shopify.app.toml to the Final SHOPIFY_APP_URL above?"; then
+    patch_shopify_app_toml "$SHOPIFY_APP_URL" || true
+  fi
+  if prompt_yes "Run shopify app deploy now (pushes TOML + extensions to Shopify)?"; then
+    if command -v shopify >/dev/null 2>&1; then
+      (cd "$REPO_ROOT" && shopify app deploy) || echo "shopify app deploy exited non-zero; fix errors and re-run."
+    else
+      echo "shopify CLI not found in PATH; run: shopify app deploy"
+    fi
+  fi
+  echo ""
+  echo "Reminder: if the app URL changed for a store, merchants may need to re-open or reinstall the app."
+else
+  echo ""
+  echo "(Non-interactive session: skipped prompts. Use a TTY without DEPLOY_NON_INTERACTIVE, or patch shopify.app.toml / run shopify app deploy yourself.)"
+fi

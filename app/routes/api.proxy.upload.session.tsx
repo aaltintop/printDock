@@ -4,12 +4,18 @@ import { z } from "zod";
 import { getPresignedUploadUrl } from "../services/storage.server";
 import { authenticate } from "../shopify.server";
 import crypto from "crypto";
-import { getPlan, isWithinOrderLimit } from "../config/plans";
+import {
+  getPlan,
+  isWithinTotalStorage,
+  storageOverageUpgradeReason,
+  suggestUpgradeFor,
+} from "../config/plans";
 import {
   createCollectionIdResolver,
   createUploadSession,
   getActiveFieldForProduct,
   getEffectiveBillingPlan,
+  getShopStorageUsageBytes,
   getUploadField,
   getUploadSession,
   updateUploadSession,
@@ -24,6 +30,7 @@ const schema = z.object({
   sessionToken: z.string().optional(),
   fileName: z.string(),
   mimeType: z.string(),
+  sizeBytes: z.number().int().min(1),
 });
 
 const PLAN_RANK: Record<string, number> = {
@@ -71,6 +78,7 @@ async function handleUploadSessionAction(request: Request) {
     fieldId,
     fileName,
     mimeType,
+    sizeBytes: incomingBytes,
     sessionToken: existingSessionToken,
   } = parsed.data;
   const normalizedVariantId = variantId ?? "";
@@ -109,8 +117,27 @@ async function handleUploadSessionAction(request: Request) {
   const planCode = billingPlan.planCode;
   const planLimits = getPlan(planCode);
 
-  if (!isWithinOrderLimit(planCode, billingPlan.usageThisMonth)) {
-    return data({ error: "Monthly order limit reached" }, { status: 403 });
+  const currentStorageBytes = await getShopStorageUsageBytes(shopDomain);
+  if (!isWithinTotalStorage(planCode, currentStorageBytes, incomingBytes)) {
+    const reason = storageOverageUpgradeReason(planCode);
+    log.event("upload_blocked_total_storage", {
+      shopDomain,
+      planCode,
+      currentBytes: currentStorageBytes,
+      maxBytes: planLimits.maxTotalStorageBytes,
+      requestedBytes: incomingBytes,
+      fieldId: fieldId ?? "",
+    });
+    return data(
+      {
+        error: "storage_cap_exceeded",
+        message: "Storage limit reached for this shop.",
+        currentBytes: currentStorageBytes,
+        maxBytes: planLimits.maxTotalStorageBytes,
+        suggestedPlan: suggestUpgradeFor(reason),
+      },
+      { status: 402 },
+    );
   }
 
   if (selectedField) {

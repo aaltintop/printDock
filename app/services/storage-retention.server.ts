@@ -4,7 +4,6 @@ import { getPlan } from "../config/plans";
 import type { OrderJob, UploadAsset, UploadSession } from "../types/printdock";
 import { deleteFile, deleteStorageByPrefix } from "./storage.server";
 import {
-  billableLinesCollection,
   fieldsCollection,
   getEffectiveBillingPlan,
   jobAuditCollection,
@@ -222,7 +221,6 @@ async function purgeShopFirestore(shopDomain: string): Promise<void> {
   }
 
   await deleteCollectionInBatches(fieldsCollection(shopDomain));
-  await deleteCollectionInBatches(billableLinesCollection(shopDomain));
 
   const billingPlanRef = shopRef.collection("billing").doc("plan");
   const billingPlanSnap = await billingPlanRef.get();

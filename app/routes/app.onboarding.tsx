@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server";
 import { getPlan } from "../config/plans";
 import { db } from "../firebase.server";
 import {
+  computeDashboardStats,
   getEffectiveBillingPlan,
   listOrderJobs,
   listUploadFields,
@@ -154,11 +155,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ? `https://${shopDomain}/admin/themes/${themeId.replace("gid://shopify/OnlineStoreTheme/", "")}/editor?context=apps`
     : `https://${shopDomain}/admin/themes`;
 
-  const [fields, uploads, jobs, billingPlan] = await Promise.all([
+  const [fields, uploads, jobs, billingPlan, stats] = await Promise.all([
     listUploadFields(shopDomain),
     listUploadSessions(shopDomain),
     listOrderJobs(shopDomain),
     getEffectiveBillingPlan(shopDomain),
+    computeDashboardStats(shopDomain),
   ]);
 
   const setup: SetupState = {
@@ -246,7 +248,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           uploads: uploads.length,
           jobs: jobs.length,
           activePlan: billingPlan.planCode,
-          usage: `${billingPlan.usageThisMonth}/${getPlan(billingPlan.planCode).maxOrdersPerMonth === -1 ? "∞" : getPlan(billingPlan.planCode).maxOrdersPerMonth}`,
+          storageUsedMB: stats.storageUsedMB,
+          storageCapMB:
+            Math.round((getPlan(billingPlan.planCode).maxTotalStorageBytes / (1024 * 1024)) * 100) /
+            100,
         },
       });
     } catch (err) {
@@ -468,7 +473,8 @@ export default function OnboardingPage() {
             </Text>
             <Text as="p" tone="subdued">
               Metrics: fields {metrics.fields}, uploads {metrics.uploads}, order jobs {metrics.jobs},
-              plan {metrics.activePlan}, usage {metrics.usage}
+              plan {metrics.activePlan}, upload storage {metrics.storageUsedMB} / {metrics.storageCapMB}{" "}
+              MB
             </Text>
             <Text as="p" tone="subdued">
               This section shows whether key merchant-facing app areas are ready to use.

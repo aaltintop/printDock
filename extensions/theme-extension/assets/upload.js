@@ -62,6 +62,7 @@
         sessionToken: tokenToUse || undefined,
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
       }),
     });
     const text = await res.text();
@@ -131,15 +132,6 @@
   // ─── FILE UPLOAD ──────────────────────────────────────────────────────
   async function handleFiles(files) {
     if (files.length === 0) return;
-    if (
-      billingPlan &&
-      Number(billingPlan.monthlyUploadsLimit || 0) > 0 &&
-      Number(billingPlan.usageThisMonth || 0) >= Number(billingPlan.monthlyUploadsLimit || 0)
-    ) {
-      showError("Monthly upload limit reached. Please contact the merchant to upgrade plan.");
-      return;
-    }
-
     const slotsLeft = Math.max(fieldConfig.maxFiles - uploadedFiles.length, 0);
     if (slotsLeft <= 0) {
       showError(`Maximum file count reached (${fieldConfig.maxFiles}).`);
@@ -209,6 +201,21 @@
         sessionResult = await fetchUploadSession(file, null);
       }
       if (!sessionResult.ok) {
+        if (
+          sessionResult.status === 402 &&
+          sessionResult.json?.error === "storage_cap_exceeded"
+        ) {
+          console.warn("PrintDock storage cap hit", sessionResult.json);
+          showError(
+            "This shop has reached its upload storage limit. Please contact the merchant to free space or upgrade the plan.",
+          );
+          fileEntry.status = "error";
+          fileEntry.error = "Storage limit reached.";
+          renderFileList();
+          updateCartState();
+          updatePriceDisplay();
+          return;
+        }
         const hint =
           sessionResult.json?.detail ||
           sessionResult.json?.error ||
@@ -249,10 +256,25 @@
           quantity: fileEntry.quantity || 1,
         }),
       });
-      
-      if (!confirmRes.ok) throw new Error("Validation failed");
-      
-      const confirmData = await confirmRes.json();
+
+      const confirmText = await confirmRes.text();
+      let confirmData;
+      try {
+        confirmData = JSON.parse(confirmText);
+      } catch {
+        confirmData = null;
+      }
+
+      if (!confirmRes.ok) {
+        if (confirmRes.status === 402 && confirmData?.error === "storage_cap_exceeded") {
+          console.warn("PrintDock storage cap hit", confirmData);
+          showError(
+            "This shop has reached its upload storage limit. Please contact the merchant to free space or upgrade the plan.",
+          );
+          throw new Error("Storage limit reached.");
+        }
+        throw new Error("Validation failed");
+      }
 
       fileEntry.status = confirmData.blocked ? "blocked" : "success";
       fileEntry.metadata = confirmData.metadata;

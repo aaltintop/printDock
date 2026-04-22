@@ -1,8 +1,8 @@
 # App Store listing pricing and PrintDock billing
 
-**PrintDock today:** Merchants choose plans via **Shopify Managed Pricing** only (the app opens Shopify’s hosted pricing page from **Plans**). The in-app `appSubscriptionCreate` checkout path has been removed. Order-side usage recognition in code (`processBillableOrder`) still runs against the shop’s active subscription when applicable.
+**PrintDock today:** Merchants choose plans via **Shopify Managed Pricing** only (the app opens Shopify’s hosted pricing page from **Plans**). The in-app `appSubscriptionCreate` checkout path has been removed. **There is no in-app usage line or percentage-of-sales billing**—subscriptions are the flat recurring charges defined in the Partner Dashboard.
 
-This document explains how **Shopify Managed Pricing** on your App Store listing relates to billing concepts for PrintDock, including usage-based charges.
+This document explains how **Shopify Managed Pricing** on your App Store listing relates to **feature limits** enforced in code.
 
 ---
 
@@ -21,7 +21,9 @@ Partners Dashboard
   → This opens edit_listing/en
 ```
 
-In the listing editor, open the **Pricing** section. There you define your plans: **name**, **price**, **trial days**, and **plan descriptions**. That configuration becomes the **pricing table** on your public App Store listing (similar to other apps that show tiers such as Basic $9/mo, Basic+ $19/mo, etc.).
+In the listing editor, open the **Pricing** section. There you define your plans: **name**, **price**, **trial days**, and **plan descriptions**. That configuration becomes the **pricing table** on your public App Store listing.
+
+**Annual prices and savings** shown on the listing are **display-only** for merchants; the app does not store or compute yearly amounts in [`app/config/plans.ts`](../app/config/plans.ts). **Trial length** is whatever you set in the listing / Shopify Billing; the app does not implement trial countdown logic.
 
 ---
 
@@ -46,32 +48,40 @@ PrintDock maps Shopify’s recurring subscription **display name** to an interna
 - Optional leading `PrintDock ` prefix is stripped (e.g. `PrintDock Pro` → `Pro`).
 - Optional trailing frequency words are stripped: `Monthly`, `Yearly`, `Annual`, `Annually`, `Per month`, `Per year` (e.g. `Pro Monthly` → `Pro`).
 
-If an **ACTIVE** (or **ACCEPTED**) subscription’s name does not map to a paid plan, the app stores `planCode: "free"` and logs **`subscription_name_unrecognized`** (check Cloud Logging / `docs/OBSERVABILITY.md`). Fix the plan title in the Partner Dashboard listing **Pricing** section to match the table above.
+If an **ACTIVE** (or **ACCEPTED**) subscription’s name does not map to a paid plan, the app stores `planCode: "free"` and logs **`subscription_name_unrecognized`** (check Cloud Logging / [`docs/OBSERVABILITY.md`](OBSERVABILITY.md)). Fix the plan title in the Partner Dashboard listing **Pricing** section to match the table above.
 
 **Subscription statuses:** besides **ACTIVE** and **PENDING**, the webhook treats **CANCELLED**, **DECLINED**, **EXPIRED**, **FROZEN**, and **ON_HOLD** as ended and sets the shop to **free** / **inactive**. Unhandled statuses are logged as **`subscription_update_unhandled_status`** without changing Firestore.
 
 ---
 
-## Managed Pricing vs Billing API (critical for PrintDock)
+## Plan limits (single source of truth: `plans.ts`)
 
-**Managed Pricing in the listing editor only supports flat recurring plans.** It does **not** support a **usage** component (for example, a percentage of uploader-driven sales).
+All enforcement reads from [`app/config/plans.ts`](../app/config/plans.ts). Approximate caps:
 
-For usage-based billing you must use the **Billing API** in your app code—for example `appSubscriptionCreate` with a **usage** line item alongside the recurring charge.
+| `planCode` | Max file (per upload) | Upload fields | File retention | Total upload storage (shop cap) |
+|------------|------------------------|---------------|----------------|----------------------------------|
+| `free`     | 50 MB                  | 2             | 7 days         | 500 MB                           |
+| `starter`  | 300 MB                 | unlimited     | 7 days         | 15 GB                            |
+| `pro`      | 1 GB                   | unlimited     | 30 days        | 30 GB                            |
+| `business` | 5 GB                   | unlimited     | 30 days        | 75 GB                            |
+
+**Orders:** there is **no** per-month order cap in the app; all plans can process orders without a monthly upload/order counter.
+
+**Total storage:** the app sums **billable** bytes from upload session assets (skips expired / purged assets—see `getShopStorageUsageBytes` in [`app/services/shop-data.server.ts`](../app/services/shop-data.server.ts)). New uploads that would exceed `maxTotalStorageBytes` get **402** `storage_cap_exceeded` from [`app/routes/api.proxy.upload.session.tsx`](../app/routes/api.proxy.upload.session.tsx) and [`app/routes/api.proxy.upload.confirm.tsx`](../app/routes/api.proxy.upload.confirm.tsx).
+
+**Feature flags** (`advancedValidation`, `fileRenaming`, `dynamicPricing`): see `PLANS` in code—Free locks advanced validation, renaming, and dynamic pricing; Starter unlocks validation + renaming; Pro/Business unlock dynamic pricing.
 
 ---
 
-## How this applies to PrintDock
+## Managed Pricing vs Billing API (PrintDock)
 
-| Surface | Role |
-|--------|------|
-| **Listing editor — Pricing** | Defines the **plan names and base prices** merchants see on the App Store. Supports **display and discovery**. |
-| **Billing API in the app** | **Creates the actual subscription** when a merchant installs or selects a plan, including both the **base fee** and any **usage** component (e.g. percentage of uploader sales). |
+**Managed Pricing** (listing editor) defines what merchants subscribe to on Shopify. **PrintDock does not create subscriptions via the Billing API** in production; plan changes happen on Shopify’s hosted pricing page.
 
-**Both are needed:** the listing aligns what merchants expect when they discover the app; the code implements the real subscription and usage charges.
+The older pattern of **usage line items** (`appSubscriptionCreate` + usage charges) is **not** used by this app today. If you add usage-based billing in the future, that would require a **manual** pricing app in Partners and new server-side charge logic—not Managed Pricing alone.
 
 ---
 
 ## Summary
 
-- Use the Partner Dashboard listing **Pricing** section for **recurring plan presentation** on the App Store.
-- Implement **usage** (and the exact charge structure) with the **Billing API** in code—Managed Pricing in the listing cannot replace that for usage-based revenue.
+- Use the Partner Dashboard listing **Pricing** section for **plan names and recurring charges**; keep names aligned with `PLAN_SUBSCRIPTION_NAMES`.
+- Enforced limits (file size, fields, retention, total storage, features) live only in **`app/config/plans.ts`** and related routes—do not hardcode limits elsewhere.

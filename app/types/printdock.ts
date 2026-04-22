@@ -172,8 +172,6 @@ export interface BillingPlan {
   planCode: import("../config/plans").PlanCode;
   status: "active" | "inactive" | "trial";
   subscriptionId: string | null;
-  usageThisMonth: number;
-  usageMonthKey: string;
   updatedAt: string;
 }
 

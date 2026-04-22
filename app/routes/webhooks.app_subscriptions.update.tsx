@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs } from "react-router";
-import { planCodeFromSubscriptionName } from "../config/plans";
+import { isRecognizedSubscriptionName, planCodeFromSubscriptionName } from "../config/plans";
 import { authenticate } from "../shopify.server";
 import { saveBillingPlan, updateShopPlan } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
@@ -58,7 +58,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const planCode = planCodeFromSubscriptionName(subscriptionName);
 
       if (status === "ACTIVE" || status === "ACCEPTED") {
-        if (planCode === "free" && subscriptionName.trim().length > 0) {
+        if (
+          planCode === "free" &&
+          subscriptionName.trim().length > 0 &&
+          !isRecognizedSubscriptionName(subscriptionName)
+        ) {
           log.warn(
             "subscription_name_unrecognized",
             `No plan mapping for subscription name: ${subscriptionName}`,
@@ -72,7 +76,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           subscriptionId,
         });
       } else if (status === "PENDING") {
-        if (planCode === "free" && subscriptionName.trim().length > 0) {
+        if (
+          planCode === "free" &&
+          subscriptionName.trim().length > 0 &&
+          !isRecognizedSubscriptionName(subscriptionName)
+        ) {
           log.warn(
             "subscription_name_unrecognized",
             `No plan mapping for subscription name: ${subscriptionName}`,

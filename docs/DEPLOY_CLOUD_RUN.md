@@ -209,6 +209,23 @@ eval $(shopify app info --web-env)
 
 > **Note:** The script will automatically create or rotate the `shopify-api-key` and `shopify-api-secret` in Google Secret Manager.
 
+### Post-deploy prompts (interactive only)
+
+After Cloud Run finishes, the script prints **Final SHOPIFY_APP_URL** and the usual manual next steps. If **stdin and stdout are both TTYs** (a normal terminal session) and **`DEPLOY_NON_INTERACTIVE` is not set**, it then asks:
+
+1. Whether to **patch `shopify.app.toml`** so `application_url`, `[auth].redirect_urls`, and `[app_proxy].url` match that final URL (in-place edit via `perl`).
+2. Whether to run **`shopify app deploy`** from the repo root.
+
+Reply with **`y` or `yes`** to run; anything else (including Enter) skips.
+
+| Situation | Behavior |
+|-----------|----------|
+| Local terminal | Prompts appear after deploy |
+| `DEPLOY_NON_INTERACTIVE=1` | Prompts skipped; do Step 7 manually |
+| CI / piped stdin (non-TTY) | Prompts skipped |
+
+If **`perl`** is missing, decline the TOML prompt and edit `shopify.app.toml` by hand (Step 7a). If **`shopify`** is not on `PATH`, decline the deploy prompt and run `shopify app deploy` yourself (Step 7b).
+
 ---
 
 ## Step 6 — Grant Cloud Run Access to Firebase
@@ -252,7 +269,7 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ### 7a — Update `shopify.app.toml`
 
-Open `shopify.app.toml` and replace all references to `example.com` (or your old tunnel URL) with the new Cloud Run service URL output by the script.
+Open `shopify.app.toml` and replace all references to `example.com` (or your old tunnel URL) with the new Cloud Run service URL output by the script — **or** accept the deploy script’s interactive offer to patch these fields automatically (see [Post-deploy prompts](#post-deploy-prompts-interactive-only)).
 
 ```toml
 application_url = "https://printdock-service-xxxx-uc.a.run.app"

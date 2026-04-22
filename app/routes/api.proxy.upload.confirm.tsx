@@ -1,19 +1,26 @@
 import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { z } from "zod";
-import { canUseFeature, getPlan } from "../config/plans";
+import {
+  canUseFeature,
+  getPlan,
+  isWithinTotalStorage,
+  storageOverageUpgradeReason,
+  suggestUpgradeFor,
+} from "../config/plans";
 import { createPrintReadyFileToken } from "../services/file-download-token.server";
 import { getFileBuffer } from "../services/storage.server";
 import { extractMetadata, runValidationRules, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
 import { authenticate } from "../shopify.server";
 import {
+  billableBytesForStoragePath,
   createCollectionIdResolver,
   getActiveFieldForProduct,
   getEffectiveBillingPlan,
+  getShopStorageUsageBytes,
   getUploadField,
   getUploadSession,
-  incrementBillingUsage,
   updateUploadSession,
 } from "../services/shop-data.server";
 import type { UploadAsset } from "../types/printdock";
@@ -70,6 +77,32 @@ export async function action({ request }: ActionFunctionArgs) {
         new Date(sessionData.expiresAt).getTime() < Date.now()
       ) {
         return data({ error: "Session expired" }, { status: 410 });
+      }
+
+      const bytesFreed = billableBytesForStoragePath(sessionData, storagePath);
+      const shopTotalBytes = await getShopStorageUsageBytes(shopDomain);
+      const adjustedBytes = shopTotalBytes - bytesFreed;
+      if (!isWithinTotalStorage(billingPlan.planCode, adjustedBytes, sizeBytes)) {
+        const planLimits = getPlan(billingPlan.planCode);
+        const reason = storageOverageUpgradeReason(billingPlan.planCode);
+        log.event("upload_blocked_total_storage", {
+          shopDomain,
+          planCode: billingPlan.planCode,
+          currentBytes: adjustedBytes,
+          maxBytes: planLimits.maxTotalStorageBytes,
+          requestedBytes: sizeBytes,
+          fieldId: sessionData.fieldId ?? "",
+        });
+        return data(
+          {
+            error: "storage_cap_exceeded",
+            message: "Storage limit reached for this shop.",
+            currentBytes: adjustedBytes,
+            maxBytes: planLimits.maxTotalStorageBytes,
+            suggestedPlan: suggestUpgradeFor(reason),
+          },
+          { status: 402 },
+        );
       }
 
       // Get file from Storage for server-side validation only
@@ -218,7 +251,6 @@ export async function action({ request }: ActionFunctionArgs) {
         assets: updatedAssets,
         status: sessionBlocked ? "blocked" : "success",
       });
-      const usage = await incrementBillingUsage(shopDomain, 1);
 
       const downloadSecret = process.env.SHOPIFY_API_SECRET || "";
       const printReadyToken = createPrintReadyFileToken(
@@ -245,7 +277,6 @@ export async function action({ request }: ActionFunctionArgs) {
           sessionToken,
           storagePath,
           assetsCount: updatedAssets.length,
-          usageThisMonth: usage.usageThisMonth,
         });
       }
 
@@ -258,10 +289,6 @@ export async function action({ request }: ActionFunctionArgs) {
         assetsCount: updatedAssets.length,
         sessionBlocked,
         printReadyFileUrl,
-        usage: {
-          current: usage.usageThisMonth,
-          limit: planLimits.maxOrdersPerMonth,
-        },
       });
     } catch (err) {
       log.error("upload_confirm_failed", err, {});

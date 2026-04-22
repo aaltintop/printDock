@@ -61,6 +61,7 @@ Filter in Cloud Logging: `jsonPayload.event="admin_page_view"`.
 | `plans_redirect_to_shopify` | `{ url }` — `/app/plans` opens Shopify managed pricing |
 | `billing_plan_reconciled` | `{ source: "admin_load", fromPlanCode, toPlanCode, ... }` — Firestore billing/plan synced from Admin API |
 | `upload_session_requested`, `upload_session_failed`, `upload_confirmed`, `upload_blocked`, `upload_failed` | proxy upload flow |
+| `upload_blocked_total_storage` | `{ shopDomain, planCode, currentBytes, maxBytes, requestedBytes, fieldId }` — shop would exceed `maxTotalStorageBytes` |
 | `webhook_received`, `webhook_processed`, `webhook_failed` | webhook topic / shop |
 | `cron_retention_run` | summary counts (`purgedFields`, `deletedStorageObjects`, etc.) |
 | `collection_id_resolve_failed` | `shopDomain`, `productId` (WARN — GraphQL collection resolver) |

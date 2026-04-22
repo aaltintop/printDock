@@ -31,7 +31,15 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
-import { canUseFeature, getPlan, isWithinFieldLimit } from "../config/plans";
+import {
+  canUseFeature,
+  fileSizeUpgradeReason,
+  getPlan,
+  isWithinFieldLimit,
+  merchantUpgradeHint,
+  planDisplayName,
+  suggestUpgradeFor,
+} from "../config/plans";
 import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
 import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
 import {
@@ -223,18 +231,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (id === "new") {
     const allFields = await listUploadFields(session.shop);
     if (!isWithinFieldLimit(planCode, allFields.length)) {
-      return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
+      return data({ error: merchantUpgradeHint("moreUploadFields") }, { status: 402 });
     }
   }
 
   if (pricingEnabled && !canUseFeature(planCode, "dynamicPricing")) {
-    return data({ error: "Dynamic pricing requires a higher plan." }, { status: 402 });
+    return data({ error: merchantUpgradeHint("dynamicPricing") }, { status: 402 });
   }
   if (maxFileMB > maxFileMBFromPlan) {
-    return data(
-      { error: `Your current plan supports up to ${maxFileMBFromPlan}MB per file.` },
-      { status: 402 },
-    );
+    return data({ error: merchantUpgradeHint(fileSizeUpgradeReason(planCode)) }, { status: 402 });
   }
 
   const planAllowsRenaming = canUseFeature(planCode, "fileRenaming");
@@ -611,7 +616,7 @@ export default function FieldEditorPage() {
               title="Field limit reached"
               action={{ content: "View plans", url: "/app/plans" }}
             >
-              Upgrade your plan to add more fields.
+              {merchantUpgradeHint("moreUploadFields")}
             </Banner>
           ) : null}
           {targetOverlapFromEditor.analysis.hasOverlap ? (
@@ -777,7 +782,7 @@ export default function FieldEditorPage() {
                       </p>
                     </Banner>
                     <Button url="/app/plans" variant="primary">
-                      Upgrade plan
+                      Upgrade to {planDisplayName(suggestUpgradeFor("fileRenaming"))}
                     </Button>
                     <TextField
                       label="File rename pattern"
@@ -811,7 +816,7 @@ export default function FieldEditorPage() {
                       </p>
                     </Banner>
                     <Button url="/app/plans" variant="primary">
-                      Upgrade plan
+                      Upgrade to {planDisplayName(suggestUpgradeFor("fileRenaming"))}
                     </Button>
                     <BlockStack gap="200">
                       <Text as="p" tone="subdued">
@@ -935,10 +940,13 @@ export default function FieldEditorPage() {
                   <Banner
                     title="File size exceeds your plan limit"
                     tone="warning"
-                    action={{ content: "Upgrade plan", url: "/app/plans" }}
+                    action={{
+                      content: `Upgrade to ${planDisplayName(suggestUpgradeFor(fileSizeUpgradeReason(planCode)))}`,
+                      url: "/app/plans",
+                    }}
                   >
-                    Your {planCode} plan supports up to {maxFileMBFromPlan}MB per
-                    file. Upgrade to increase this limit.
+                    {merchantUpgradeHint(fileSizeUpgradeReason(planCode))} Your current plan allows up
+                    to {maxFileMBFromPlan}MB per file.
                   </Banner>
                 )}
                 <Checkbox
@@ -996,19 +1004,11 @@ export default function FieldEditorPage() {
                         disabled
                       />
                       <Button url="/app/plans" variant="primary">
-                        Upgrade plan
+                        Upgrade to {planDisplayName(suggestUpgradeFor("dynamicPricing"))}
                       </Button>
                     </InlineStack>
                     <Text as="p" variant="bodyMd">
-                      Per-file and dimension-based rates are on{" "}
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        Pro
-                      </Text>{" "}
-                      and{" "}
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        Business
-                      </Text>
-                      . Upgrade to unlock this section.
+                      {merchantUpgradeHint("dynamicPricing")}
                     </Text>
                   </BlockStack>
                 </Box>
@@ -1231,22 +1231,10 @@ export default function FieldEditorPage() {
                 <Box padding="300" background="bg-surface-secondary" borderRadius="200">
                   <BlockStack gap="300">
                     <Text as="p" variant="bodyMd">
-                      DPI, pixel size, print dimensions, and page-count rules are on{" "}
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        Starter
-                      </Text>
-                      ,{" "}
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        Pro
-                      </Text>
-                      , and{" "}
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        Business
-                      </Text>
-                      . Upgrade to add dimension rules for this field.
+                      {merchantUpgradeHint("advancedValidation")}
                     </Text>
                     <Button url="/app/plans" variant="primary">
-                      Upgrade plan
+                      Upgrade to {planDisplayName(suggestUpgradeFor("advancedValidation"))}
                     </Button>
                   </BlockStack>
                 </Box>

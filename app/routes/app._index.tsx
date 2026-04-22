@@ -8,6 +8,7 @@ import {
   InlineStack,
   Layout,
   Page,
+  ProgressBar,
   SkeletonBodyText,
   SkeletonPage,
   Text,
@@ -38,11 +39,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ]);
 
       const planLimits = getPlan(billingPlan.planCode);
-      const ordersCap = planLimits.maxOrdersPerMonth;
-      const ordersUsageLabel =
-        ordersCap === -1
-          ? `${billingPlan.usageThisMonth} billable orders this month`
-          : `${billingPlan.usageThisMonth} / ${ordersCap} billable orders this month`;
+      const storageCapMB =
+        Math.round((planLimits.maxTotalStorageBytes / (1024 * 1024)) * 100) / 100;
+      const storageUsageLabel = `Upload storage: ${stats.storageUsedMB} / ${storageCapMB} MB`;
 
   const recentUploads = sessions
     .flatMap((uploadSession) => {
@@ -76,7 +75,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           planCode: billingPlan.planCode,
           displayName: planLimits.displayName,
           status: billingPlan.status,
-          ordersUsageLabel,
+          storageUsageLabel,
+          storageUsedMB: stats.storageUsedMB,
+          storageCapMB,
           fileStorageDays: planLimits.fileStorageDays,
         },
       });
@@ -90,6 +91,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function Index() {
   const navigation = useNavigation();
   const { stats, recentUploads, recentOrders, currentPlan } = useLoaderData<typeof loader>();
+
+  const storageProgress =
+    currentPlan.storageCapMB > 0
+      ? Math.min(100, Math.round((currentPlan.storageUsedMB / currentPlan.storageCapMB) * 100))
+      : 0;
+  const storageNearCap = storageProgress >= 90;
 
   const planStatusTone =
     currentPlan.status === "active"
@@ -143,14 +150,15 @@ export default function Index() {
                     <Badge tone={planStatusTone}>{planStatusLabel}</Badge>
                   </InlineStack>
                   <Text as="p" tone="subdued">
-                    {currentPlan.ordersUsageLabel}
+                    {currentPlan.storageUsageLabel}
                   </Text>
+                  <ProgressBar progress={storageProgress} size="small" tone={storageNearCap ? "critical" : "highlight"} />
                   <Text as="p" tone="subdued">
                     Uploaded files kept {currentPlan.fileStorageDays} days on this plan.
                   </Text>
                 </BlockStack>
-                <Button url="/app/plans" variant="secondary">
-                  Manage plan
+                <Button url="/app/plans" variant={storageNearCap ? "primary" : "secondary"}>
+                  {storageNearCap ? "Upgrade plan" : "Manage plan"}
                 </Button>
               </InlineStack>
             </BlockStack>

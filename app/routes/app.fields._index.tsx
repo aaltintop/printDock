@@ -31,7 +31,7 @@ import {
 } from "@shopify/polaris";
 import { MenuHorizontalIcon } from "@shopify/polaris-icons";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { isWithinFieldLimit } from "../config/plans";
+import { isWithinFieldLimit, merchantUpgradeHint } from "../config/plans";
 import { authenticate } from "../shopify.server";
 import {
   getEffectiveBillingPlan,
@@ -129,7 +129,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const billingPlan = await getEffectiveBillingPlan(session.shop);
         const allFields = await listUploadFields(session.shop);
         if (!isWithinFieldLimit(billingPlan.planCode, allFields.length)) {
-          return data({ error: "Upgrade your plan to add more fields." }, { status: 402 });
+          return data({ error: merchantUpgradeHint("moreUploadFields") }, { status: 402 });
         }
 
         const nowIso = new Date().toISOString();
@@ -240,7 +240,7 @@ export default function FieldsIndexPage() {
             title="Field limit reached"
             action={{ content: "View plans", url: "/app/plans" }}
           >
-            Upgrade your plan to add more fields.
+            {merchantUpgradeHint("moreUploadFields")}
           </Banner>
         ) : null}
         {targetOverlapAnalysis.hasOverlap ? (
