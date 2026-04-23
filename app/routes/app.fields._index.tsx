@@ -91,6 +91,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         targetOverlapAnalysis,
       });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_fields_index_loader_failed", err, { path: "/app/fields" });
       throw err;
     }
@@ -158,6 +159,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       log.warn("fields_index_unknown_intent", "Unknown fields index intent", { intent });
       return data({ error: "Unknown action" }, { status: 400 });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_fields_index_action_failed", err, { path: "/app/fields" });
       throw err;
     }

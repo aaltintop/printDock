@@ -59,6 +59,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       const audit = await listOrderJobAuditEvents(session.shop, jobId, 30);
       return data({ job, audit });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_order_detail_loader_failed", err, {
         path: `/app/orders/${params.id || ""}`,
       });
@@ -145,6 +146,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       log.warn("order_detail_unknown_intent", "Unsupported order detail intent", { intent });
       return data({ error: "Unsupported action" }, { status: 400 });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_order_detail_action_failed", err, {
         path: `/app/orders/${params.id || ""}`,
       });

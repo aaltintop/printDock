@@ -37,7 +37,7 @@ api_version = "2026-07"
 scopes = "read_products,read_orders,read_themes"
 
 [auth]
-redirect_urls = [ "https://printdock-service-u6yavvnujq-uc.a.run.app/auth/callback", "https://printdock-service-u6yavvnujq-uc.a.run.app/api/auth/callback", "https://printdock-service-u6yavvnujq-uc.a.run.app/auth/shopify/callback" ]
+redirect_urls = [ "https://printdock-service-u6yavvnujq-uc.a.run.app/auth/callback" ]
 
 [app_proxy]
 url = "https://printdock-service-u6yavvnujq-uc.a.run.app"

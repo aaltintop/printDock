@@ -1,10 +1,23 @@
-# Storage retention and deletion (two layers)
+# Storage retention and deletion (three layers)
 
-Based on the retention cron, uninstall webhook, and Firestore models, there are **two separate deletion mechanisms** that work together.
+Based on the retention cron, uninstall webhook, and Firestore models, there are **three deletion mechanisms** that work together.
 
 ---
 
-## Two-layer deletion system
+## Three-layer deletion system
+
+### Layer 0 — orphan upload sweep (short TTL)
+
+Before normal plan-based retention runs, the cron executes an orphan sweep for sessions that were uploaded but never converted to orders.
+
+- Scope: session statuses `active`, `success`, or `blocked`
+- Condition: `createdAt` older than ~2 hours
+- Action:
+  1. delete each referenced storage object for the session
+  2. delete session asset subcollection docs
+  3. delete the session document itself (nested + legacy)
+
+This keeps abandoned uploads from lingering for days when a shopper uploads a file but never adds the product to cart.
 
 ### Layer 1 — Firebase Storage (actual file bytes)
 
@@ -70,7 +83,7 @@ Without that guard, reported usage can include **bytes for files that were alrea
 
 | Piece | Location |
 |-------|-----------|
-| Retention + `stripExpiredAsset`, `purgeShopFirestore`, `purgeShopStorageAndFirestore` | [`app/services/storage-retention.server.ts`](../app/services/storage-retention.server.ts) |
+| Retention + orphan sweep + `stripExpiredAsset`, `purgeShopFirestore`, `purgeShopStorageAndFirestore` | [`app/services/storage-retention.server.ts`](../app/services/storage-retention.server.ts) |
 | Scheduled HTTP entry | [`app/routes/cron.storage-retention.tsx`](../app/routes/cron.storage-retention.tsx) |
 | Uninstall purge | [`app/routes/webhooks.app.uninstalled.tsx`](../app/routes/webhooks.app.uninstalled.tsx) |
 | Plan retention days | [`app/config/plans.ts`](../app/config/plans.ts) (`fileStorageDays`) |

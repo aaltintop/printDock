@@ -12,7 +12,7 @@ import {
   listUploadSessions,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
-import { detectThemeBlockEnabled } from "../services/app-setup-status.server";
+import { detectCartTransformActive, detectThemeBlockEnabled } from "../services/app-setup-status.server";
 
 type SetupState = {
   themeBlockEnabled: boolean;
@@ -21,6 +21,8 @@ type SetupState = {
   themeVerificationMessage: string | null;
   cartValidationVerified: boolean;
   cartTransformVerified: boolean;
+  cartTransformVerificationUnavailable: boolean;
+  cartTransformVerificationMessage: string | null;
   fieldsConfigured: boolean;
   themeEditorUrl: string;
 };
@@ -34,103 +36,106 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       log.event("admin_page_view", { path: "/app/onboarding" });
 
       const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
-  const shopSettings = shopSettingsDoc.data() ?? {};
-  const fieldsSnapshot = await db
-    .collection("shops")
-    .doc(shopDomain)
-    .collection("fields")
-    .limit(1)
-    .get();
+      const shopSettings = shopSettingsDoc.data() ?? {};
 
-  const {
-    enabled: themeBlockEnabled,
-    themeId,
-    verificationUnavailable,
-    verificationMessage,
-  } = await detectThemeBlockEnabled(admin);
-  const fieldsConfigured = !fieldsSnapshot.empty;
-  const themeEditorUrl = themeId
-    ? `https://${shopDomain}/admin/themes/${themeId.replace("gid://shopify/OnlineStoreTheme/", "")}/editor?context=apps`
-    : `https://${shopDomain}/admin/themes`;
+      const [
+        themeStatus,
+        cartTransformStatus,
+        fields,
+        uploads,
+        jobs,
+        billingPlan,
+        stats,
+      ] = await Promise.all([
+        detectThemeBlockEnabled(admin),
+        detectCartTransformActive(admin),
+        listUploadFields(shopDomain),
+        listUploadSessions(shopDomain),
+        listOrderJobs(shopDomain),
+        getEffectiveBillingPlan(shopDomain),
+        computeDashboardStats(shopDomain),
+      ]);
 
-  const [fields, uploads, jobs, billingPlan, stats] = await Promise.all([
-    listUploadFields(shopDomain),
-    listUploadSessions(shopDomain),
-    listOrderJobs(shopDomain),
-    getEffectiveBillingPlan(shopDomain),
-    computeDashboardStats(shopDomain),
-  ]);
+      const fieldsConfigured = fields.length > 0;
+      const themeEditorUrl = themeStatus.themeId
+        ? `https://${shopDomain}/admin/themes/${themeStatus.themeId.replace("gid://shopify/OnlineStoreTheme/", "")}/editor?context=apps`
+        : `https://${shopDomain}/admin/themes`;
 
-  const setup: SetupState = {
-    themeBlockEnabled,
-    themeBlockVerified: Boolean(shopSettings.themeBlockVerified),
-    themeVerificationUnavailable: verificationUnavailable,
-    themeVerificationMessage: verificationMessage,
-    fieldsConfigured,
-    cartValidationVerified: Boolean(shopSettings.cartValidationVerified),
-    cartTransformVerified: Boolean(shopSettings.cartTransformVerified),
-    themeEditorUrl,
-  };
+      const setup: SetupState = {
+        themeBlockEnabled: themeStatus.enabled,
+        themeBlockVerified: Boolean(shopSettings.themeBlockVerified),
+        themeVerificationUnavailable: themeStatus.verificationUnavailable,
+        themeVerificationMessage: themeStatus.verificationMessage,
+        fieldsConfigured,
+        cartValidationVerified:
+          fields.some((field) => field.isRequired === true) ||
+          Boolean(shopSettings.cartValidationVerified),
+        cartTransformVerified:
+          cartTransformStatus.enabled || Boolean(shopSettings.cartTransformVerified),
+        cartTransformVerificationUnavailable: cartTransformStatus.verificationUnavailable,
+        cartTransformVerificationMessage: cartTransformStatus.verificationMessage,
+        themeEditorUrl,
+      };
 
-  const themeStepVerified =
-    setup.themeVerificationUnavailable || setup.themeBlockEnabled || setup.themeBlockVerified;
+      const themeStepVerified =
+        setup.themeVerificationUnavailable || setup.themeBlockEnabled || setup.themeBlockVerified;
 
-  const setupComplete =
-    themeStepVerified &&
-    setup.fieldsConfigured &&
-    setup.cartValidationVerified &&
-    setup.cartTransformVerified;
+      const setupComplete =
+        themeStepVerified &&
+        setup.fieldsConfigured &&
+        setup.cartValidationVerified &&
+        setup.cartTransformVerified;
 
-  const checks = [
-    {
-      id: "dashboard",
-      label: "Dashboard is active",
-      help: "Your overview page is available with your key store metrics.",
-      pass: true,
-    },
-    {
-      id: "onboarding",
-      label: "Setup wizard completed",
-      help: "Cart validation and dynamic pricing have both been verified.",
-      pass: Boolean(shopSettings.cartValidationVerified && shopSettings.cartTransformVerified),
-    },
-    {
-      id: "fields",
-      label: "Upload rules configured",
-      help: "At least one field exists for your products.",
-      pass: fields.length > 0,
-    },
-    {
-      id: "storefront",
-      label: "Storefront widget is ready",
-      help: "Customers can see and use the upload flow on your storefront.",
-      pass: uploads.length > 0 || fields.length > 0,
-    },
-    {
-      id: "orders",
-      label: "Order management is active",
-      help: "You can manage uploaded files tied to orders.",
-      pass: true,
-    },
-    {
-      id: "plans",
-      label: "Billing plan selected",
-      help: "A billing plan is active for this store.",
-      pass: Boolean(billingPlan.planCode),
-    },
-    {
-      id: "settings",
-      label: "Global settings configured",
-      help: "Core app settings are available and accessible.",
-      pass: true,
-    },
-    {
-      id: "webhooks",
-      label: "Order syncing is active",
-      help: "Order events are syncing to PrintDock for fulfillment workflows.",
-      pass: jobs.length > 0 || uploads.length > 0,
-    },
-  ];
+      const checks = [
+        {
+          id: "dashboard",
+          label: "Dashboard is active",
+          help: "Your overview page is available with your key store metrics.",
+          pass: true,
+        },
+        {
+          id: "onboarding",
+          label: "Setup wizard completed",
+          help: "Cart validation and dynamic pricing have both been verified.",
+          pass: Boolean(setup.cartValidationVerified && setup.cartTransformVerified),
+        },
+        {
+          id: "fields",
+          label: "Upload rules configured",
+          help: "At least one field exists for your products.",
+          pass: fieldsConfigured,
+        },
+        {
+          id: "storefront",
+          label: "Storefront widget is ready",
+          help: "Customers can see and use the upload flow on your storefront.",
+          pass: uploads.length > 0 || fieldsConfigured,
+        },
+        {
+          id: "orders",
+          label: "Order management is active",
+          help: "You can manage uploaded files tied to orders.",
+          pass: true,
+        },
+        {
+          id: "plans",
+          label: "Billing plan selected",
+          help: "A billing plan is active for this store.",
+          pass: Boolean(billingPlan.planCode),
+        },
+        {
+          id: "settings",
+          label: "Global settings configured",
+          help: "Core app settings are available and accessible.",
+          pass: true,
+        },
+        {
+          id: "webhooks",
+          label: "Order syncing is active",
+          help: "Order events are syncing to PrintDock for fulfillment workflows.",
+          pass: jobs.length > 0 || uploads.length > 0,
+        },
+      ];
 
       const passedCount = checks.filter((check) => check.pass).length;
 
@@ -153,6 +158,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
       });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_onboarding_loader_failed", err, { path: "/app/onboarding" });
       throw err;
     }
@@ -191,6 +197,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       return data({ ok: false }, { status: 400 });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_onboarding_action_failed", err, { path: "/app/onboarding" });
       throw err;
     }
@@ -287,11 +294,11 @@ export default function OnboardingPage() {
               <StatusBadge enabled={setup.cartValidationVerified} />
             </InlineStack>
             <Text as="p" tone="subdued">
-              If you require customers to upload a file before checkout, ensure cart validation is
-              active in your Shopify settings.
+              PrintDock verifies this automatically when at least one upload field requires file
+              upload before Add to Cart.
             </Text>
             <Text as="p" tone="subdued">
-              Go to Shopify Settings &gt; Checkout &gt; Checkout rules to verify.
+              You can still mark this step manually for custom storefront flows.
             </Text>
             {!setup.cartValidationVerified ? (
               <fetcher.Form method="post">
@@ -323,6 +330,11 @@ export default function OnboardingPage() {
             <Text as="p" tone="subdued">
               Ensure the PrintDock Cart Transform function is active in your Shopify settings.
             </Text>
+            {setup.cartTransformVerificationUnavailable && setup.cartTransformVerificationMessage ? (
+              <Text as="p" tone="critical">
+                {setup.cartTransformVerificationMessage}
+              </Text>
+            ) : null}
             {!setup.cartTransformVerified ? (
               <fetcher.Form method="post">
                 <input type="hidden" name="intent" value="verify_cart_transform" />

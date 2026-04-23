@@ -103,6 +103,28 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
   };
 }
 
+const DIMENSION_OPTIONS: Array<{ label: string; value: FieldDimensionType }> = [
+  { label: "Width", value: "widthInch" },
+  { label: "Height", value: "heightInch" },
+  { label: "DPI", value: "dpi" },
+];
+
+function allowedDimensionTypesForMethod(
+  unitType: UploadFieldConfig["pricing"]["unitType"],
+): FieldDimensionType[] {
+  if (unitType === "inch_height") {
+    return ["heightInch", "dpi"];
+  }
+  return ["widthInch", "heightInch", "dpi"];
+}
+
+function unitPriceLabelForMethod(unitType: UploadFieldConfig["pricing"]["unitType"]): string {
+  if (unitType === "per_file") return "Price per file";
+  if (unitType === "inch_height") return "Price per inch of height";
+  if (unitType === "inch_square") return "Price per square inch";
+  return "Flat price";
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     try {
@@ -138,6 +160,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         allFields,
       });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_field_editor_loader_failed", err, {
         path: `/app/fields/${params.id || "new"}`,
       });
@@ -306,6 +329,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       });
       return redirect(`/app/fields?toast=field_saved`);
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_field_editor_action_failed", err, {
         path: `/app/fields/${params.id || "new"}`,
       });
@@ -356,10 +380,11 @@ export default function FieldEditorPage() {
         if (field.dimensionRules.length > 0) {
           return field.dimensionRules;
         }
+        const firstAllowedDimension = allowedDimensionTypesForMethod(field.pricing.unitType)[0] ?? "widthInch";
         return [
           {
             id: crypto.randomUUID(),
-            dimensionType: "widthInch" as const,
+            dimensionType: firstAllowedDimension,
             operator: "lte" as const,
             value: 1,
             action: "prevent" as const,
@@ -554,6 +579,14 @@ export default function FieldEditorPage() {
   const hasTargets = targetProducts.length > 0 || targetCollections.length > 0;
   const firstProductHandle = targetProducts[0]?.handle;
   const isSaving = navigation.state === "submitting";
+  const showMinPrice = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
+  const showDpi = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
+  const showPrintWidth = pricingUnitType === "inch_square";
+  const showRounding = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
+  const allowedDimensionTypes = allowedDimensionTypesForMethod(pricingUnitType);
+  const allowedDimensionOptions = DIMENSION_OPTIONS.filter((option) =>
+    allowedDimensionTypes.includes(option.value),
+  );
 
   if (navigation.state === "loading") {
     return (
@@ -1042,6 +1075,9 @@ export default function FieldEditorPage() {
                       "These values are used together with the customer's file metadata (size, dimensions) where applicable."
                     }
                   </Text>
+                  {!showMinPrice ? <input type="hidden" name="minPrice" value={minPrice} /> : null}
+                  {!showDpi ? <input type="hidden" name="dpi" value={dpi} /> : null}
+                  {!showPrintWidth ? <input type="hidden" name="printWidth" value={printWidth} /> : null}
                   <FormLayout>
                     <Select
                       name="pricingUnitType"
@@ -1062,61 +1098,69 @@ export default function FieldEditorPage() {
                       <Box minWidth="200px" width="100%">
                         <TextField
                           name="unitPrice"
-                          label="Rate"
+                          label={unitPriceLabelForMethod(pricingUnitType)}
                           type="number"
                           prefix="$"
                           autoComplete="off"
                           value={unitPrice}
                           onChange={setUnitPrice}
-                          helpText="Base unit for the method above (e.g. per inch or per file)."
+                          helpText="Used by the selected calculation method."
                         />
                       </Box>
-                      <Box minWidth="200px" width="100%">
-                        <TextField
-                          name="minPrice"
-                          label="Floor price"
-                          type="number"
-                          prefix="$"
-                          autoComplete="off"
-                          value={minPrice}
-                          onChange={setMinPrice}
-                          helpText="Minimum fee charged for an upload (0 = no floor)."
-                        />
-                      </Box>
+                      {showMinPrice ? (
+                        <Box minWidth="200px" width="100%">
+                          <TextField
+                            name="minPrice"
+                            label="Floor price"
+                            type="number"
+                            prefix="$"
+                            autoComplete="off"
+                            value={minPrice}
+                            onChange={setMinPrice}
+                            helpText="Minimum fee charged for an upload (0 = no floor)."
+                          />
+                        </Box>
+                      ) : null}
                     </InlineStack>
                     <InlineStack gap="400" align="start" blockAlign="start" wrap>
-                      <Box minWidth="200px" width="100%">
-                        <TextField
-                          name="dpi"
-                          label="Assumed DPI"
-                          type="number"
-                          suffix="DPI"
-                          helpText="Used to convert pixels to physical inches for area/height pricing."
-                          autoComplete="off"
-                          value={dpi}
-                          onChange={setDpi}
-                        />
-                      </Box>
-                      <Box minWidth="200px" width="100%">
-                        <TextField
-                          name="printWidth"
-                          label="Roll / print width"
-                          type="number"
-                          suffix="in"
-                          helpText="Reference width for layout calculations (e.g. wide-format rolls)."
-                          autoComplete="off"
-                          value={printWidth}
-                          onChange={setPrintWidth}
-                        />
-                      </Box>
+                      {showDpi ? (
+                        <Box minWidth="200px" width="100%">
+                          <TextField
+                            name="dpi"
+                            label="Assumed DPI"
+                            type="number"
+                            suffix="DPI"
+                            helpText="Used to convert pixels to physical inches for area/height pricing."
+                            autoComplete="off"
+                            value={dpi}
+                            onChange={setDpi}
+                          />
+                        </Box>
+                      ) : null}
+                      {showPrintWidth ? (
+                        <Box minWidth="200px" width="100%">
+                          <TextField
+                            name="printWidth"
+                            label="Roll / print width"
+                            type="number"
+                            suffix="in"
+                            helpText="Reference width for layout calculations (e.g. wide-format rolls)."
+                            autoComplete="off"
+                            value={printWidth}
+                            onChange={setPrintWidth}
+                          />
+                        </Box>
+                      ) : null}
                     </InlineStack>
                     <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
-                    <Checkbox
-                      label="Round calculated price to a cleaner amount"
-                      checked={roundingEnabled}
-                      onChange={() => setRoundingEnabled((prev) => !prev)}
-                      helpText="Helps avoid long decimal prices on the storefront."
-                    />
+                    {showRounding ? (
+                      <Checkbox
+                        label="Round calculated price to a cleaner amount"
+                        checked={roundingEnabled}
+                        onChange={() => setRoundingEnabled((prev) => !prev)}
+                        helpText="Helps avoid long decimal prices on the storefront."
+                      />
+                    ) : null}
                   </FormLayout>
                 </BlockStack>
               ) : null}
@@ -1144,27 +1188,38 @@ export default function FieldEditorPage() {
                   ) : null}
                   {dimensionRules.map((rule, index) => (
                     <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
+                      {allowedDimensionTypes.includes(rule.dimensionType) ? (
+                        <div style={{ minWidth: 180 }}>
+                          <Select
+                            label="Dimension"
+                            value={rule.dimensionType}
+                            options={allowedDimensionOptions}
+                            onChange={(value) =>
+                              setDimensionRules((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? { ...item, dimensionType: value as FieldDimensionType }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ minWidth: 240 }}>
+                          <TextField
+                            label="Dimension"
+                            autoComplete="off"
+                            disabled
+                            value={
+                              DIMENSION_OPTIONS.find((option) => option.value === rule.dimensionType)
+                                ?.label ?? rule.dimensionType
+                            }
+                            helpText="Not applicable to the current calculation method."
+                          />
+                        </div>
+                      )}
                       <div style={{ minWidth: 180 }}>
-                        <Select
-                          label="Dimension"
-                          value={rule.dimensionType}
-                          options={[
-                            { label: "Width", value: "widthInch" },
-                            { label: "Height", value: "heightInch" },
-                            { label: "DPI", value: "dpi" },
-                          ]}
-                          onChange={(value) =>
-                            setDimensionRules((prev) =>
-                              prev.map((item, itemIndex) =>
-                                itemIndex === index
-                                  ? { ...item, dimensionType: value as FieldDimensionType }
-                                  : item,
-                              ),
-                            )
-                          }
-                        />
-                      </div>
-                      <div style={{ minWidth: 160 }}>
                         <Select
                           label="Rule"
                           value={rule.operator}
@@ -1180,6 +1235,7 @@ export default function FieldEditorPage() {
                               ),
                             )
                           }
+                          disabled={!allowedDimensionTypes.includes(rule.dimensionType)}
                         />
                       </div>
                       <div style={{ minWidth: 120 }}>
@@ -1195,10 +1251,12 @@ export default function FieldEditorPage() {
                               ),
                             )
                           }
+                          disabled={!allowedDimensionTypes.includes(rule.dimensionType)}
                         />
                       </div>
                       <Button
                         tone="critical"
+                        disabled={!allowedDimensionTypes.includes(rule.dimensionType)}
                         onClick={() =>
                           setDimensionRules((prev) =>
                             prev.filter((_, itemIndex) => itemIndex !== index),
@@ -1215,7 +1273,7 @@ export default function FieldEditorPage() {
                         ...prev,
                         {
                           id: crypto.randomUUID(),
-                          dimensionType: "widthInch",
+                          dimensionType: allowedDimensionTypes[0] ?? "widthInch",
                           operator: "gte",
                           value: 1,
                           action: "prevent",

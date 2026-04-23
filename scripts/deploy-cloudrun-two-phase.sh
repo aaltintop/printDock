@@ -109,7 +109,7 @@ prompt_yes() {
 patch_shopify_app_toml() {
   local base_url="${1:?}"
   local toml="$REPO_ROOT/shopify.app.toml"
-  local auth_url="${base_url}/api/auth"
+  local auth_url="${base_url}/auth/callback"
 
   if [[ ! -f "$toml" ]]; then
     echo "Error: missing $toml"
@@ -212,7 +212,7 @@ Two-phase deploy completed.
 Next steps:
 1) Update shopify.app.toml with:
    - application_url = "$SHOPIFY_APP_URL"
-   - [auth] redirect_urls includes "$SHOPIFY_APP_URL/api/auth"
+   - [auth] redirect_urls includes "$SHOPIFY_APP_URL/auth/callback"
    - [app_proxy] url = "$SHOPIFY_APP_URL"
 2) Run: shopify app deploy
 3) Reinstall app on target store if URL changed.

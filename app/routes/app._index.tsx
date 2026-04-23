@@ -82,6 +82,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
       });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_dashboard_loader_failed", err, { path: "/app" });
       throw err;
     }

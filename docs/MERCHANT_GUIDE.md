@@ -44,11 +44,15 @@ Once done, return to the Setup page and the app will detect the block (or you ca
 
 ### Step 2: Cart Validation
 
-Click **Mark as Verified** to confirm that your cart setup is compatible with PrintDock.
+This step is auto-verified when PrintDock finds at least one upload field that enforces required upload before Add to Cart (`isRequired = true`).
+
+If you use a custom storefront flow, you can still click **Mark as Verified** manually.
 
 ### Step 3: Cart Transform (Dynamic Pricing)
 
-If you plan to use upload-based dynamic pricing, the Cart Transform function must be enabled. Click **Mark as Verified** after confirming.
+If you plan to use upload-based dynamic pricing, the Cart Transform function must be enabled.
+
+PrintDock now auto-checks this. If automatic verification is unavailable for your shop, use **Mark as Verified** as a fallback.
 
 ### Step 4: Create your first field
 
@@ -132,6 +136,8 @@ When a customer visits a product page that has PrintDock configured:
    - `_pd_calculated_price` — when positive, the server-calculated line total (used by the Cart Transform function).
    - `_Artwork` — uploaded file name(s), `_View uploads` — link into the app, and optionally `_Print Ready File` for download; see `docs/MERCHANT_FIELDS.md`.
 
+If a customer uploads files but never adds the item to cart, PrintDock removes those non-converted uploads after about 2 hours.
+
 ### Dynamic Pricing at Checkout
 
 If dynamic pricing is enabled and the Cart Transform function is active, the checkout line price is automatically adjusted to match the calculated upload price. This uses Shopify Functions (Cart Transform) and does not require manual price changes.
@@ -209,6 +215,7 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 - **Language:** Default language for storefront content.
 - **Style preset:** Visual style of the upload widget.
 - **Upload retention days:** How long uploaded files are kept in storage.
+  - Non-converted uploads are cleaned separately with a short (~2 hour) orphan sweep.
 - **Default order status:** Initial status for new order jobs.
 - **CSV delimiter:** Character used when exporting order data.
 - **Auto-assignment:** Automatically assign order jobs to a team member based on email domain matching.

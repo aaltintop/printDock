@@ -1,7 +1,10 @@
 import { data } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { db } from "../firebase.server";
-import { runStorageRetentionForShop } from "../services/storage-retention.server";
+import {
+  runStorageRetentionForShop,
+  sweepOrphanUploadSessions,
+} from "../services/storage-retention.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function authorizeCron(request: Request): boolean {
@@ -23,6 +26,8 @@ async function runCron(request: Request) {
     const results: Array<{
       shopDomain: string;
       ok: boolean;
+      orphanSessionsDeleted?: number;
+      orphanBytesDeleted?: number;
       filesDeleted?: number;
       pathsDeleted?: string[];
       jobsUpdated?: number;
@@ -31,16 +36,23 @@ async function runCron(request: Request) {
     }> = [];
 
     let totalFilesDeleted = 0;
+    let totalOrphanSessionsDeleted = 0;
+    let totalOrphanBytesDeleted = 0;
 
     for (const doc of shopsSnap.docs) {
       const shopDomain = doc.id;
       setLogShopDomain(shopDomain);
       try {
+        const orphanReport = await sweepOrphanUploadSessions(shopDomain, { ttlHours: 2 });
         const report = await runStorageRetentionForShop(shopDomain);
         totalFilesDeleted += report.filesDeleted;
+        totalOrphanSessionsDeleted += orphanReport.sessionsDeleted;
+        totalOrphanBytesDeleted += orphanReport.bytesDeleted;
         results.push({
           shopDomain,
           ok: true,
+          orphanSessionsDeleted: orphanReport.sessionsDeleted,
+          orphanBytesDeleted: orphanReport.bytesDeleted,
           filesDeleted: report.filesDeleted,
           pathsDeleted: report.pathsDeleted,
           jobsUpdated: report.jobsUpdated,
@@ -48,6 +60,8 @@ async function runCron(request: Request) {
         });
         log.event("cron_retention_shop_ok", {
           shopDomain,
+          orphanSessionsDeleted: orphanReport.sessionsDeleted,
+          orphanBytesDeleted: orphanReport.bytesDeleted,
           filesDeleted: report.filesDeleted,
           jobsUpdated: report.jobsUpdated,
           sessionsUpdated: report.sessionsUpdated,
@@ -61,12 +75,16 @@ async function runCron(request: Request) {
 
     log.event("cron_retention_run", {
       shopCount: shopsSnap.size,
+      totalOrphanSessionsDeleted,
+      totalOrphanBytesDeleted,
       totalFilesDeleted,
     });
 
     return data({
       ok: true,
       shopCount: shopsSnap.size,
+      totalOrphanSessionsDeleted,
+      totalOrphanBytesDeleted,
       totalFilesDeleted,
       results,
     });

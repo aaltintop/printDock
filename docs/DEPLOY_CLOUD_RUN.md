@@ -275,14 +275,16 @@ Open `shopify.app.toml` and replace all references to `example.com` (or your old
 application_url = "https://printdock-service-xxxx-uc.a.run.app"
 
 [auth]
-redirect_urls = [ "https://printdock-service-xxxx-uc.a.run.app/api/auth" ]
+redirect_urls = [ "https://printdock-service-xxxx-uc.a.run.app/auth/callback" ]
 
 [app_proxy]
 url = "https://printdock-service-xxxx-uc.a.run.app"
 ```
 
-> **`/api/auth` not `/auth/callback`.** This repo uses `/api/auth` as the OAuth
-> redirect path. Using the wrong path here will break app installation.
+> **Use `/auth/callback`.** This repo uses `@shopify/shopify-app-react-router`
+> with `authPathPrefix: "/auth"`, so the library serves the OAuth callback at
+> `/auth/callback`. Using any other path (e.g. `/api/auth`) will break app
+> installation because Shopify will redirect to a path the app does not handle.
 
 ### 7b — Deploy App Configuration to Shopify
 

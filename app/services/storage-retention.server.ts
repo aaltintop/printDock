@@ -28,6 +28,12 @@ export interface StorageRetentionReport {
   sessionsUpdated: number;
 }
 
+export interface OrphanUploadSweepReport {
+  shopDomain: string;
+  sessionsDeleted: number;
+  bytesDeleted: number;
+}
+
 function uploadPrefix(shopDomain: string): string {
   return `uploads/${shopDomain}/`;
 }
@@ -96,6 +102,58 @@ function stripExpiredAsset(asset: UploadAsset): UploadAsset {
     storagePath: "",
     sizeBytes: 0,
     storageExpired: true,
+  };
+}
+
+export async function sweepOrphanUploadSessions(
+  shopDomain: string,
+  options?: { ttlHours?: number },
+): Promise<OrphanUploadSweepReport> {
+  const ttlHours = options?.ttlHours ?? 2;
+  const cutoffMs = Date.now() - Math.max(0, ttlHours) * 60 * 60 * 1000;
+  const sessions = await listUploadSessions(shopDomain);
+  let sessionsDeleted = 0;
+  let bytesDeleted = 0;
+
+  for (const session of sessions) {
+    const eligibleStatus =
+      session.status === "active" ||
+      session.status === "success" ||
+      session.status === "blocked";
+    if (!eligibleStatus) continue;
+    if (parseTimeMs(session.createdAt) >= cutoffMs) continue;
+
+    const deletedPaths = new Set<string>();
+    for (const asset of session.assets) {
+      const path = String(asset.storagePath ?? "").trim();
+      if (!path || deletedPaths.has(path) || !isSafeStoragePath(path, shopDomain)) continue;
+      await deleteFile(path);
+      deletedPaths.add(path);
+      if (Number.isFinite(asset.sizeBytes) && asset.sizeBytes > 0) {
+        bytesDeleted += asset.sizeBytes;
+      }
+    }
+
+    const nestedSessionRef = sessionsCollection(shopDomain).doc(session.id);
+    const nestedSessionSnap = await nestedSessionRef.get();
+    if (nestedSessionSnap.exists) {
+      await deleteCollectionInBatches(sessionAssetsCollection(shopDomain, session.id));
+      await nestedSessionRef.delete();
+    }
+
+    const legacySessionRef = db.collection("sessions").doc(session.id);
+    const legacySessionSnap = await legacySessionRef.get();
+    if (legacySessionSnap.exists) {
+      await legacySessionRef.delete();
+    }
+
+    sessionsDeleted++;
+  }
+
+  return {
+    shopDomain,
+    sessionsDeleted,
+    bytesDeleted,
   };
 }
 

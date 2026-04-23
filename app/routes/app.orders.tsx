@@ -255,6 +255,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         canExportCsv,
       });
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_orders_loader_failed", err, { path: "/app/orders" });
       throw err;
     }
@@ -374,6 +375,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return data({ error: "Failed to generate download link" }, { status: 500 });
       }
     } catch (err) {
+      if (err instanceof Response) throw err;
       log.error("admin_orders_action_failed", err, { path: "/app/orders" });
       throw err;
     }
