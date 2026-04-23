@@ -363,13 +363,6 @@
     return null;
   }
 
-  function getSessionExpiryEpochSeconds() {
-    if (!sessionExpiresAt) return "";
-    const epochMs = Date.parse(sessionExpiresAt);
-    if (!Number.isFinite(epochMs)) return "";
-    return String(Math.floor(epochMs / 1000));
-  }
-
   function getMerchantUploadsLink(sessionId) {
     const shopDomain = root.dataset.shopDomain || "";
     const appHandle = root.dataset.appHandle || "printdock";
@@ -387,12 +380,6 @@
 
     const properties = {
       _uc_session: sessionToken,
-      _pd_session: sessionToken,
-      _pd_asset_count: String(successfulFiles.length),
-      _pd_asset_ids: successfulFiles.map((entry) => entry.assetId || entry.id).join(","),
-      __ucToken: sessionToken,
-      __ucExp: getSessionExpiryEpochSeconds(),
-      "_Upload session ID": sessionToken,
       "_View uploads": getMerchantUploadsLink(sessionToken),
       _Artwork: successfulFiles.map((entry) => entry.name).join(", "),
       _pd_file_quantities: JSON.stringify(
@@ -406,7 +393,6 @@
     if (printUrl) {
       properties["_Print Ready File"] = printUrl;
     }
-    if (fieldConfig.id) properties._pd_field_id = fieldConfig.id;
 
     const calculatedTotal = successfulFiles.reduce((sum, entry) => {
       if (!entry.pricing) return sum;
@@ -416,10 +402,6 @@
     }, 0);
     if (Number.isFinite(calculatedTotal) && calculatedTotal > 0) {
       properties._pd_calculated_price = calculatedTotal.toFixed(2);
-    }
-
-    if (!properties.__ucExp) {
-      delete properties.__ucExp;
     }
 
     return properties;

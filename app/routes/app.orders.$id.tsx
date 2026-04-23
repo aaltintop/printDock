@@ -37,7 +37,7 @@ async function downloadFileWithoutNavigation(downloadUrl: string, fileName: stri
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
-  link.download = fileName || "printdock-file";
+  link.download = fileName || "PrintDock-file";
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -169,7 +169,7 @@ export default function OrderJobDetailPage() {
       const downloadUrl = String(downloadFetcher.data.downloadUrl);
       void downloadFileWithoutNavigation(
         downloadUrl,
-        job.assetSnapshot?.originalName || "printdock-file",
+        job.assetSnapshot?.originalName || "PrintDock-file",
       )
         .then(() => {
           setIsDownloading(false);

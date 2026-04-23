@@ -8,30 +8,27 @@ This document defines the line item properties PrintDock writes so merchants can
 - Fields appear in Shopify Admin order line item details.
 - Contract owner: PrintDock app team.
 
-## Field Dictionary
+## Field Dictionary (current theme)
 
 | Field | Visibility | Example | Purpose | Stability |
 |---|---|---|---|---|
-| `_Print Ready File` | Merchant (underscore) | `https://{shop}.myshopify.com/apps/printdock/api/proxy/upload/file?token=...` | One-tap download of the stored upload via proxy + short-lived Storage URL (`attachment`). | Stable |
+| `_uc_session` | App + support | `8f963f7e-...` | Primary key for webhooks, jobs, and Cart Transform “session present” check. Same UUID merchants can use for support. | Stable |
+| `_Print Ready File` | Merchant (underscore) | `https://{shop}.myshopify.com/apps/printdock/api/proxy/upload/file?token=...` | One-tap download of the stored upload via proxy + short-lived Storage URL (`attachment`). Omitted if no print-ready URL. | Stable |
 | `_View uploads` | Merchant (underscore) | `https://admin.shopify.com/store/{store}/apps/printdock/app/uploads?session={session}` | Direct jump to upload session in PrintDock app. | Stable |
-| `_Upload session ID` | Merchant (underscore) | `8f963f7e-...` | Human-readable session reference for support/debugging. | Stable |
 | `_Artwork` | Merchant (underscore) | `logo-front.png` | Quick visible list of uploaded file names. | Stable |
-| `__ucToken` | Merchant-facing (legacy-compatible) | `8f963f7e-...` | Legacy-style token shown on order for parity with prior workflow. | Stable |
-| `__ucExp` | Merchant-facing (legacy-compatible) | `1775671200` | Session expiry as Unix epoch seconds. | Stable |
-| `_pd_asset_count` | Internal/support | `1` | Count of uploaded assets tied to this line. | Stable |
-| `_pd_asset_ids` | Internal/support | `asset_177567111...` | Asset identifiers for tracing files/jobs. | Stable |
-| `_pd_file_quantities` | Internal/support | `[{\"fileName\":\"logo.png\",\"quantity\":1}]` | Per-file quantity map used by job pipeline. | Stable |
-| `_pd_session` | Internal | `8f963f7e-...` | Session key used by pricing/function flow. | Stable |
-| `_uc_session` | Internal (critical) | `8f963f7e-...` | Primary webhook/billing lookup key. | Stable |
-| `_pd_field_id` | Internal | `field_...` | Field configuration id used during processing. | Stable |
-| `_pd_calculated_price` | Internal | `29.68` | Upload-derived total used by Cart Transform pricing. | Stable |
+| `_pd_file_quantities` | Pipeline | `[{\"fileName\":\"logo.png\",\"quantity\":1}]` | Per-file quantity map for order job creation. | Stable |
+| `_pd_calculated_price` | Cart Transform | `29.68` | Upload-derived line total; Cart Transform reads this and `_uc_session` to apply dynamic pricing. Omitted if calculated total is not positive. | Stable |
+
+## Legacy (older checkouts; may still appear on historical orders)
+
+Some properties were removed from the theme to reduce clutter. Old orders or stale carts may still list: `__ucToken`, `__ucExp`, `"_Upload session ID"`, `_pd_session`, `_pd_asset_count`, `_pd_asset_ids`, `_pd_field_id`.
 
 ## Operational Notes
 
 - If `_View uploads` or `_Print Ready File` is present, merchants can open the app session or download the file from Shopify Admin line items.
 - Download token in `_Print Ready File` is valid for **7 days** (Storage object lifecycle may differ).
 - `_uc_session` must be present for order webhook linkage and billing recognition.
-- `__ucToken`/`__ucExp` exist for merchant familiarity and migration parity.
+- For support, the store domain plus **`_uc_session` UUID** and Shopify order name are usually enough to correlate with app data.
 
 ## Troubleshooting Missing Fields
 

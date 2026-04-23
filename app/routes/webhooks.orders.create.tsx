@@ -109,13 +109,13 @@ export async function action({ request }: ActionFunctionArgs) {
       const hasPrintDockHints = props.some((p: any) =>
         [
           "_pd_session",
-          "_pd_asset_ids",
-          "_pd_asset_count",
-          "Artwork",
+          "__ucToken",
           "_Artwork",
+          "Artwork",
           "_Print Ready File",
           "_View uploads",
-          "__ucToken",
+          "_pd_file_quantities",
+          "_pd_calculated_price",
         ].includes(String(p?.name || "")),
       );
       if (hasPrintDockHints) {

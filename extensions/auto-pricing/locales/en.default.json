@@ -1,4 +1,4 @@
 {
-  "name": "auto-pricing",
-  "description": "auto-pricing"
+  "name": "PrintDock auto pricing",
+  "description": "PrintDock cart transform: applies upload-based line prices at checkout."
 }

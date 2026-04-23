@@ -1,5 +1,14 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
-import { AppProvider as PolarisAppProvider, Button, Card, Frame, Page, TextField } from "@shopify/polaris";
+import {
+  AppProvider as PolarisAppProvider,
+  BlockStack,
+  Button,
+  Card,
+  Frame,
+  Page,
+  Text,
+  TextField,
+} from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
@@ -35,20 +44,23 @@ export default function Auth() {
           <Page title="Log in">
             <Card>
               <Form method="post">
-                <TextField
-                  name="shop"
-                  label="Shop domain"
-                  helpText="example.myshopify.com"
-                  value={shop}
-                  onChange={setShop}
-                  autoComplete="on"
-                  error={errors.shop}
-                />
-                <div style={{ marginTop: 12 }}>
+                <BlockStack gap="400">
+                  <Text as="p" variant="headingLg">
+                    PrintDock
+                  </Text>
+                  <TextField
+                    name="shop"
+                    label="Shop domain"
+                    helpText="example.myshopify.com"
+                    value={shop}
+                    onChange={setShop}
+                    autoComplete="on"
+                    error={errors.shop}
+                  />
                   <Button submit variant="primary">
                     Log in
                   </Button>
-                </div>
+                </BlockStack>
               </Form>
             </Card>
           </Page>

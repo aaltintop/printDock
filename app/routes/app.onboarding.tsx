@@ -12,6 +12,7 @@ import {
   listUploadSessions,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { detectThemeBlockEnabled } from "../services/app-setup-status.server";
 
 type SetupState = {
   themeBlockEnabled: boolean;
@@ -23,109 +24,6 @@ type SetupState = {
   fieldsConfigured: boolean;
   themeEditorUrl: string;
 };
-
-type ThemeNode = {
-  id: string;
-  role: string;
-  files?: {
-    edges?: Array<{
-      node?: {
-        body?: {
-          content?: string;
-        };
-      };
-    }>;
-  };
-};
-
-function isReadThemesScopeError(error: unknown): boolean {
-  const message = String((error as { message?: string })?.message || "");
-  return (
-    message.includes("Access denied for themes field") ||
-    message.includes("`read_themes`") ||
-    message.includes("read_themes")
-  );
-}
-
-async function detectThemeBlockEnabled(
-  admin: any,
-): Promise<{
-  enabled: boolean;
-  themeId: string | null;
-  verificationUnavailable: boolean;
-  verificationMessage: string | null;
-}> {
-  try {
-    const response = await admin.graphql(`
-    #graphql
-    query OnboardingThemeStatus {
-      themes(first: 20) {
-        edges {
-          node {
-            id
-            role
-            files(filenames: ["config/settings_data.json"]) {
-              edges {
-                node {
-                  ... on OnlineStoreThemeFile {
-                    body {
-                      ... on OnlineStoreThemeFileBodyText {
-                        content
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  `);
-
-    const json = await response.json();
-    const themes: ThemeNode[] = json?.data?.themes?.edges?.map((edge: any) => edge.node) ?? [];
-    const mainTheme = themes.find((theme) => theme.role === "MAIN") ?? themes[0];
-    if (!mainTheme) {
-      return {
-        enabled: false,
-        themeId: null,
-        verificationUnavailable: false,
-        verificationMessage: null,
-      };
-    }
-
-    const settingsContent = mainTheme.files?.edges?.[0]?.node?.body?.content ?? "";
-    const enabled =
-      settingsContent.includes("shopify://apps/printdock/blocks/upload/") ||
-      settingsContent.includes("printdock-upload");
-
-    return {
-      enabled,
-      themeId: mainTheme.id,
-      verificationUnavailable: false,
-      verificationMessage: null,
-    };
-  } catch (error) {
-    if (isReadThemesScopeError(error)) {
-      return {
-        enabled: false,
-        themeId: null,
-        verificationUnavailable: true,
-        verificationMessage:
-          "Automatic theme block verification is unavailable. Add `read_themes` scope and reauthorize the app.",
-      };
-    }
-
-    log.error("theme_block_status_check_failed", error, {});
-    return {
-      enabled: false,
-      themeId: null,
-      verificationUnavailable: true,
-      verificationMessage: "Theme block verification failed. Please verify block placement manually.",
-    };
-  }
-}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
@@ -320,7 +218,29 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                1. Theme App Block
+                1. First field
+              </Text>
+              <StatusBadge enabled={setup.fieldsConfigured} />
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Configure which products require file uploads, allowed file types, and pricing rules.
+            </Text>
+            {setup.fieldsConfigured ? (
+              <Text as="p" tone="success">
+                You have configured your first field.
+              </Text>
+            ) : null}
+            <Button url={setup.fieldsConfigured ? "/app/fields" : "/app/fields/new"}>
+              {setup.fieldsConfigured ? "Manage fields" : "Create field"}
+            </Button>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between">
+              <Text as="h2" variant="headingMd">
+                2. Theme App Block
               </Text>
               <StatusBadge enabled={themeStepVerified} />
             </InlineStack>
@@ -362,7 +282,7 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                2. Cart Validation
+                3. Cart Validation
               </Text>
               <StatusBadge enabled={setup.cartValidationVerified} />
             </InlineStack>
@@ -392,7 +312,7 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                3. Cart Transform
+                4. Cart Transform
               </Text>
               <StatusBadge enabled={setup.cartTransformVerified} />
             </InlineStack>
@@ -415,28 +335,6 @@ export default function OnboardingPage() {
                 Dynamic pricing is verified.
               </Text>
             )}
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between">
-              <Text as="h2" variant="headingMd">
-                4. First field
-              </Text>
-              <StatusBadge enabled={setup.fieldsConfigured} />
-            </InlineStack>
-            <Text as="p" tone="subdued">
-              Configure which products require file uploads, allowed file types, and pricing rules.
-            </Text>
-            {setup.fieldsConfigured ? (
-              <Text as="p" tone="success">
-                You have configured your first field.
-              </Text>
-            ) : null}
-            <Button url={setup.fieldsConfigured ? "/app/fields" : "/app/fields/new"}>
-              {setup.fieldsConfigured ? "Manage fields" : "Create field"}
-            </Button>
           </BlockStack>
         </Card>
 

@@ -116,7 +116,7 @@ async function downloadFileWithoutNavigation(downloadUrl: string, fileName: stri
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
-  link.download = fileName || "printdock-file";
+  link.download = fileName || "PrintDock-file";
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -209,7 +209,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="printdock-order-jobs.csv"`,
+        "Content-Disposition": `attachment; filename="PrintDock-order-jobs.csv"`,
       },
     });
   }
@@ -394,7 +394,7 @@ export default function Orders() {
   const [endDateValue, setEndDateValue] = useState(filters.endDate);
   const [downloadingStoragePath, setDownloadingStoragePath] = useState<string | null>(null);
   const [downloadedStoragePath, setDownloadedStoragePath] = useState<string | null>(null);
-  const [downloadingFileName, setDownloadingFileName] = useState<string>("printdock-file");
+  const [downloadingFileName, setDownloadingFileName] = useState<string>("PrintDock-file");
   const [updatingStatusJobId, setUpdatingStatusJobId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -446,7 +446,7 @@ export default function Orders() {
   const handleDownload = (storagePath: string, fileName: string) => {
     setDownloadingStoragePath(storagePath);
     setDownloadedStoragePath(null);
-    setDownloadingFileName(fileName || "printdock-file");
+    setDownloadingFileName(fileName || "PrintDock-file");
     downloadFetcher.submit({ storagePath }, { method: "POST" });
   };
 
@@ -762,7 +762,7 @@ export default function Orders() {
                         onClick={() =>
                           order.asset?.storagePath &&
                           !order.asset?.storageExpired &&
-                          handleDownload(order.asset.storagePath, order.asset?.originalName || "printdock-file")
+                          handleDownload(order.asset.storagePath, order.asset?.originalName || "PrintDock-file")
                         }
                         loading={
                           downloadFetcher.state === "submitting" &&

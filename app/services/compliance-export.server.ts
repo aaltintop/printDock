@@ -63,7 +63,7 @@ export async function createCustomerDataRequestExport(
       customerEmail: customer?.email ?? null,
       customerPhone: customer?.phone != null ? String(customer.phone) : null,
       ordersRequested,
-      app: "printdock",
+      app: "PrintDock",
       schemaVersion: 1,
     },
     orderJobs,

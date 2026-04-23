@@ -6,7 +6,7 @@ query CartTransformRunInput {
       priceAttribute: attribute(key: "_pd_calculated_price") {
         value
       }
-      sessionAttribute: attribute(key: "_pd_session") {
+      sessionAttribute: attribute(key: "_uc_session") {
         value
       }
     }

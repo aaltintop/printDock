@@ -127,11 +127,10 @@ When a customer visits a product page that has PrintDock configured:
 4. The app validates the file server-side (dimensions, DPI, rules) and calculates pricing if enabled.
 5. Validation results and calculated price are displayed to the customer.
 6. If the file passes all rules, the **Add to Cart** button is unblocked.
-7. When added to cart, hidden line item properties are injected:
-   - `_pd_session` — links the cart item to the upload session.
-   - `_pd_calculated_price` — the server-calculated price (used by the Cart Transform function).
-   - `Artwork` — a customer-visible note showing the uploaded file name.
-   - Additional merchant/support fields are documented in `docs/MERCHANT_FIELDS.md`.
+7. When added to cart, line item properties are injected (all visible on the order in Admin):
+   - `_uc_session` — links the cart line to the upload session and powers webhooks and Cart Transform.
+   - `_pd_calculated_price` — when positive, the server-calculated line total (used by the Cart Transform function).
+   - `_Artwork` — uploaded file name(s), `_View uploads` — link into the app, and optionally `_Print Ready File` for download; see `docs/MERCHANT_FIELDS.md`.
 
 ### Dynamic Pricing at Checkout
 

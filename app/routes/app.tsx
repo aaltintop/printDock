@@ -1,5 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Link, Outlet, useLoaderData, useRouteError } from "react-router";
+import { Link, Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider, Frame } from "@shopify/polaris";
@@ -8,6 +8,10 @@ import enTranslations from "@shopify/polaris/locales/en.json";
 import { authenticate } from "../shopify.server";
 import { db } from "../firebase.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import {
+  isAppSetupComplete,
+  isPathExemptFromSetupRedirect,
+} from "../services/app-setup-status.server";
 import {
   getEffectiveBillingPlan,
   reconcileBillingPlanFromShopifySubscriptions,
@@ -19,6 +23,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     setLogShopDomain(session.shop);
     const path = new URL(request.url).pathname;
     log.event("admin_page_view", { path });
+
+    if (session.shop && !isPathExemptFromSetupRedirect(path)) {
+      const setupComplete = await isAppSetupComplete(admin, session.shop);
+      if (!setupComplete) {
+        throw redirect("/app/onboarding");
+      }
+    }
 
     // Query currentAppInstallation for scopes and active subscriptions
     const response = await admin.graphql(`
