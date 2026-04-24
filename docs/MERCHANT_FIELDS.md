@@ -17,7 +17,7 @@ This document defines the line item properties PrintDock writes so merchants can
 | `_View uploads` | Merchant (underscore) | `https://admin.shopify.com/store/{store}/apps/printdock/app/uploads?session={session}` | Direct jump to upload session in PrintDock app. | Stable |
 | `_Artwork` | Merchant (underscore) | `logo-front.png` | Quick visible list of uploaded file names. | Stable |
 | `_pd_file_quantities` | Pipeline | `[{\"fileName\":\"logo.png\",\"quantity\":1}]` | Per-file quantity map for order job creation. | Stable |
-| `_pd_calculated_price` | Cart Transform | `29.68` | Upload-derived line total; Cart Transform reads this and `_uc_session` to apply dynamic pricing. Omitted if calculated total is not positive. | Stable |
+| `_pd_calculated_price` | Cart Transform | `29.68` | Upload-derived **per-unit** line price; Cart Transform reads this and `_uc_session` to apply dynamic pricing via `fixedPricePerUnit`, so the fee scales with cart line quantity. Omitted if not positive. | Stable |
 
 ## Legacy (older checkouts; may still appear on historical orders)
 

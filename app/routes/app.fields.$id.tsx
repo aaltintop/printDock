@@ -50,6 +50,7 @@ import {
 import type {
   FieldDimensionType,
   FieldOperator,
+  FieldRuleAction,
   FieldTargetCollection,
   FieldTargetProduct,
   UploadFieldConfig,
@@ -1186,87 +1187,112 @@ export default function FieldEditorPage() {
                       No rules yet. Add a rule to enforce limits on uploaded files.
                     </Text>
                   ) : null}
-                  {dimensionRules.map((rule, index) => (
-                    <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
-                      {allowedDimensionTypes.includes(rule.dimensionType) ? (
+                  {dimensionRules.map((rule, index) => {
+                    const ruleIsCompatible = allowedDimensionTypes.includes(rule.dimensionType);
+                    return (
+                      <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
+                        {ruleIsCompatible ? (
+                          <div style={{ minWidth: 180 }}>
+                            <Select
+                              label="Dimension"
+                              value={rule.dimensionType}
+                              options={allowedDimensionOptions}
+                              onChange={(value) =>
+                                setDimensionRules((prev) =>
+                                  prev.map((item, itemIndex) =>
+                                    itemIndex === index
+                                      ? { ...item, dimensionType: value as FieldDimensionType }
+                                      : item,
+                                  ),
+                                )
+                              }
+                            />
+                          </div>
+                        ) : (
+                          <div style={{ minWidth: 240 }}>
+                            <TextField
+                              label="Dimension"
+                              autoComplete="off"
+                              disabled
+                              value={
+                                DIMENSION_OPTIONS.find((option) => option.value === rule.dimensionType)
+                                  ?.label ?? rule.dimensionType
+                              }
+                              helpText="Not applicable to the current calculation method."
+                            />
+                          </div>
+                        )}
                         <div style={{ minWidth: 180 }}>
                           <Select
-                            label="Dimension"
-                            value={rule.dimensionType}
-                            options={allowedDimensionOptions}
+                            label="Rule"
+                            value={rule.operator}
+                            options={[
+                              { label: "Min (>=)", value: "gte" },
+                              { label: "Max (<=)", value: "lte" },
+                              { label: "Equals", value: "eq" },
+                            ]}
                             onChange={(value) =>
                               setDimensionRules((prev) =>
                                 prev.map((item, itemIndex) =>
                                   itemIndex === index
-                                    ? { ...item, dimensionType: value as FieldDimensionType }
+                                    ? { ...item, operator: value as FieldOperator }
                                     : item,
                                 ),
                               )
                             }
+                            disabled={!ruleIsCompatible}
                           />
                         </div>
-                      ) : (
-                        <div style={{ minWidth: 240 }}>
-                          <TextField
-                            label="Dimension"
-                            autoComplete="off"
-                            disabled
-                            value={
-                              DIMENSION_OPTIONS.find((option) => option.value === rule.dimensionType)
-                                ?.label ?? rule.dimensionType
+                        <div style={{ minWidth: 180 }}>
+                          <Select
+                            label="Action"
+                            value={rule.action}
+                            options={[
+                              { label: "Block upload", value: "prevent" },
+                              { label: "Warning only", value: "warning" },
+                            ]}
+                            onChange={(value) =>
+                              setDimensionRules((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? { ...item, action: value as FieldRuleAction }
+                                    : item,
+                                ),
+                              )
                             }
-                            helpText="Not applicable to the current calculation method."
+                            disabled={!ruleIsCompatible}
                           />
                         </div>
-                      )}
-                      <div style={{ minWidth: 180 }}>
-                        <Select
-                          label="Rule"
-                          value={rule.operator}
-                          options={[
-                            { label: "Min (>=)", value: "gte" },
-                            { label: "Max (<=)", value: "lte" },
-                            { label: "Equals", value: "eq" },
-                          ]}
-                          onChange={(value) =>
+                        <div style={{ minWidth: 120 }}>
+                          <TextField
+                            label="Value"
+                            type="number"
+                            autoComplete="off"
+                            value={String(rule.value)}
+                            onChange={(value) =>
+                              setDimensionRules((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, value: Number(value) } : item,
+                                ),
+                              )
+                            }
+                            disabled={!ruleIsCompatible}
+                          />
+                        </div>
+                        <Button
+                          tone="critical"
+                          disabled={!ruleIsCompatible}
+                          onClick={() =>
                             setDimensionRules((prev) =>
-                              prev.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, operator: value as FieldOperator } : item,
-                              ),
+                              prev.filter((_, itemIndex) => itemIndex !== index),
                             )
                           }
-                          disabled={!allowedDimensionTypes.includes(rule.dimensionType)}
-                        />
-                      </div>
-                      <div style={{ minWidth: 120 }}>
-                        <TextField
-                          label="Value"
-                          type="number"
-                          autoComplete="off"
-                          value={String(rule.value)}
-                          onChange={(value) =>
-                            setDimensionRules((prev) =>
-                              prev.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, value: Number(value) } : item,
-                              ),
-                            )
-                          }
-                          disabled={!allowedDimensionTypes.includes(rule.dimensionType)}
-                        />
-                      </div>
-                      <Button
-                        tone="critical"
-                        disabled={!allowedDimensionTypes.includes(rule.dimensionType)}
-                        onClick={() =>
-                          setDimensionRules((prev) =>
-                            prev.filter((_, itemIndex) => itemIndex !== index),
-                          )
-                        }
-                      >
-                        Remove
-                      </Button>
-                    </InlineStack>
-                  ))}
+                        >
+                          Remove
+                        </Button>
+                      </InlineStack>
+                    );
+                  })}
                   <Button
                     onClick={() =>
                       setDimensionRules((prev) => [

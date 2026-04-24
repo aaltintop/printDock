@@ -36,7 +36,8 @@ PrintDock uses a **theme app block** (not an app embed). This means you add it d
 4. Under the **Apps** category, select **PrintDock Upload**.
 5. Position the block where you want the upload widget to appear (e.g., above the Add to Cart button).
 6. In the block settings, toggle "Require upload before add to cart" if the product requires a file upload.
-7. Click **Save**.
+7. Optionally tailor the **look and copy** from the same block settings panel — see Section 11 below for the full list.
+8. Click **Save**.
 
 > **Important:** PrintDock does NOT appear under "App embeds" in the theme editor. It is a section block, not an app embed. You must add it inside a product page section.
 
@@ -133,7 +134,7 @@ When a customer visits a product page that has PrintDock configured:
 6. If the file passes all rules, the **Add to Cart** button is unblocked.
 7. When added to cart, line item properties are injected (all visible on the order in Admin):
    - `_uc_session` — links the cart line to the upload session and powers webhooks and Cart Transform.
-   - `_pd_calculated_price` — when positive, the server-calculated line total (used by the Cart Transform function).
+   - `_pd_calculated_price` — when positive, the server-calculated per-unit upload fee (the Cart Transform function applies it as `fixedPricePerUnit`, so it scales with the cart line quantity).
    - `_Artwork` — uploaded file name(s), `_View uploads` — link into the app, and optionally `_Print Ready File` for download; see `docs/MERCHANT_FIELDS.md`.
 
 If a customer uploads files but never adds the item to cart, PrintDock removes those non-converted uploads after about 2 hours.
@@ -256,6 +257,68 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 | Orders not appearing in Order Jobs | Ensure the `orders/create` webhook is active and "Protected customer data" access is granted in the Shopify Partner Dashboard. |
 | Dynamic pricing not applying at checkout | Verify the Cart Transform function is deployed and enabled in Shopify Admin > Settings > Custom data (or via the CLI). |
 | Theme block not detected in onboarding | The `read_themes` scope must be granted. Reinstall the app if prompted. |
+
+---
+
+## 11. Customizing the storefront widget appearance
+
+The **PrintDock Upload** theme block exposes a full set of appearance controls directly in the theme editor, so you can match the widget to your store without writing any code. Open the block settings from **Online Store > Themes > Customize > Product page** and expand each section.
+
+### Colors
+
+Every color drawn by the widget is adjustable:
+
+- **Primary** / **On primary** — background and text for the "Choose file" button and the dropzone hover accent.
+- **Success** / **Success (strong)** — progress-bar gradient (start → end) and success status text.
+- **Danger** — error messages and the remove ("X") icon.
+- **Warning** — warning validation messages.
+- **Card background** — the background of each uploaded-file card.
+- **Dropzone & price background** — the "Drop your artwork here" area and the calculated-price box.
+- **Card border** / **Dropzone border** — subtle and dashed borders respectively.
+- **Text** / **Text (subdued)** — main copy and secondary copy (file props, helper text).
+
+### Layout
+
+- **Corner radius** — round corners from 0 to 24 px across the dropzone, cards, buttons, and price box.
+- **Text size** — scales widget typography from 85 % to 120 %.
+- **Density** — choose *Compact*, *Regular*, or *Roomy* to tighten or loosen spacing.
+
+### Text
+
+Every built-in string is overridable:
+
+- **Dropzone headline** — the big call-to-action above the "Choose file" button.
+- **Choose button label** — the button text itself.
+- **Validating label** — shown during server-side file checks (e.g. "Checking file...").
+- **Calculated price label** — label above the calculated upload price.
+
+> Field-specific copy (the title and description that appears at the top of the widget) still lives on each field in **PrintDock > Fields** so it can vary per product.
+
+### Advanced: Custom CSS
+
+The block also includes a **Custom CSS** textarea under the *Advanced* header. Use it for targeted tweaks the built-in controls don't cover — for example:
+
+```css
+/* Make the card shadow theme-matched */
+.printdock-file-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Larger thumbnails on wide screens */
+@media (min-width: 960px) {
+  .printdock-file-thumb {
+    width: 64px;
+    height: 64px;
+  }
+}
+
+/* Override a design token */
+.printdock-upload {
+  --pd-radius: 16px;
+}
+```
+
+All widget styles live under the `.printdock-upload` root and the `#printdock-upload-root` wrapper, so the CSS you add here stays scoped to the block and won't affect the rest of your theme. Design tokens (the `--pd-…` variables used by every rule) can be overridden the same way from your theme's main CSS if you prefer central control.
 
 ---
 

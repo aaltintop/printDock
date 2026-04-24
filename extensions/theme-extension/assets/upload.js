@@ -10,6 +10,14 @@
   const SESSION_EXPIRES_STORAGE_KEY = `${SESSION_STORAGE_KEY}_expires`;
   const PROXY_URL = "/apps/printdock"; // Configured in shopify.app.toml
 
+  // Merchant-configurable copy (theme block settings → data-* attributes on root).
+  const LABELS = {
+    dropHeadline: root.dataset.dropHeadline || "Drop your artwork here",
+    chooseLabel: root.dataset.chooseLabel || "Choose file",
+    checkingLabel: root.dataset.checkingLabel || "Checking file...",
+    priceLabel: root.dataset.priceLabel || "Calculated upload price:",
+  };
+
   const DEFAULT_CONFIG = {
     id: null,
     isRequired: BLOCK_REQUIRED,
@@ -103,7 +111,20 @@
     setupAddToCartGuard();
     setupCartAddFetchInterceptor();
     setupCartAddXHRInterceptor();
+    setupProductQuantityListener();
     updateCartState();
+  }
+
+  // Keep the calculated-price display in sync when the shopper changes the
+  // product quantity input on the page (dynamic pricing scales by line qty).
+  function setupProductQuantityListener() {
+    const form = document.querySelector('form[action*="/cart/add"]');
+    if (!form) return;
+    const quantityInput = form.querySelector('input[name="quantity"]');
+    if (!quantityInput) return;
+    const handler = () => updatePriceDisplay();
+    quantityInput.addEventListener("input", handler);
+    quantityInput.addEventListener("change", handler);
   }
 
   async function loadFieldConfig() {
@@ -178,6 +199,7 @@
       id: Math.random().toString(36).slice(2),
       name: file.name,
       size: file.size,
+      previewUrl: file.type && file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
       status: "uploading",
       progress: 0,
       metadata: null,
@@ -273,7 +295,13 @@
           );
           throw new Error("Storage limit reached.");
         }
-        throw new Error("Validation failed");
+        const serverMsg =
+          confirmData?.error ||
+          confirmData?.message ||
+          confirmData?.detail ||
+          `Upload failed (${confirmRes.status}). Please try again.`;
+        showError(serverMsg);
+        throw new Error(serverMsg);
       }
 
       fileEntry.status = confirmData.blocked ? "blocked" : "success";
@@ -378,30 +406,51 @@
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     if (!sessionToken || successfulFiles.length === 0) return {};
 
+    const perFileMode =
+      fieldConfig.fileQuantityManagement &&
+      fieldConfig.fileQuantityManagement.enabled &&
+      fieldConfig.fileQuantityManagement.mode === "per_file";
     const properties = {
       _uc_session: sessionToken,
       "_View uploads": getMerchantUploadsLink(sessionToken),
       _Artwork: successfulFiles.map((entry) => entry.name).join(", "),
-      _pd_file_quantities: JSON.stringify(
+    };
+    // Only emit `_pd_file_quantities` in per-file mode. In product-quantity mode the cart line
+    // quantity is the source of truth, and writing a stale upload-time snapshot here would cause
+    // the order webhook to record the wrong `calculatedPrice` when the shopper changes qty.
+    if (perFileMode) {
+      properties._pd_file_quantities = JSON.stringify(
         successfulFiles.map((entry) => ({
           fileName: entry.name,
           quantity: Number(entry.quantity || 1),
         })),
-      ),
-    };
+      );
+    }
     const printUrl = successfulFiles[0]?.printReadyFileUrl;
     if (printUrl) {
       properties["_Print Ready File"] = printUrl;
     }
 
-    const calculatedTotal = successfulFiles.reduce((sum, entry) => {
+    // `_pd_calculated_price` carries the PER-UNIT upload fee that the Cart
+    // Transform function applies via `fixedPricePerUnit`. Shopify then
+    // multiplies it by the cart line quantity, so the fee scales correctly
+    // when the shopper changes the cart quantity.
+    //
+    // - `product_quantity` mode: each file contributes `filePrice` once per
+    //   product unit. The line quantity naturally scales the fee.
+    // - `per_file` mode: the shopper controls each file's own quantity; the
+    //   line quantity is expected to be 1. The per-unit figure is the sum
+    //   of `filePrice × fileQty` across files.
+    const unitPriceForLine = successfulFiles.reduce((sum, entry) => {
       if (!entry.pricing) return sum;
       const fileUnitPrice =
         entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
-      return sum + fileUnitPrice * Math.max(1, Number(entry.quantity || 1));
+      if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
+      const multiplier = perFileMode ? Math.max(1, Number(entry.quantity || 1)) : 1;
+      return sum + fileUnitPrice * multiplier;
     }, 0);
-    if (Number.isFinite(calculatedTotal) && calculatedTotal > 0) {
-      properties._pd_calculated_price = calculatedTotal.toFixed(2);
+    if (Number.isFinite(unitPriceForLine) && unitPriceForLine > 0) {
+      properties._pd_calculated_price = unitPriceForLine.toFixed(2);
     }
 
     return properties;
@@ -671,11 +720,25 @@
       return;
     }
 
-    const total = successfulFiles.reduce((sum, entry) => {
+    // Mirror the Cart Transform math so the shopper sees what they'll actually
+    // pay: line qty × sum(filePrice × per-file qty).
+    //   - per_file mode: multiply each file's price by its per-file quantity,
+    //     then scale by the current product quantity (line qty).
+    //   - product_quantity mode: sum per-unit file prices, then scale by the
+    //     current product quantity (line qty).
+    const perFileMode =
+      fieldConfig.fileQuantityManagement &&
+      fieldConfig.fileQuantityManagement.enabled &&
+      fieldConfig.fileQuantityManagement.mode === "per_file";
+    const productQuantity = Math.max(1, getProductQuantity());
+    const unitTotal = successfulFiles.reduce((sum, entry) => {
       const fileUnitPrice =
         entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
-      return sum + fileUnitPrice * Math.max(1, Number(entry.quantity || 1));
+      if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
+      const multiplier = perFileMode ? Math.max(1, Number(entry.quantity || 1)) : 1;
+      return sum + fileUnitPrice * multiplier;
     }, 0);
+    const total = Math.round(unitTotal * productQuantity * 100) / 100;
 
     let priceEl = document.getElementById("printdock-price");
     if (!priceEl) {
@@ -686,7 +749,7 @@
 
     priceEl.innerHTML = `
       <div class="printdock-price-display">
-        <span class="printdock-price-label">Calculated upload price:</span>
+        <span class="printdock-price-label">${escapeHtml(LABELS.priceLabel)}</span>
         <span class="printdock-price-amount">$${total.toFixed(2)}</span>
         <span class="printdock-price-explanation">${successfulFiles.length} file(s) in session</span>
       </div>
@@ -720,7 +783,11 @@
   }
 
   function removeFile(fileId) {
-    uploadedFiles = uploadedFiles.filter((entry) => entry.id !== fileId);
+    uploadedFiles = uploadedFiles.filter((entry) => {
+      if (entry.id !== fileId) return true;
+      if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+      return false;
+    });
     if (uploadedFiles.length === 0) {
       sessionToken = null;
       sessionExpiresAt = null;
@@ -752,9 +819,9 @@
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
               </svg>
             </div>
-            <p class="printdock-drop-title">Drop your artwork here</p>
+            <p class="printdock-drop-title">${escapeHtml(LABELS.dropHeadline)}</p>
             <p class="printdock-drop-sub">${supported} — up to ${fieldConfig.maxFileMB}MB · max ${fieldConfig.maxFiles} file(s)</p>
-            <button type="button" class="printdock-choose-btn" id="printdock-choose-btn">Choose file</button>
+            <button type="button" class="printdock-choose-btn" id="printdock-choose-btn">${escapeHtml(LABELS.chooseLabel)}</button>
           </div>
         </div>
         <div class="printdock-file-list" id="printdock-file-list"></div>
@@ -793,6 +860,7 @@
 
     list.innerHTML = uploadedFiles
       .map((file) => {
+        const escapedName = escapeHtml(file.name);
         const warningHtml = (file.validationResults || [])
           .filter((rule) => rule.severity === "warning")
           .map((rule) => `<div class="printdock-warning">${escapeHtml(rule.message)}</div>`)
@@ -806,42 +874,72 @@
           fieldConfig.fileQuantityManagement &&
           fieldConfig.fileQuantityManagement.enabled &&
           fieldConfig.fileQuantityManagement.mode === "per_file";
+        const propertyLabels = [];
+        if (file.metadata?.widthInch && file.metadata?.heightInch) {
+          propertyLabels.push(`${file.metadata.widthInch.toFixed(1)}" × ${file.metadata.heightInch.toFixed(1)}"`);
+        }
+        if (file.metadata?.dpi) {
+          propertyLabels.push(`${file.metadata.dpi} DPI`);
+        }
+        propertyLabels.push(formatBytes(file.size));
+        const propsHtml = propertyLabels
+          .map((label, index) =>
+            `${index > 0 ? '<span class="sep">|</span>' : ""}<span>${escapeHtml(label)}</span>`,
+          )
+          .join("");
+        const progressHtml =
+          file.status === "uploading"
+            ? `
+              <div class="printdock-progress-wrap">
+                <div class="printdock-progress-bar">
+                  <div class="printdock-progress-fill" style="width:${file.progress}%"></div>
+                </div>
+                <span class="printdock-status">${file.progress}%</span>
+              </div>
+            `
+            : "";
+        const validatingHtml =
+          file.status === "validating" ? `<span class="printdock-status">${escapeHtml(LABELS.checkingLabel)}</span>` : "";
+        const thumbnailHtml = file.previewUrl
+          ? `<img src="${escapeHtml(file.previewUrl)}" alt="" loading="lazy" />`
+          : `
+            <svg viewBox="0 0 20 20" width="22" height="22" fill="none" aria-hidden="true">
+              <path d="M6 2.5h5.5l4 4V16a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 4.5 16V4A1.5 1.5 0 0 1 6 2.5Z" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M11.5 2.5V6a.5.5 0 0 0 .5.5h3.5" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          `;
 
         return `
           <div class="printdock-file-card printdock-file-${file.status}">
-            <div class="printdock-file-info">
-              <span class="printdock-file-name">${escapeHtml(file.name)}</span>
-              <span class="printdock-file-size">${formatBytes(file.size)}</span>
+            <div class="printdock-file-thumb">
+              ${thumbnailHtml}
             </div>
-            ${file.status === "uploading" ? `
-              <div class="printdock-progress-bar">
-                <div class="printdock-progress-fill" style="width:${file.progress}%"></div>
-              </div>
-              <span class="printdock-status">${file.progress}%</span>
-            ` : ""}
-            ${file.status === "validating" ? `<span class="printdock-status">Checking file...</span>` : ""}
-            ${file.status === "success" ? `
-              <span class="printdock-status printdock-status-ok">
-                ${file.metadata?.widthInch ? `${file.metadata.widthInch.toFixed(1)}" × ${file.metadata.heightInch.toFixed(1)}"` : ""}
-                ${file.metadata?.dpi ? `· ${file.metadata.dpi} DPI` : ""}
-              </span>
-            ` : ""}
-            ${warningHtml}
-            ${file.blocked ? `<div class="printdock-error">${escapeHtml(blockingMessages)}</div>` : ""}
-            ${file.status === "error" ? `<div class="printdock-error">${escapeHtml(file.error || "Upload failed")}</div>` : ""}
-            ${showQuantity ? `
-              <label class="printdock-status">
-                Quantity:
-                <input
-                  type="number"
-                  min="1"
-                  class="printdock-qty-input"
-                  data-file-id="${file.id}"
-                  value="${Number(file.quantity || 1)}"
-                />
-              </label>
-            ` : ""}
-            <button type="button" class="printdock-remove-btn" data-file-id="${file.id}">Remove</button>
+            <div class="printdock-file-body">
+              <span class="printdock-file-name" title="${escapedName}">${escapedName}</span>
+              <div class="printdock-file-props">${propsHtml}</div>
+              ${progressHtml}
+              ${validatingHtml}
+              ${warningHtml}
+              ${file.blocked ? `<div class="printdock-error">${escapeHtml(blockingMessages)}</div>` : ""}
+              ${file.status === "error" ? `<div class="printdock-error">${escapeHtml(file.error || "Upload failed")}</div>` : ""}
+              ${showQuantity ? `
+                <label class="printdock-status">
+                  Quantity:
+                  <input
+                    type="number"
+                    min="1"
+                    class="printdock-qty-input"
+                    data-file-id="${file.id}"
+                    value="${Number(file.quantity || 1)}"
+                  />
+                </label>
+              ` : ""}
+            </div>
+            <button type="button" class="printdock-remove-btn" data-file-id="${file.id}" aria-label="Remove ${escapedName}">
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+                <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
           </div>
         `;
       })

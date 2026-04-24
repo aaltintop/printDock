@@ -27,7 +27,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     if (session.shop && !isPathExemptFromSetupRedirect(path)) {
       const setupComplete = await isAppSetupComplete(admin, session.shop);
       if (!setupComplete) {
-        throw redirect("/app/onboarding");
+        // Preserve the embedded-app query string (`embedded`, `host`, `shop`,
+        // `id_token`, `hmac`, etc). Stripping it forces the next request to
+        // `/app/onboarding` to authenticate without any shop hint, which makes
+        // `authenticate.admin()` bounce to `/auth/login` and shows the public
+        // shop-domain form inside the admin iframe.
+        throw redirect(`/app/onboarding${new URL(request.url).search}`);
       }
     }
 

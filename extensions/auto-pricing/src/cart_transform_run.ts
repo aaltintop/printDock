@@ -12,14 +12,13 @@ export function cartTransformRun(input: CartTransformRunInput): CartTransformRun
 
   for (const line of input.cart.lines) {
     const hasSession = Boolean(line.sessionAttribute?.value);
-    const totalPrice = Number(line.priceAttribute?.value ?? "");
-    if (!hasSession || !Number.isFinite(totalPrice) || totalPrice <= 0) {
+    const unitPrice = Number(line.priceAttribute?.value ?? "");
+    if (!hasSession || !Number.isFinite(unitPrice) || unitPrice <= 0) {
       continue;
     }
 
-    const safeQuantity = Math.max(1, Number(line.quantity || 1));
-    const unitPrice = Math.round((totalPrice / safeQuantity) * 100) / 100;
-    if (unitPrice <= 0) continue;
+    const rounded = Math.round(unitPrice * 100) / 100;
+    if (rounded <= 0) continue;
 
     operations.push({
       lineUpdate: {
@@ -27,7 +26,7 @@ export function cartTransformRun(input: CartTransformRunInput): CartTransformRun
         price: {
           adjustment: {
             fixedPricePerUnit: {
-              amount: unitPrice.toFixed(2),
+              amount: rounded.toFixed(2),
             },
           },
         },

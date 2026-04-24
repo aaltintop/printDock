@@ -9,7 +9,7 @@ import {
   suggestUpgradeFor,
 } from "../config/plans";
 import { createPrintReadyFileToken } from "../services/file-download-token.server";
-import { getFileBuffer } from "../services/storage.server";
+import { deleteFile, getFileBuffer } from "../services/storage.server";
 import { extractMetadata, runValidationRules, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
 import { authenticate } from "../shopify.server";
@@ -26,6 +26,11 @@ import {
 import type { UploadAsset } from "../types/printdock";
 import type { ValidationRule } from "../services/validation.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+
+function isSafeSessionStoragePath(path: string, shopDomain: string): boolean {
+  const prefix = `uploads/${shopDomain}/`;
+  return path.startsWith(prefix) && !path.includes("..");
+}
 
 const schema = z.object({
   sessionToken: z.string(),
@@ -137,7 +142,7 @@ export async function action({ request }: ActionFunctionArgs) {
         );
       }
 
-      if (field && sessionData.assets.length >= field.maxFiles) {
+      if (field && field.maxFiles > 1 && sessionData.assets.length >= field.maxFiles) {
         return data(
           { error: `Maximum file count reached (${field.maxFiles})` },
           { status: 400 },
@@ -209,7 +214,7 @@ export async function action({ request }: ActionFunctionArgs) {
       }
 
       if (field?.pricing?.enabled && hasDynamicPricing && !blocked) {
-        pricing = calculatePrice(
+        const priceResult = calculatePrice(
           metadata,
           {
             mode: field.pricing.unitType,
@@ -217,10 +222,29 @@ export async function action({ request }: ActionFunctionArgs) {
             minPrice: field.pricing.minPrice ?? 0,
             roundingEnabled: field.pricing.roundingEnabled,
             printWidth: field.pricing.printWidth,
+            assumedDpi: field.pricing.dpi ?? 0,
           },
           quantity,
         );
+        if (priceResult.error) {
+          // Pricing needs dimensions that the file does not carry and no assumed DPI is configured,
+          // or the merchant has misconfigured unit price. Block add-to-cart with a clear message
+          // instead of silently pricing the line at $0.
+          validationResults.push({
+            ruleId: `pricing_${priceResult.error}`,
+            severity: "blocking",
+            message: priceResult.explanation,
+            actual: null,
+            expected: 0,
+          });
+          pricing = null;
+        } else {
+          pricing = priceResult;
+        }
       }
+
+      // Recompute `blocked` in case pricing pushed a blocking result above.
+      const finalBlocked = hasBlockingError(validationResults);
 
       const asset: UploadAsset = {
         id: `asset_${Date.now()}`,
@@ -237,12 +261,31 @@ export async function action({ request }: ActionFunctionArgs) {
         pageCount: metadata.pageCount,
         validationResults,
         pricing,
-        blocked,
+        blocked: finalBlocked,
       };
 
-      const previousAssets = sessionData.assets.filter(
-        (existingAsset) => existingAsset.storagePath !== asset.storagePath,
-      );
+      // For single-file fields, a new confirm replaces the prior file in-session.
+      // Delete superseded blob to avoid Storage cost growth from repeated retries/re-uploads.
+      const isSingleFileField = (field?.maxFiles ?? 1) <= 1;
+      const supersededAssets = isSingleFileField
+        ? sessionData.assets.filter((existingAsset) => existingAsset.storagePath !== asset.storagePath)
+        : [];
+      for (const oldAsset of supersededAssets) {
+        const oldPath = String(oldAsset.storagePath ?? "").trim();
+        if (!oldPath || !isSafeSessionStoragePath(oldPath, shopDomain)) continue;
+        try {
+          await deleteFile(oldPath);
+        } catch (cleanupErr) {
+          log.error("upload_confirm_superseded_cleanup_failed", cleanupErr, {
+            sessionToken,
+            oldPath,
+          });
+        }
+      }
+
+      const previousAssets = isSingleFileField
+        ? []
+        : sessionData.assets.filter((existingAsset) => existingAsset.storagePath !== asset.storagePath);
       const updatedAssets = [...previousAssets, asset];
       const sessionBlocked = updatedAssets.some((entry) => entry.blocked);
 
@@ -260,15 +303,15 @@ export async function action({ request }: ActionFunctionArgs) {
         downloadSecret,
       );
       const printReadyFileUrl =
-        !blocked && printReadyToken
+        !finalBlocked && printReadyToken
           ? `https://${shopDomain}/apps/printdock/api/proxy/upload/file?token=${encodeURIComponent(printReadyToken)}`
           : null;
 
-      if (blocked || sessionBlocked) {
+      if (finalBlocked || sessionBlocked) {
         log.event("upload_blocked", {
           sessionToken,
           storagePath,
-          blocked,
+          blocked: finalBlocked,
           sessionBlocked,
           assetsCount: updatedAssets.length,
         });
@@ -284,7 +327,7 @@ export async function action({ request }: ActionFunctionArgs) {
         asset,
         metadata,
         validationResults,
-        blocked,
+        blocked: finalBlocked,
         pricing,
         assetsCount: updatedAssets.length,
         sessionBlocked,
