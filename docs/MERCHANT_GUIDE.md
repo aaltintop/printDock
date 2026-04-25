@@ -51,9 +51,17 @@ If you use a custom storefront flow, you can still click **Mark as Verified** ma
 
 ### Step 3: Cart Transform (Dynamic Pricing)
 
-If you plan to use upload-based dynamic pricing, the Cart Transform function must be enabled.
+If you plan to use upload-based dynamic pricing, the PrintDock **Cart Transform** function must be registered with your shop. The Cart Transform is what tells Shopify to apply PrintDock's calculated upload fee on top of the variant base price during checkout.
 
-PrintDock now auto-checks this. If automatic verification is unavailable for your shop, use **Mark as Verified** as a fallback.
+PrintDock auto-checks the registration status and explains the next step right on the Setup page:
+
+- **Not registered:** Click **Enable dynamic pricing**. PrintDock calls `cartTransformCreate` for the `auto-pricing` function and links it to your store.
+- **Missing permissions:** PrintDock needs the `read_cart_transforms` and `write_cart_transforms` scopes. Click **Reauthorize PrintDock** to grant them.
+- **Function not deployed:** The PrintDock function package has not been deployed to your shop yet. Run `shopify app deploy` and reinstall the app.
+- **Not supported / Shopify Plus required:** Some Cart Transform operations (line price overrides) require Shopify Plus. Static fees still work, but dynamic per-line pricing is unavailable on this plan.
+- **Verification unavailable:** Shopify did not respond with cart transform data for this shop. PrintDock surfaces a fallback message so you can check Shopify settings manually; setup is not blocked in this case.
+
+You no longer need to mark this step as verified manually — registration status is the source of truth.
 
 ### Step 4: Create your first field
 
@@ -166,7 +174,6 @@ The **Orders** page (`/app/orders`) shows all order jobs with:
 - **Assignee and notes:** Assign jobs to team members and add internal notes.
 - **File download:** Download the uploaded file directly from the table or detail page.
 - **Audit trail:** Each status change and action is logged.
-- **CSV export:** Export filtered order jobs as CSV.
 - **Pagination:** Navigate through large order lists.
 
 Current order-job statuses:
@@ -218,7 +225,6 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 - **Upload retention days:** How long uploaded files are kept in storage.
   - Non-converted uploads are cleaned separately with a short (~2 hour) orphan sweep.
 - **Default order status:** Initial status for new order jobs.
-- **CSV delimiter:** Character used when exporting order data.
 - **Auto-assignment:** Automatically assign order jobs to a team member based on email domain matching.
 - **Theme block health check:** Verify your theme block is properly installed.
 
@@ -255,7 +261,7 @@ The **Settings** page (`/app/settings`) configures global app behavior:
 | "Upload failed" error | Check browser console for CORS errors. Verify Firebase Storage CORS is configured. |
 | Upload API returns 404 on `/apps/printdock/...` | Run `shopify app deploy`, then reinstall the app on the store. Start `shopify app dev` and confirm an `app_proxy` URL is shown in CLI output. Re-test `/apps/printdock/api/proxy/upload/config`. |
 | Orders not appearing in Order Jobs | Ensure the `orders/create` webhook is active and "Protected customer data" access is granted in the Shopify Partner Dashboard. |
-| Dynamic pricing not applying at checkout | Verify the Cart Transform function is deployed and enabled in Shopify Admin > Settings > Custom data (or via the CLI). |
+| Dynamic pricing not applying at checkout | Open **Setup > Cart Transform** in PrintDock. If the badge says **Not registered**, click **Enable dynamic pricing**. If it says **Missing scope**, click **Reauthorize PrintDock**. If it says **Function not deployed**, run `shopify app deploy` and reinstall the app. |
 | Theme block not detected in onboarding | The `read_themes` scope must be granted. Reinstall the app if prompted. |
 
 ---

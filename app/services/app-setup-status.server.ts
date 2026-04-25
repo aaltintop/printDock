@@ -1,6 +1,10 @@
 import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
 import { listUploadFields } from "./shop-data.server";
+import {
+  detectPrintDockCartTransform,
+  type CartTransformStatus,
+} from "./cart-transform.server";
 
 type ThemeNode = {
   id: string;
@@ -22,16 +26,6 @@ function isReadThemesScopeError(error: unknown): boolean {
     message.includes("Access denied for themes field") ||
     message.includes("`read_themes`") ||
     message.includes("read_themes")
-  );
-}
-
-function isCartTransformVerificationUnavailable(error: unknown): boolean {
-  const message = String((error as { message?: string })?.message || "");
-  return (
-    message.includes("Cannot query field \"cartTransforms\"") ||
-    message.includes("Access denied") ||
-    message.includes("access denied") ||
-    message.includes("permission")
   );
 }
 
@@ -117,71 +111,23 @@ export async function detectThemeBlockEnabled(admin: {
   }
 }
 
-/** Detects whether at least one cart transform exists for the app installation. */
-export async function detectCartTransformActive(admin: {
-  graphql: (query: string) => Promise<Response>;
-}): Promise<{
-  enabled: boolean;
-  verificationUnavailable: boolean;
-  verificationMessage: string | null;
-}> {
-  try {
-    const response = await admin.graphql(`
-    #graphql
-    query PrintDockCartTransforms {
-      cartTransforms(first: 25) {
-        nodes {
-          id
-        }
-      }
-    }
-  `);
-
-    const json = await response.json();
-    const errors = Array.isArray(json?.errors) ? json.errors : [];
-    if (errors.length > 0) {
-      const firstMessage = String(errors[0]?.message ?? "Unknown error");
-      if (isCartTransformVerificationUnavailable({ message: firstMessage })) {
-        return {
-          enabled: false,
-          verificationUnavailable: true,
-          verificationMessage:
-            "Automatic Cart Transform verification is unavailable for this shop. Verify it manually in Shopify settings.",
-        };
-      }
-      throw new Error(firstMessage);
-    }
-
-    const nodes = Array.isArray(json?.data?.cartTransforms?.nodes)
-      ? json.data.cartTransforms.nodes
-      : [];
-    return {
-      enabled: nodes.length > 0,
-      verificationUnavailable: false,
-      verificationMessage: null,
-    };
-  } catch (error) {
-    if (isCartTransformVerificationUnavailable(error)) {
-      return {
-        enabled: false,
-        verificationUnavailable: true,
-        verificationMessage:
-          "Automatic Cart Transform verification is unavailable for this shop. Verify it manually in Shopify settings.",
-      };
-    }
-
-    log.error("cart_transform_status_check_failed", error, {});
-    return {
-      enabled: false,
-      verificationUnavailable: true,
-      verificationMessage: "Cart Transform verification failed. Please verify manually.",
-    };
-  }
+function isUnavailableStatus(code: CartTransformStatus["code"]): boolean {
+  return (
+    code === "verification_unavailable" ||
+    code === "permission_denied" ||
+    code === "missing_scope" ||
+    code === "not_supported"
+  );
 }
 
 /** True when theme step, first field, cart validation, and cart transform are all satisfied (matches onboarding `setupComplete`). */
 export async function isAppSetupComplete(
-  admin: { graphql: (query: string) => Promise<Response> },
+  admin: {
+    graphql: (
+      query: string,
+      options?: { variables?: Record<string, unknown> },
+    ) => Promise<Response>;
+  },
   shopDomain: string,
 ): Promise<boolean> {
   const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
@@ -189,12 +135,15 @@ export async function isAppSetupComplete(
   const fields = await listUploadFields(shopDomain);
 
   const { enabled: themeBlockEnabled, verificationUnavailable } = await detectThemeBlockEnabled(admin);
-  const { enabled: cartTransformEnabled } = await detectCartTransformActive(admin);
+  const cartTransformStatus = await detectPrintDockCartTransform(admin);
   const fieldsConfigured = fields.length > 0;
   const cartValidationVerified =
     fields.some((field) => field.isRequired === true) || Boolean(shopSettings.cartValidationVerified);
-  const cartTransformVerified =
-    cartTransformEnabled || Boolean(shopSettings.cartTransformVerified);
+  // Real cart transform detection is the source of truth. We allow setup to
+  // complete when Shopify cannot tell us (`isUnavailableStatus`) so merchants
+  // are not blocked by an unavailable API on plans without Cart Transform.
+  const cartTransformReady =
+    cartTransformStatus.enabled || isUnavailableStatus(cartTransformStatus.code);
   const themeStepVerified =
     verificationUnavailable ||
     themeBlockEnabled ||
@@ -204,7 +153,7 @@ export async function isAppSetupComplete(
     themeStepVerified &&
       fieldsConfigured &&
       cartValidationVerified &&
-      cartTransformVerified,
+      cartTransformReady,
   );
 }
 

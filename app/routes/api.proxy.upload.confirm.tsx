@@ -24,12 +24,140 @@ import {
   updateUploadSession,
 } from "../services/shop-data.server";
 import type { UploadAsset } from "../types/printdock";
-import type { ValidationRule } from "../services/validation.server";
+import type { FileMetadata, ValidationResult, ValidationRule } from "../services/validation.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function isSafeSessionStoragePath(path: string, shopDomain: string): boolean {
   const prefix = `uploads/${shopDomain}/`;
   return path.startsWith(prefix) && !path.includes("..");
+}
+
+function inferDimensionsForValidation(metadata: FileMetadata, assumedDpi: number): FileMetadata {
+  if (!(assumedDpi > 0)) return metadata;
+  const inferred: FileMetadata = { ...metadata };
+  if (inferred.widthInch === null && inferred.widthPx && inferred.widthPx > 0) {
+    inferred.widthInch = inferred.widthPx / assumedDpi;
+  }
+  if (inferred.heightInch === null && inferred.heightPx && inferred.heightPx > 0) {
+    inferred.heightInch = inferred.heightPx / assumedDpi;
+  }
+  return inferred;
+}
+
+type SupportedDimensionType = "widthInch" | "heightInch" | "dpi";
+type DimensionRuleMeta = {
+  groupId: string;
+  dimensionType: SupportedDimensionType;
+  operator: "gt" | "lt" | "eq" | "gte" | "lte";
+  value: number;
+};
+
+function isSupportedDimensionType(value: string): value is SupportedDimensionType {
+  return value === "widthInch" || value === "heightInch" || value === "dpi";
+}
+
+function formatDimensionValue(dimensionType: SupportedDimensionType, value: number): string {
+  if (dimensionType === "dpi") return String(Math.round(value));
+  return value.toFixed(2);
+}
+
+function dimensionDisplayName(dimensionType: SupportedDimensionType): string {
+  if (dimensionType === "widthInch") return "Width";
+  if (dimensionType === "heightInch") return "Height";
+  return "DPI";
+}
+
+function dimensionUnit(dimensionType: SupportedDimensionType): string {
+  return dimensionType === "dpi" ? "DPI" : "in";
+}
+
+function consolidateDimensionRuleResults(
+  results: ValidationResult[],
+  metaByRuleId: Map<string, DimensionRuleMeta>,
+): ValidationResult[] {
+  const passthrough: ValidationResult[] = [];
+  const grouped = new Map<string, ValidationResult[]>();
+
+  for (const result of results) {
+    const meta = metaByRuleId.get(result.ruleId);
+    if (!meta || result.severity !== "blocking") {
+      passthrough.push(result);
+      continue;
+    }
+
+    const key = `${meta.dimensionType}:${meta.groupId}`;
+    const existing = grouped.get(key) ?? [];
+    existing.push(result);
+    grouped.set(key, existing);
+  }
+
+  for (const [key, groupResults] of grouped) {
+    const firstMeta = metaByRuleId.get(groupResults[0]!.ruleId);
+    if (!firstMeta) {
+      passthrough.push(...groupResults);
+      continue;
+    }
+
+    const dimensionType = firstMeta.dimensionType;
+    const metas = groupResults
+      .map((result) => metaByRuleId.get(result.ruleId))
+      .filter((meta): meta is DimensionRuleMeta => Boolean(meta));
+
+    const lowerBoundCandidates = metas
+      .filter((meta) => meta.operator === "gte" || meta.operator === "gt")
+      .map((meta) => meta.value);
+    const upperBoundCandidates = metas
+      .filter((meta) => meta.operator === "lte" || meta.operator === "lt")
+      .map((meta) => meta.value);
+    const eqCandidate = metas.find((meta) => meta.operator === "eq")?.value ?? null;
+    const lowerBound = lowerBoundCandidates.length > 0 ? Math.max(...lowerBoundCandidates) : null;
+    const upperBound = upperBoundCandidates.length > 0 ? Math.min(...upperBoundCandidates) : null;
+    const actual =
+      groupResults.find((result) => typeof result.actual === "number")?.actual ?? groupResults[0]?.actual ?? null;
+
+    if (actual === null) {
+      passthrough.push(...groupResults);
+      continue;
+    }
+
+    const label = dimensionDisplayName(dimensionType);
+    const unit = dimensionUnit(dimensionType);
+    const actualValue = formatDimensionValue(dimensionType, actual);
+    let message = `${label} does not meet the configured rule.`;
+    let expected = groupResults[0]?.expected ?? 0;
+
+    if (eqCandidate !== null) {
+      message = `${label} must be exactly ${formatDimensionValue(dimensionType, eqCandidate)} ${unit}. Your file is ${actualValue} ${unit}.`;
+      expected = eqCandidate;
+    } else if (lowerBound !== null && upperBound !== null) {
+      if (lowerBound === upperBound) {
+        message = `${label} must be exactly ${formatDimensionValue(dimensionType, lowerBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
+        expected = lowerBound;
+      } else {
+        message = `${label} must be between ${formatDimensionValue(dimensionType, lowerBound)} ${unit} and ${formatDimensionValue(dimensionType, upperBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
+        expected = lowerBound;
+      }
+    } else if (lowerBound !== null) {
+      message = `${label} must be at least ${formatDimensionValue(dimensionType, lowerBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
+      expected = lowerBound;
+    } else if (upperBound !== null) {
+      message = `${label} must be at most ${formatDimensionValue(dimensionType, upperBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
+      expected = upperBound;
+    } else {
+      passthrough.push(...groupResults);
+      continue;
+    }
+
+    passthrough.push({
+      ruleId: key,
+      severity: "blocking",
+      message,
+      actual,
+      expected,
+    });
+  }
+
+  return passthrough;
 }
 
 const schema = z.object({
@@ -149,18 +277,35 @@ export async function action({ request }: ActionFunctionArgs) {
         );
       }
 
+      const dimensionRuleMetaById = new Map<string, DimensionRuleMeta>();
       const rules: ValidationRule[] = (field?.dimensionRules ?? [])
         .filter(() => canUseFeature(billingPlan.planCode, "advancedValidation"))
-        .map((rule) => ({
-          id: rule.id,
-          type: rule.dimensionType,
-          operator: rule.operator,
-          value: rule.value,
-          action: rule.action === "prevent" ? "blocking" : "warning",
-          message: rule.warningMessage,
-        }));
+        .map((rule) => {
+          const normalizedId = rule.id || crypto.randomUUID();
+          if (isSupportedDimensionType(rule.dimensionType)) {
+            dimensionRuleMetaById.set(normalizedId, {
+              groupId: rule.groupId || normalizedId,
+              dimensionType: rule.dimensionType,
+              operator: rule.operator,
+              value: Number(rule.value),
+            });
+          }
+          return {
+            id: normalizedId,
+            type: rule.dimensionType,
+            operator: rule.operator,
+            value: rule.value,
+            action: rule.action === "prevent" ? "blocking" : "warning",
+            message: rule.warningMessage,
+          };
+        });
 
-      const validationResults = runValidationRules(metadata, rules);
+      const metadataForValidation = inferDimensionsForValidation(
+        metadata,
+        field?.pricing?.enabled ? field.pricing.dpi ?? 0 : 0,
+      );
+      let validationResults = runValidationRules(metadataForValidation, rules);
+      validationResults = consolidateDimensionRuleResults(validationResults, dimensionRuleMetaById);
       const extension = originalName.split(".").pop()?.toLowerCase() ?? "";
 
       if (field?.allowedExtensions?.length && !field.allowedExtensions.includes(extension)) {

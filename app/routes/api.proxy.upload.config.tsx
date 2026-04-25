@@ -77,7 +77,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
           maxFileMB: effectiveMaxMB,
           minFiles: field.minFiles,
           maxFiles: field.maxFiles,
-          fileQuantityManagement: field.fileQuantityManagement,
           pricing: field.pricing,
           dimensionRules: field.dimensionRules,
           planRequirement: field.planRequirement,

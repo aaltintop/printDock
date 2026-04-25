@@ -8,7 +8,7 @@ import {
   useSearchParams,
 } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Banner,
   BlockStack,
@@ -16,6 +16,7 @@ import {
   Button,
   Card,
   Checkbox,
+  ChoiceList,
   ContextualSaveBar,
   Divider,
   FormLayout,
@@ -49,14 +50,13 @@ import {
 } from "../utils/field-target-overlaps";
 import type {
   FieldDimensionType,
-  FieldOperator,
-  FieldRuleAction,
   FieldTargetCollection,
   FieldTargetProduct,
   UploadFieldConfig,
   UploadFieldDimensionRule,
 } from "../types/printdock";
 import { DEFAULT_FILE_RENAME_PATTERN, previewRenamedFileName } from "../utils/file-rename-pattern";
+import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function extractNumericId(gid: string): string {
@@ -84,10 +84,6 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
     maxFiles: 1,
     allowedExtensions: ["png", "jpg", "jpeg", "pdf"],
     maxFileMB: 50,
-    fileQuantityManagement: {
-      enabled: false,
-      mode: "product_quantity",
-    },
     pricing: {
       enabled: false,
       unitType: "flat",
@@ -104,11 +100,264 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
   };
 }
 
-const DIMENSION_OPTIONS: Array<{ label: string; value: FieldDimensionType }> = [
-  { label: "Width", value: "widthInch" },
-  { label: "Height", value: "heightInch" },
-  { label: "DPI", value: "dpi" },
-];
+type SupportedDimensionType = "widthInch" | "heightInch" | "dpi";
+type DimensionRuleMode = "off" | "fixed" | "range";
+
+type DimensionCard = {
+  dimensionType: SupportedDimensionType;
+  mode: DimensionRuleMode;
+  groupId: string;
+  fixedValue: string;
+  rangeMin: string;
+  rangeMax: string;
+};
+
+type PickerEntity = {
+  id?: string;
+  title?: string;
+  handle?: string;
+};
+
+type ResourcePickerBridge = {
+  resourcePicker: (options: Record<string, unknown>) => Promise<unknown>;
+};
+
+const SUPPORTED_DIMENSIONS: SupportedDimensionType[] = ["widthInch", "heightInch", "dpi"];
+
+function dimensionLabel(dimensionType: SupportedDimensionType): string {
+  if (dimensionType === "widthInch") return "Width";
+  if (dimensionType === "heightInch") return "Height";
+  return "DPI";
+}
+
+function dimensionSuffix(dimensionType: SupportedDimensionType): string {
+  return dimensionType === "dpi" ? "DPI" : "in";
+}
+
+function numberToInput(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return "";
+  return String(Number(value.toFixed(4)));
+}
+
+function inputToFiniteNumber(value: string): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function ensureFiniteValue(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function makeRuleToken(groupId: string, operator: string, value: number): string {
+  return `v1|${groupId}|${operator}|${value}`;
+}
+
+function defaultDimensionCard(dimensionType: SupportedDimensionType): DimensionCard {
+  return {
+    dimensionType,
+    mode: "off",
+    groupId: crypto.randomUUID(),
+    fixedValue: "",
+    rangeMin: "",
+    rangeMax: "",
+  };
+}
+
+function deriveDimensionCards(
+  rules: UploadFieldDimensionRule[],
+): {
+  cards: Record<SupportedDimensionType, DimensionCard>;
+  legacyRules: UploadFieldDimensionRule[];
+  simplifiedLegacyRules: boolean;
+} {
+  const cards: Record<SupportedDimensionType, DimensionCard> = {
+    widthInch: defaultDimensionCard("widthInch"),
+    heightInch: defaultDimensionCard("heightInch"),
+    dpi: defaultDimensionCard("dpi"),
+  };
+  let simplifiedLegacyRules = false;
+  const legacyRules: UploadFieldDimensionRule[] = [];
+
+  for (const dimensionType of SUPPORTED_DIMENSIONS) {
+    const groupRules = rules.filter((rule) => rule.dimensionType === dimensionType);
+    if (groupRules.length === 0) continue;
+
+    const gteRules = groupRules.filter((rule) => rule.operator === "gte").map((rule) => ensureFiniteValue(rule.value));
+    const lteRules = groupRules.filter((rule) => rule.operator === "lte").map((rule) => ensureFiniteValue(rule.value));
+    const eqRules = groupRules.filter((rule) => rule.operator === "eq").map((rule) => ensureFiniteValue(rule.value));
+    const gtRules = groupRules.filter((rule) => rule.operator === "gt").map((rule) => ensureFiniteValue(rule.value));
+    const ltRules = groupRules.filter((rule) => rule.operator === "lt").map((rule) => ensureFiniteValue(rule.value));
+
+    const card = cards[dimensionType];
+    card.groupId = groupRules[0]?.groupId || groupRules[0]?.id || crypto.randomUUID();
+
+    const lowerCandidates = [...gteRules, ...gtRules];
+    const upperCandidates = [...lteRules, ...ltRules];
+    const hasComplexShape =
+      groupRules.length > 2 ||
+      eqRules.length > 1 ||
+      gteRules.length > 1 ||
+      lteRules.length > 1 ||
+      gtRules.length > 0 ||
+      ltRules.length > 0;
+
+    if (eqRules.length > 0) {
+      if (hasComplexShape) simplifiedLegacyRules = true;
+      card.mode = "fixed";
+      card.fixedValue = numberToInput(eqRules[0]);
+      continue;
+    }
+
+    const lowerBound = lowerCandidates.length > 0 ? Math.max(...lowerCandidates) : null;
+    const upperBound = upperCandidates.length > 0 ? Math.min(...upperCandidates) : null;
+
+    if (lowerBound === null && upperBound === null) {
+      simplifiedLegacyRules = true;
+      continue;
+    }
+
+    if (lowerBound !== null && upperBound !== null) {
+      if (lowerBound > upperBound) {
+        simplifiedLegacyRules = true;
+        card.mode = "range";
+        card.rangeMin = numberToInput(lowerBound);
+        card.rangeMax = "";
+        continue;
+      }
+
+      if (lowerBound === upperBound) {
+        card.mode = "fixed";
+        card.fixedValue = numberToInput(lowerBound);
+      } else {
+        card.mode = "range";
+        card.rangeMin = numberToInput(lowerBound);
+        card.rangeMax = numberToInput(upperBound);
+      }
+
+      if (hasComplexShape) simplifiedLegacyRules = true;
+      continue;
+    }
+
+    card.mode = "range";
+    card.rangeMin = numberToInput(lowerBound);
+    card.rangeMax = numberToInput(upperBound);
+    if (hasComplexShape) simplifiedLegacyRules = true;
+  }
+
+  for (const rule of rules) {
+    if (!SUPPORTED_DIMENSIONS.includes(rule.dimensionType as SupportedDimensionType)) {
+      legacyRules.push({
+        ...rule,
+        action: "prevent",
+      });
+    }
+  }
+
+  if (rules.some((rule) => rule.action === "warning")) {
+    simplifiedLegacyRules = true;
+  }
+
+  return { cards, legacyRules, simplifiedLegacyRules };
+}
+
+function serializeDimensionCards(
+  cards: Record<SupportedDimensionType, DimensionCard>,
+  allowedDimensions: SupportedDimensionType[],
+  legacyRules: UploadFieldDimensionRule[],
+): UploadFieldDimensionRule[] {
+  const nextRules: UploadFieldDimensionRule[] = [];
+
+  for (const dimensionType of allowedDimensions) {
+    const card = cards[dimensionType];
+    if (!card || card.mode === "off") continue;
+
+    const groupId = card.groupId || crypto.randomUUID();
+
+    if (card.mode === "fixed") {
+      const fixed = inputToFiniteNumber(card.fixedValue);
+      if (fixed === null) continue;
+      const value = Number(fixed.toFixed(4));
+      nextRules.push({
+        id: crypto.randomUUID(),
+        groupId,
+        dimensionType,
+        operator: "eq",
+        value,
+        action: "prevent",
+        warningMessage: makeRuleToken(groupId, "eq", value),
+      });
+      continue;
+    }
+
+    const minValue = inputToFiniteNumber(card.rangeMin);
+    const maxValue = inputToFiniteNumber(card.rangeMax);
+
+    if (minValue !== null) {
+      nextRules.push({
+        id: crypto.randomUUID(),
+        groupId,
+        dimensionType,
+        operator: "gte",
+        value: Number(minValue.toFixed(4)),
+        action: "prevent",
+        warningMessage: makeRuleToken(groupId, "gte", Number(minValue.toFixed(4))),
+      });
+    }
+
+    if (maxValue !== null) {
+      nextRules.push({
+        id: crypto.randomUUID(),
+        groupId,
+        dimensionType,
+        operator: "lte",
+        value: Number(maxValue.toFixed(4)),
+        action: "prevent",
+        warningMessage: makeRuleToken(groupId, "lte", Number(maxValue.toFixed(4))),
+      });
+    }
+  }
+
+  return [
+    ...nextRules,
+    ...legacyRules.map((rule) => {
+      const groupId = rule.groupId || rule.id || crypto.randomUUID();
+      const value = ensureFiniteValue(rule.value);
+      return {
+        ...rule,
+        groupId,
+        value,
+        action: "prevent" as const,
+        warningMessage: makeRuleToken(groupId, rule.operator, value),
+      };
+    }),
+  ];
+}
+
+function normalizeIncomingDimensionRules(
+  rawRules: UploadFieldConfig["dimensionRules"],
+): UploadFieldConfig["dimensionRules"] {
+  return rawRules
+    .filter(
+      (rule) =>
+        rule &&
+        typeof rule.id === "string" &&
+        typeof rule.dimensionType === "string" &&
+        typeof rule.operator === "string",
+    )
+    .map((rule) => {
+      const groupId = (rule.groupId || rule.id || crypto.randomUUID()).trim();
+      const value = ensureFiniteValue(rule.value);
+      return {
+        ...rule,
+        id: rule.id || crypto.randomUUID(),
+        groupId,
+        value,
+        action: "prevent" as const,
+        warningMessage: makeRuleToken(groupId, rule.operator, value),
+      };
+    });
+}
 
 function allowedDimensionTypesForMethod(
   unitType: UploadFieldConfig["pricing"]["unitType"],
@@ -120,7 +369,6 @@ function allowedDimensionTypesForMethod(
 }
 
 function unitPriceLabelForMethod(unitType: UploadFieldConfig["pricing"]["unitType"]): string {
-  if (unitType === "per_file") return "Price per file";
   if (unitType === "inch_height") return "Price per inch of height";
   if (unitType === "inch_square") return "Price per square inch";
   return "Flat price";
@@ -230,7 +478,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   try {
     const parsedRules = JSON.parse(dimensionRulesRaw);
     if (Array.isArray(parsedRules)) {
-      dimensionRules = parsedRules;
+      dimensionRules = normalizeIncomingDimensionRules(parsedRules);
     }
   } catch {
     return data({ error: "Dimension rules must be valid JSON array" }, { status: 400 });
@@ -298,18 +546,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     maxFiles: 1,
     allowedExtensions,
     maxFileMB,
-    fileQuantityManagement: {
-      enabled: parseBoolean(formData.get("fileQuantityEnabled")),
-      mode:
-        String(formData.get("quantityMode")) === "per_file" ? "per_file" : "product_quantity",
-    },
     pricing: {
       enabled: pricingEnabled,
       unitType:
         String(formData.get("pricingUnitType")) === "inch_height" ||
-        String(formData.get("pricingUnitType")) === "inch_square" ||
-        String(formData.get("pricingUnitType")) === "per_file"
-          ? (String(formData.get("pricingUnitType")) as "inch_height" | "inch_square" | "per_file")
+        String(formData.get("pricingUnitType")) === "inch_square"
+          ? (String(formData.get("pricingUnitType")) as "inch_height" | "inch_square")
           : "flat",
       unitPrice: parseNumber(formData.get("unitPrice"), 0),
       minPrice: parseNumber(formData.get("minPrice"), 0),
@@ -352,8 +594,20 @@ export default function FieldEditorPage() {
   const appBridge = useAppBridge();
   const [searchParams] = useSearchParams();
 
-  const initialState = useMemo(
-    () => ({
+  const initialState = useMemo(() => {
+    const derivedDimensionState = canUseFeature(planCode, "advancedValidation")
+      ? deriveDimensionCards(field.dimensionRules)
+      : {
+          cards: {
+            widthInch: defaultDimensionCard("widthInch"),
+            heightInch: defaultDimensionCard("heightInch"),
+            dpi: defaultDimensionCard("dpi"),
+          } as Record<SupportedDimensionType, DimensionCard>,
+          legacyRules: [] as UploadFieldDimensionRule[],
+          simplifiedLegacyRules: false,
+        };
+
+    return {
       adminTitle: field.adminTitle,
       targetProducts: field.targetProducts,
       targetCollections: field.targetCollections,
@@ -365,8 +619,6 @@ export default function FieldEditorPage() {
       contentTypeRestricted: field.allowedExtensions.length > 0,
       allowedExtensions: field.allowedExtensions,
       maxFileMB: String(field.maxFileMB),
-      fileQuantityEnabled: field.fileQuantityManagement.enabled,
-      quantityMode: field.fileQuantityManagement.mode,
       pricingEnabled: canUseFeature(planCode, "dynamicPricing") && field.pricing.enabled,
       pricingUnitType: field.pricing.unitType,
       unitPrice: String(field.pricing.unitPrice),
@@ -374,28 +626,11 @@ export default function FieldEditorPage() {
       dpi: String(field.pricing.dpi),
       printWidth: String(field.pricing.printWidth),
       roundingEnabled: field.pricing.roundingEnabled,
-      dimensionRules: (() => {
-        if (!canUseFeature(planCode, "advancedValidation")) {
-          return [];
-        }
-        if (field.dimensionRules.length > 0) {
-          return field.dimensionRules;
-        }
-        const firstAllowedDimension = allowedDimensionTypesForMethod(field.pricing.unitType)[0] ?? "widthInch";
-        return [
-          {
-            id: crypto.randomUUID(),
-            dimensionType: firstAllowedDimension,
-            operator: "lte" as const,
-            value: 1,
-            action: "prevent" as const,
-            warningMessage: "",
-          },
-        ];
-      })(),
-    }),
-    [field, planCode],
-  );
+      dimensionCards: derivedDimensionState.cards,
+      legacyDimensionRules: derivedDimensionState.legacyRules,
+      dimensionRulesSimplified: derivedDimensionState.simplifiedLegacyRules,
+    };
+  }, [field, planCode]);
 
   const [adminTitle, setAdminTitle] = useState(initialState.adminTitle);
   const [targetProducts, setTargetProducts] = useState<FieldTargetProduct[]>(initialState.targetProducts);
@@ -409,18 +644,19 @@ export default function FieldEditorPage() {
   const [allowedExtensions, setAllowedExtensions] = useState<string[]>(initialState.allowedExtensions);
   const [newExtension, setNewExtension] = useState("");
   const [maxFileMB, setMaxFileMB] = useState(initialState.maxFileMB);
-  const [fileQuantityEnabled, setFileQuantityEnabled] = useState(initialState.fileQuantityEnabled);
-  const [quantityMode, setQuantityMode] = useState(initialState.quantityMode);
   const [pricingEnabled, setPricingEnabled] = useState(initialState.pricingEnabled);
   const [pricingUnitType, setPricingUnitType] = useState(initialState.pricingUnitType);
   const [unitPrice, setUnitPrice] = useState(initialState.unitPrice);
   const [minPrice, setMinPrice] = useState(initialState.minPrice);
   const [dpi, setDpi] = useState(initialState.dpi);
   const [printWidth, setPrintWidth] = useState(initialState.printWidth);
-  const [roundingEnabled, setRoundingEnabled] = useState(initialState.roundingEnabled);
   const [renameHelpOpen, setRenameHelpOpen] = useState(false);
-  const [dimensionRules, setDimensionRules] = useState<UploadFieldDimensionRule[]>(
-    initialState.dimensionRules,
+  const [dimensionCards, setDimensionCards] = useState(initialState.dimensionCards);
+  const [legacyDimensionRules, setLegacyDimensionRules] = useState<UploadFieldDimensionRule[]>(
+    initialState.legacyDimensionRules,
+  );
+  const [dimensionRulesSimplified, setDimensionRulesSimplified] = useState(
+    initialState.dimensionRulesSimplified,
   );
 
   const targetOverlapFromEditor = useMemo(() => {
@@ -480,16 +716,14 @@ export default function FieldEditorPage() {
     contentTypeRestricted,
     allowedExtensions,
     maxFileMB,
-    fileQuantityEnabled,
-    quantityMode,
     pricingEnabled,
     pricingUnitType,
     unitPrice,
     minPrice,
     dpi,
     printWidth,
-    roundingEnabled,
-    dimensionRules,
+    dimensionCards,
+    legacyDimensionRules,
   });
   const serializedInitial = JSON.stringify(initialState);
   const isDirty = serializedCurrent !== serializedInitial;
@@ -506,31 +740,33 @@ export default function FieldEditorPage() {
     setContentTypeRestricted(initialState.contentTypeRestricted);
     setAllowedExtensions(initialState.allowedExtensions);
     setMaxFileMB(initialState.maxFileMB);
-    setFileQuantityEnabled(initialState.fileQuantityEnabled);
-    setQuantityMode(initialState.quantityMode);
     setPricingEnabled(initialState.pricingEnabled);
     setPricingUnitType(initialState.pricingUnitType);
     setUnitPrice(initialState.unitPrice);
     setMinPrice(initialState.minPrice);
     setDpi(initialState.dpi);
     setPrintWidth(initialState.printWidth);
-    setRoundingEnabled(initialState.roundingEnabled);
-    setDimensionRules(initialState.dimensionRules);
+    setDimensionCards(initialState.dimensionCards);
+    setLegacyDimensionRules(initialState.legacyDimensionRules);
+    setDimensionRulesSimplified(initialState.dimensionRulesSimplified);
   };
 
   const openProductPicker = useCallback(async () => {
-    const selection = await (appBridge as any).resourcePicker({
+    const selection = await (appBridge as unknown as ResourcePickerBridge).resourcePicker({
       type: "product",
       action: "select",
       multiple: true,
       filter: { variants: false },
     });
     if (!Array.isArray(selection)) return;
-    const newProducts: FieldTargetProduct[] = selection.map((item: any) => ({
-      id: extractNumericId(String(item.id)),
-      title: String(item.title ?? ""),
-      handle: String(item.handle ?? ""),
-    }));
+    const newProducts: FieldTargetProduct[] = selection.map((item) => {
+      const pickerItem = item as PickerEntity;
+      return {
+        id: extractNumericId(String(pickerItem.id)),
+        title: String(pickerItem.title ?? ""),
+        handle: String(pickerItem.handle ?? ""),
+      };
+    });
     setTargetProducts((prev) => {
       const existingIds = new Set(prev.map((p) => p.id));
       const additions = newProducts.filter((p) => !existingIds.has(p.id));
@@ -539,16 +775,19 @@ export default function FieldEditorPage() {
   }, [appBridge]);
 
   const openCollectionPicker = useCallback(async () => {
-    const selection = await (appBridge as any).resourcePicker({
+    const selection = await (appBridge as unknown as ResourcePickerBridge).resourcePicker({
       type: "collection",
       action: "select",
       multiple: true,
     });
     if (!Array.isArray(selection)) return;
-    const newCollections: FieldTargetCollection[] = selection.map((item: any) => ({
-      id: extractNumericId(String(item.id)),
-      title: String(item.title ?? ""),
-    }));
+    const newCollections: FieldTargetCollection[] = selection.map((item) => {
+      const pickerItem = item as PickerEntity;
+      return {
+        id: extractNumericId(String(pickerItem.id)),
+        title: String(pickerItem.title ?? ""),
+      };
+    });
     setTargetCollections((prev) => {
       const existingIds = new Set(prev.map((c) => c.id));
       const additions = newCollections.filter((c) => !existingIds.has(c.id));
@@ -564,17 +803,18 @@ export default function FieldEditorPage() {
     setTargetCollections((prev) => prev.filter((c) => c.id !== id));
   }, []);
 
-  useEffect(() => {
-    if (actionData && "error" in actionData && actionData.error) {
-      appBridge.toast.show(actionData.error, { isError: true });
+  // `useNewValueEffect` prevents the error toast from re-firing on every
+  // re-render while `actionData.error` stays truthy, and makes the
+  // ?toast=duplicated notification fire exactly once on arrival.
+  useNewValueEffect(actionData, (value) => {
+    if ("error" in value && value.error) {
+      appBridge.toast.show(value.error, { isError: true });
     }
-  }, [actionData, appBridge]);
+  });
 
-  useEffect(() => {
-    if (searchParams.get("toast") === "duplicated") {
-      appBridge.toast.show("Field duplicated");
-    }
-  }, [appBridge, searchParams]);
+  useNewValueEffect(searchParams.get("toast"), (value) => {
+    if (value === "duplicated") appBridge.toast.show("Field duplicated");
+  });
 
   const pageTitle = isNew ? "Create Field" : (adminTitle || "Edit Field");
   const hasTargets = targetProducts.length > 0 || targetCollections.length > 0;
@@ -583,11 +823,33 @@ export default function FieldEditorPage() {
   const showMinPrice = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
   const showDpi = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
   const showPrintWidth = pricingUnitType === "inch_square";
-  const showRounding = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
-  const allowedDimensionTypes = allowedDimensionTypesForMethod(pricingUnitType);
-  const allowedDimensionOptions = DIMENSION_OPTIONS.filter((option) =>
-    allowedDimensionTypes.includes(option.value),
+  const allowedDimensionTypes = allowedDimensionTypesForMethod(pricingUnitType) as SupportedDimensionType[];
+  const serializedDimensionRules = useMemo(
+    () => serializeDimensionCards(dimensionCards, allowedDimensionTypes, legacyDimensionRules),
+    [allowedDimensionTypes, dimensionCards, legacyDimensionRules],
   );
+  const dimensionCardErrors = useMemo(() => {
+    const errors: Partial<Record<SupportedDimensionType, string>> = {};
+    for (const dimensionType of allowedDimensionTypes) {
+      const card = dimensionCards[dimensionType];
+      if (!card || card.mode === "off") continue;
+      if (card.mode === "fixed") {
+        if (inputToFiniteNumber(card.fixedValue) === null) {
+          errors[dimensionType] = "Enter a valid fixed value.";
+        }
+        continue;
+      }
+
+      const minValue = inputToFiniteNumber(card.rangeMin);
+      const maxValue = inputToFiniteNumber(card.rangeMax);
+      if (minValue === null && maxValue === null) {
+        errors[dimensionType] = "Enter at least a min or max value.";
+      } else if (minValue !== null && maxValue !== null && minValue > maxValue) {
+        errors[dimensionType] = "Min must be less than or equal to max.";
+      }
+    }
+    return errors;
+  }, [allowedDimensionTypes, dimensionCards]);
 
   if (navigation.state === "loading") {
     return (
@@ -639,9 +901,8 @@ export default function FieldEditorPage() {
         <input type="hidden" name="targetCollections" value={JSON.stringify(targetCollections)} />
         <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
         <input type="hidden" name="allowedExtensions" value={contentTypeRestricted ? allowedExtensions.join(",") : ""} />
-        <input type="hidden" name="dimensionRules" value={JSON.stringify(dimensionRules)} />
+        <input type="hidden" name="dimensionRules" value={JSON.stringify(serializedDimensionRules)} />
         <input type="hidden" name="isActive" value={isActive ? "true" : "false"} />
-        <input type="hidden" name="fileQuantityEnabled" value={fileQuantityEnabled ? "true" : "false"} />
 
         <BlockStack gap="400">
           {fieldCreationBlocked ? (
@@ -957,7 +1218,7 @@ export default function FieldEditorPage() {
           <Card>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">
-                File Rules
+                File Size Rules
               </Text>
               <FormLayout>
                 <TextField
@@ -983,21 +1244,6 @@ export default function FieldEditorPage() {
                     to {maxFileMBFromPlan}MB per file.
                   </Banner>
                 )}
-                <Checkbox
-                  label="Enable custom quantity management"
-                  checked={fileQuantityEnabled}
-                  onChange={() => setFileQuantityEnabled((prev) => !prev)}
-                />
-                <Select
-                  name="quantityMode"
-                  label="Quantity mode"
-                  value={quantityMode}
-                  options={[
-                    { label: "Use Shopify product quantity", value: "product_quantity" },
-                    { label: "Per-file quantity controls", value: "per_file" },
-                  ]}
-                  onChange={(value) => setQuantityMode(value as "product_quantity" | "per_file")}
-                />
               </FormLayout>
             </BlockStack>
           </Card>
@@ -1055,7 +1301,7 @@ export default function FieldEditorPage() {
                   <input type="hidden" name="minPrice" value={minPrice} />
                   <input type="hidden" name="dpi" value={dpi} />
                   <input type="hidden" name="printWidth" value={printWidth} />
-                  <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
+                  <input type="hidden" name="roundingEnabled" value="false" />
                 </>
               ) : null}
 
@@ -1087,7 +1333,6 @@ export default function FieldEditorPage() {
                       value={pricingUnitType}
                       options={[
                         { label: "Flat — fixed price per upload", value: "flat" },
-                        { label: "Per file — price × number of files", value: "per_file" },
                         { label: "Per inch height — price × print height", value: "inch_height" },
                         { label: "Per square inch — price × print area", value: "inch_square" },
                       ]}
@@ -1153,15 +1398,7 @@ export default function FieldEditorPage() {
                         </Box>
                       ) : null}
                     </InlineStack>
-                    <input type="hidden" name="roundingEnabled" value={roundingEnabled ? "true" : "false"} />
-                    {showRounding ? (
-                      <Checkbox
-                        label="Round calculated price to a cleaner amount"
-                        checked={roundingEnabled}
-                        onChange={() => setRoundingEnabled((prev) => !prev)}
-                        helpText="Helps avoid long decimal prices on the storefront."
-                      />
-                    ) : null}
+                    <input type="hidden" name="roundingEnabled" value="false" />
                   </FormLayout>
                 </BlockStack>
               ) : null}
@@ -1175,141 +1412,157 @@ export default function FieldEditorPage() {
                   Dimension rules
                 </Text>
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Block uploads or show warnings when artwork does not meet DPI, size, or
-                  other limits. Evaluated when the customer uploads a file.
+                  Block uploads when artwork does not meet the size or DPI limits you define.
+                  Customers will see the exact reason with their file&apos;s measured value.
                 </Text>
               </BlockStack>
 
               {planAllowsAdvancedValidation ? (
                 <BlockStack gap="300">
-                  {dimensionRules.length === 0 ? (
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      No rules yet. Add a rule to enforce limits on uploaded files.
-                    </Text>
+                  {dimensionRulesSimplified ? (
+                    <Banner tone="info" title="Previous rules were simplified">
+                      Existing operator-based rules were converted into the nearest fixed or range
+                      rule for this editor. Save to keep the simplified structure.
+                    </Banner>
                   ) : null}
-                  {dimensionRules.map((rule, index) => {
-                    const ruleIsCompatible = allowedDimensionTypes.includes(rule.dimensionType);
+                  {allowedDimensionTypes.map((dimensionType) => {
+                    const card = dimensionCards[dimensionType];
+                    const cardError = dimensionCardErrors[dimensionType];
+                    const modeSelection = [card.mode];
+
                     return (
-                      <InlineStack key={rule.id} gap="200" blockAlign="end" wrap>
-                        {ruleIsCompatible ? (
-                          <div style={{ minWidth: 180 }}>
-                            <Select
-                              label="Dimension"
-                              value={rule.dimensionType}
-                              options={allowedDimensionOptions}
-                              onChange={(value) =>
-                                setDimensionRules((prev) =>
-                                  prev.map((item, itemIndex) =>
-                                    itemIndex === index
-                                      ? { ...item, dimensionType: value as FieldDimensionType }
-                                      : item,
-                                  ),
-                                )
-                              }
-                            />
-                          </div>
-                        ) : (
-                          <div style={{ minWidth: 240 }}>
+                      <Box
+                        key={dimensionType}
+                        padding="300"
+                        borderWidth="025"
+                        borderRadius="200"
+                        borderColor="border"
+                      >
+                        <BlockStack gap="300">
+                          <BlockStack gap="100">
+                            <Text as="h3" variant="headingSm">
+                              {dimensionLabel(dimensionType)}
+                            </Text>
+                            <Text as="p" variant="bodySm" tone="subdued">
+                              {dimensionType === "dpi"
+                                ? "Set an exact DPI target or an accepted DPI range."
+                                : `Set an exact ${dimensionLabel(dimensionType).toLowerCase()} or an accepted range in inches.`}
+                            </Text>
+                          </BlockStack>
+                          <ChoiceList
+                            title="Validation mode"
+                            titleHidden
+                            choices={[
+                              { label: "Off", value: "off" },
+                              { label: "Fixed value", value: "fixed" },
+                              { label: "Range", value: "range" },
+                            ]}
+                            selected={modeSelection}
+                            onChange={(selected) => {
+                              const mode = (selected[0] ?? "off") as DimensionRuleMode;
+                              setDimensionCards((prev) => ({
+                                ...prev,
+                                [dimensionType]: {
+                                  ...prev[dimensionType],
+                                  mode,
+                                  groupId: prev[dimensionType].groupId || crypto.randomUUID(),
+                                },
+                              }));
+                            }}
+                          />
+                          {card.mode === "fixed" ? (
                             <TextField
-                              label="Dimension"
+                              label={`${dimensionLabel(dimensionType)} value`}
+                              type="number"
                               autoComplete="off"
-                              disabled
-                              value={
-                                DIMENSION_OPTIONS.find((option) => option.value === rule.dimensionType)
-                                  ?.label ?? rule.dimensionType
+                              value={card.fixedValue}
+                              suffix={dimensionSuffix(dimensionType)}
+                              onChange={(value) =>
+                                setDimensionCards((prev) => ({
+                                  ...prev,
+                                  [dimensionType]: { ...prev[dimensionType], fixedValue: value },
+                                }))
                               }
-                              helpText="Not applicable to the current calculation method."
+                              helpText={
+                                dimensionType === "dpi"
+                                  ? "Files must report exactly this DPI."
+                                  : "Files must measure exactly this value (rounded to 0.01 in)."
+                              }
+                              error={card.mode === "fixed" ? cardError : undefined}
                             />
-                          </div>
-                        )}
-                        <div style={{ minWidth: 180 }}>
-                          <Select
-                            label="Rule"
-                            value={rule.operator}
-                            options={[
-                              { label: "Min (>=)", value: "gte" },
-                              { label: "Max (<=)", value: "lte" },
-                              { label: "Equals", value: "eq" },
-                            ]}
-                            onChange={(value) =>
-                              setDimensionRules((prev) =>
-                                prev.map((item, itemIndex) =>
-                                  itemIndex === index
-                                    ? { ...item, operator: value as FieldOperator }
-                                    : item,
-                                ),
-                              )
-                            }
-                            disabled={!ruleIsCompatible}
-                          />
-                        </div>
-                        <div style={{ minWidth: 180 }}>
-                          <Select
-                            label="Action"
-                            value={rule.action}
-                            options={[
-                              { label: "Block upload", value: "prevent" },
-                              { label: "Warning only", value: "warning" },
-                            ]}
-                            onChange={(value) =>
-                              setDimensionRules((prev) =>
-                                prev.map((item, itemIndex) =>
-                                  itemIndex === index
-                                    ? { ...item, action: value as FieldRuleAction }
-                                    : item,
-                                ),
-                              )
-                            }
-                            disabled={!ruleIsCompatible}
-                          />
-                        </div>
-                        <div style={{ minWidth: 120 }}>
-                          <TextField
-                            label="Value"
-                            type="number"
-                            autoComplete="off"
-                            value={String(rule.value)}
-                            onChange={(value) =>
-                              setDimensionRules((prev) =>
-                                prev.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, value: Number(value) } : item,
-                                ),
-                              )
-                            }
-                            disabled={!ruleIsCompatible}
-                          />
-                        </div>
-                        <Button
-                          tone="critical"
-                          disabled={!ruleIsCompatible}
-                          onClick={() =>
-                            setDimensionRules((prev) =>
-                              prev.filter((_, itemIndex) => itemIndex !== index),
-                            )
-                          }
-                        >
-                          Remove
-                        </Button>
-                      </InlineStack>
+                          ) : null}
+                          {card.mode === "range" ? (
+                            <InlineStack gap="300" wrap>
+                              <div style={{ minWidth: 180, width: "100%" }}>
+                                <TextField
+                                  label="Min"
+                                  type="number"
+                                  autoComplete="off"
+                                  value={card.rangeMin}
+                                  suffix={dimensionSuffix(dimensionType)}
+                                  onChange={(value) =>
+                                    setDimensionCards((prev) => ({
+                                      ...prev,
+                                      [dimensionType]: { ...prev[dimensionType], rangeMin: value },
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div style={{ minWidth: 180, width: "100%" }}>
+                                <TextField
+                                  label="Max"
+                                  type="number"
+                                  autoComplete="off"
+                                  value={card.rangeMax}
+                                  suffix={dimensionSuffix(dimensionType)}
+                                  onChange={(value) =>
+                                    setDimensionCards((prev) => ({
+                                      ...prev,
+                                      [dimensionType]: { ...prev[dimensionType], rangeMax: value },
+                                    }))
+                                  }
+                                />
+                              </div>
+                            </InlineStack>
+                          ) : null}
+                          {card.mode === "range" && cardError ? (
+                            <Text as="p" variant="bodySm" tone="critical">
+                              {cardError}
+                            </Text>
+                          ) : null}
+                          {dimensionType === "dpi" ? (
+                            <Text as="p" variant="bodySm" tone="subdued">
+                              PDFs are evaluated at their native 72 DPI. Raster images use embedded DPI metadata.
+                            </Text>
+                          ) : null}
+                        </BlockStack>
+                      </Box>
                     );
                   })}
-                  <Button
-                    onClick={() =>
-                      setDimensionRules((prev) => [
-                        ...prev,
-                        {
-                          id: crypto.randomUUID(),
-                          dimensionType: allowedDimensionTypes[0] ?? "widthInch",
-                          operator: "gte",
-                          value: 1,
-                          action: "prevent",
-                          warningMessage: "",
-                        },
-                      ])
-                    }
-                  >
-                    Add rule
-                  </Button>
+                  {legacyDimensionRules.length > 0 ? (
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Legacy rules (read-only)
+                      </Text>
+                      {legacyDimensionRules.map((rule, index) => (
+                        <InlineStack key={rule.id || `${rule.dimensionType}-${index}`} align="space-between">
+                          <Text as="p" tone="subdued" variant="bodySm">
+                            {`${rule.dimensionType} ${rule.operator} ${rule.value}`}
+                          </Text>
+                          <Button
+                            tone="critical"
+                            onClick={() =>
+                              setLegacyDimensionRules((prev) =>
+                                prev.filter((_, ruleIndex) => ruleIndex !== index),
+                              )
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </InlineStack>
+                      ))}
+                    </BlockStack>
+                  ) : null}
                 </BlockStack>
               ) : (
                 <Box padding="300" background="bg-surface-secondary" borderRadius="200">

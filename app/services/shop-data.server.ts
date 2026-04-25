@@ -159,21 +159,12 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
       ? field.allowedExtensions.map((value) => String(value).toLowerCase())
       : DEFAULT_ALLOWED_EXTENSIONS,
     maxFileMB: Math.max(1, Number(field.maxFileMB ?? 50)),
-    fileQuantityManagement: {
-      enabled: Boolean(isRecord(field.fileQuantityManagement) && field.fileQuantityManagement.enabled),
-      mode:
-        isRecord(field.fileQuantityManagement) &&
-        (field.fileQuantityManagement.mode === "per_file" ||
-          field.fileQuantityManagement.mode === "product_quantity")
-          ? (field.fileQuantityManagement.mode as "per_file" | "product_quantity")
-          : "product_quantity",
-    },
     pricing: {
       enabled: Boolean(isRecord(field.pricing) && field.pricing.enabled),
       unitType:
         isRecord(field.pricing) &&
-        ["inch_height", "inch_square", "per_file", "flat"].includes(String(field.pricing.unitType))
-          ? (field.pricing.unitType as "inch_height" | "inch_square" | "per_file" | "flat")
+        ["inch_height", "inch_square", "flat"].includes(String(field.pricing.unitType))
+          ? (field.pricing.unitType as "inch_height" | "inch_square" | "flat")
           : "flat",
       unitPrice: Number(isRecord(field.pricing) ? field.pricing.unitPrice ?? 0 : 0),
       minPrice: Number(isRecord(field.pricing) ? field.pricing.minPrice ?? 0 : 0),

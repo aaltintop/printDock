@@ -1,6 +1,6 @@
 import type { FileMetadata } from "./validation.server";
 
-export type PricingMode = "inch_height" | "inch_square" | "per_file" | "flat" | null;
+export type PricingMode = "inch_height" | "inch_square" | "flat" | null;
 
 export interface PricingConfig {
   mode: PricingMode;
@@ -30,7 +30,7 @@ export function calculatePrice(
   quantity = 1,
   currency = "USD"
 ): PricingResult {
-  const { mode, unitPrice, minPrice, roundingEnabled = false, printWidth = 0, assumedDpi = 0 } = config;
+  const { mode, unitPrice, minPrice, printWidth = 0, assumedDpi = 0 } = config;
   let rawPrice = 0;
   let explanation = "";
 
@@ -44,20 +44,18 @@ export function calculatePrice(
     };
   }
 
-  const roundDimension = (value: number) => (roundingEnabled ? Math.ceil(value) : value);
-
   // Infer inches from pixel dimensions when the file has no embedded DPI but the merchant has
   // configured an "assumed DPI" on the field. Without this fallback, PNG/JPG files saved without
   // DPI metadata would silently price at $0 under inch_* modes.
   const inferredHeightInch =
     metadata.heightInch ??
     (metadata.heightPx && assumedDpi > 0
-      ? Math.round((metadata.heightPx / assumedDpi) * 100) / 100
+      ? metadata.heightPx / assumedDpi
       : null);
   const inferredWidthInch =
     metadata.widthInch ??
     (metadata.widthPx && assumedDpi > 0
-      ? Math.round((metadata.widthPx / assumedDpi) * 100) / 100
+      ? metadata.widthPx / assumedDpi
       : null);
   const dimensionsAreInferred =
     (inferredHeightInch !== null && metadata.heightInch === null) ||
@@ -65,11 +63,10 @@ export function calculatePrice(
 
   switch (mode) {
     case "inch_height":
-      if (inferredHeightInch && inferredHeightInch > 0) {
-        const height = roundDimension(inferredHeightInch);
+      if (inferredHeightInch !== null && inferredHeightInch > 0) {
+        const height = inferredHeightInch;
         rawPrice = height * unitPrice;
         explanation = `${height.toFixed(2)}" height × $${unitPrice}/inch`;
-        if (roundingEnabled) explanation += " (rounded up)";
         if (dimensionsAreInferred) explanation += ` (using assumed ${assumedDpi} DPI)`;
       } else {
         return {
@@ -85,13 +82,17 @@ export function calculatePrice(
     case "inch_square":
       {
         const effectiveWidth = printWidth > 0 ? printWidth : inferredWidthInch;
-        if (effectiveWidth && effectiveWidth > 0 && inferredHeightInch && inferredHeightInch > 0) {
-          const width = roundDimension(effectiveWidth);
-          const height = roundDimension(inferredHeightInch);
+        if (
+          effectiveWidth !== null &&
+          effectiveWidth > 0 &&
+          inferredHeightInch !== null &&
+          inferredHeightInch > 0
+        ) {
+          const width = effectiveWidth;
+          const height = inferredHeightInch;
           const area = width * height;
           rawPrice = area * unitPrice;
           explanation = `${width.toFixed(2)}" × ${height.toFixed(2)}" = ${area.toFixed(2)} in² × $${unitPrice}/in²`;
-          if (roundingEnabled) explanation += " (rounded up)";
           if (dimensionsAreInferred && printWidth <= 0) explanation += ` (using assumed ${assumedDpi} DPI)`;
         } else {
           return {
@@ -104,10 +105,6 @@ export function calculatePrice(
           };
         }
       }
-      break;
-    case "per_file":
-      rawPrice = unitPrice;
-      explanation = `$${unitPrice} per file`;
       break;
     case "flat":
       rawPrice = unitPrice;
@@ -125,10 +122,11 @@ export function calculatePrice(
       : `Minimum $${minPrice} applied`;
   }
 
-  const total = Math.round(filePrice * quantity * 100) / 100;
+  const roundCurrency = (value: number) => Math.round(value * 100) / 100;
+  const total = roundCurrency(filePrice * quantity);
 
   return {
-    filePrice: Math.round(filePrice * 100) / 100,
+    filePrice: roundCurrency(filePrice),
     total,
     explanation: quantity > 1 ? `${explanation} × ${quantity}` : explanation,
     currency,

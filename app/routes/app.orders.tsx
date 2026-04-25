@@ -19,7 +19,6 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
-import { planDisplayName, suggestUpgradeFor } from "../config/plans";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
@@ -28,6 +27,7 @@ import {
   listOrderJobs,
   saveOrderJob,
 } from "../services/shop-data.server";
+import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function normalizeStatus(status: string) {
@@ -72,14 +72,10 @@ function buildOrdersUrl(filters: {
   startDate: string;
   endDate: string;
   page?: number;
-  exportCsv?: boolean;
 }) {
   const params = new URLSearchParams();
   if (filters.page && filters.page > 1) {
     params.set("page", String(filters.page));
-  }
-  if (filters.exportCsv) {
-    params.set("export", "csv");
   }
   if (filters.q) {
     params.set("q", filters.q);
@@ -175,45 +171,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const billingPlan = await getEffectiveBillingPlan(session.shop);
-  const canExportCsv = billingPlan.planCode !== "free";
-
-  if (url.searchParams.get("export") === "csv") {
-    if (!canExportCsv) {
-      throw new Response(
-        `CSV export requires ${planDisplayName(suggestUpgradeFor("moreUploadFields"))} or higher`,
-        {
-          status: 402,
-        },
-      );
-    }
-
-    const csvRows = [
-      ["Order", "File", "Dimensions", "Price", "Status", "Assignee", "Date"].join(","),
-      ...allOrders.map((order) =>
-        [
-          order.orderName,
-          order.asset?.originalName || "No File",
-          order.dimensions,
-          String(order.calculatedPrice || 0),
-          order.status,
-          order.assignee || "",
-          new Date(order.createdAt).toISOString(),
-        ]
-          .map((value) => `"${String(value).replace(/"/g, '""')}"`)
-          .join(","),
-      ),
-    ];
-
-    return new Response(csvRows.join("\n"), {
-      status: 200,
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="PrintDock-order-jobs.csv"`,
-      },
-    });
-  }
-
   const total = allOrders.length;
   const quickStats = {
     pendingReview: allOrders.filter((order) => order.status === "pending_review").length,
@@ -252,7 +209,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         quickStats,
         availableStatuses,
         shopDomain: session.shop,
-        canExportCsv,
       });
     } catch (err) {
       if (err instanceof Response) throw err;
@@ -383,7 +339,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Orders() {
-  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain, canExportCsv } =
+  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain } =
     useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const actionFetcher = useFetcher<typeof action>();
@@ -399,11 +355,14 @@ export default function Orders() {
   const [downloadingFileName, setDownloadingFileName] = useState<string>("PrintDock-file");
   const [updatingStatusJobId, setUpdatingStatusJobId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (downloadFetcher.data && "downloadUrl" in downloadFetcher.data && downloadFetcher.data.downloadUrl) {
+  // `useNewValueEffect` guarantees one toast per new fetcher response; the
+  // previous `useEffect([fetcher.data])` was re-firing on every re-render
+  // while `fetcher.data` stayed truthy.
+  useNewValueEffect(downloadFetcher.data, (fetcherData) => {
+    if ("downloadUrl" in fetcherData && fetcherData.downloadUrl) {
       const completedStoragePath =
-        "storagePath" in downloadFetcher.data ? String(downloadFetcher.data.storagePath || "") : "";
-      const downloadUrl = String(downloadFetcher.data.downloadUrl);
+        "storagePath" in fetcherData ? String(fetcherData.storagePath || "") : "";
+      const downloadUrl = String(fetcherData.downloadUrl);
       void downloadFileWithoutNavigation(downloadUrl, downloadingFileName)
         .then(() => {
           if (completedStoragePath) {
@@ -416,24 +375,31 @@ export default function Orders() {
           setDownloadingStoragePath(null);
           appBridge.toast.show("Failed to download file", { isError: true });
         });
+      return;
     }
-    if (downloadFetcher.data && "error" in downloadFetcher.data && downloadFetcher.data.error) {
+    if ("error" in fetcherData && fetcherData.error) {
       setDownloadingStoragePath(null);
-      appBridge.toast.show(String(downloadFetcher.data.error), { isError: true });
+      appBridge.toast.show(String(fetcherData.error), { isError: true });
     }
-  }, [appBridge, downloadFetcher.data, downloadingFileName]);
+  });
 
+  useNewValueEffect(actionFetcher.data, (fetcherData) => {
+    if ("message" in fetcherData && fetcherData.message) {
+      appBridge.toast.show(String(fetcherData.message));
+    }
+    if ("error" in fetcherData && fetcherData.error) {
+      appBridge.toast.show(String(fetcherData.error), { isError: true });
+    }
+  });
+
+  // Keep the per-row "updating" spinner in sync with the fetcher state.
+  // This lives in its own effect because it must react to *every* state
+  // transition, not just new data payloads.
   useEffect(() => {
-    if (actionFetcher.data && "message" in actionFetcher.data && actionFetcher.data.message) {
-      appBridge.toast.show(String(actionFetcher.data.message));
-    }
-    if (actionFetcher.data && "error" in actionFetcher.data && actionFetcher.data.error) {
-      appBridge.toast.show(String(actionFetcher.data.error), { isError: true });
-    }
     if (actionFetcher.state === "idle") {
       setUpdatingStatusJobId(null);
     }
-  }, [actionFetcher.data, appBridge]);
+  }, [actionFetcher.state]);
 
   const submitFilterValues = (next: {
     q: string;
@@ -616,25 +582,6 @@ export default function Orders() {
                 <input type="hidden" name="startDate" value={startDateValue} />
                 <input type="hidden" name="endDate" value={endDateValue} />
                 <Button submit>Apply filters</Button>
-                {canExportCsv ? (
-                  <Button
-                    url={buildOrdersUrl({
-                      q: filters.q,
-                      status: filters.status,
-                      startDate: filters.startDate,
-                      endDate: filters.endDate,
-                      exportCsv: true,
-                    })}
-                  >
-                    Export CSV
-                  </Button>
-                ) : (
-                  <Tooltip
-                    content={`Upgrade to ${planDisplayName(suggestUpgradeFor("moreUploadFields"))} to export CSV`}
-                  >
-                    <Button url="/app/plans">Upgrade to export</Button>
-                  </Tooltip>
-                )}
               </InlineStack>
             </BlockStack>
           </form>

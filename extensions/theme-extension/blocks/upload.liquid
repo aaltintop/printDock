@@ -2,6 +2,7 @@
   id="printdock-upload-root"
   data-product-id="{{ product.id }}"
   data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+  data-variant-price="{{ product.selected_or_first_available_variant.price | default: 0 | divided_by: 100.0 }}"
   data-required="{{ block.settings.required }}"
   data-shop-domain="{{ shop.permanent_domain }}"
   data-app-handle="printdock"

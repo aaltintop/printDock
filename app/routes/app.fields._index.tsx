@@ -9,7 +9,7 @@ import {
   useSearchParams,
 } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActionList,
   Badge,
@@ -43,6 +43,7 @@ import {
 import type { UploadFieldConfig } from "../types/printdock";
 import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
 import { analyzeActiveFieldTargetOverlaps } from "../utils/field-target-overlaps";
+import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -180,31 +181,28 @@ export default function FieldsIndexPage() {
   const [fieldPendingDelete, setFieldPendingDelete] = useState<UploadFieldConfig | null>(null);
   const toast = searchParams.get("toast");
 
-  useEffect(() => {
-    if (toast === "field_saved") {
-      appBridge.toast.show("Field saved");
-    }
-  }, [appBridge, toast]);
+  // `useNewValueEffect` guarantees one toast per distinct value — needed
+  // because `fetcher.data` stays truthy after a successful submit and was
+  // re-triggering this effect on every `revalidator.revalidate()` render.
+  useNewValueEffect(toast, (value) => {
+    if (value === "field_saved") appBridge.toast.show("Field saved");
+  });
 
-  useEffect(() => {
-    if (fetcher.data && "deleted" in fetcher.data && fetcher.data.deleted) {
+  useNewValueEffect(fetcher.data, (fetcherData) => {
+    if ("deleted" in fetcherData && fetcherData.deleted) {
       appBridge.toast.show("Field deleted");
       setFieldPendingDelete(null);
       revalidator.revalidate();
+      return;
     }
-  }, [appBridge, fetcher.data, revalidator]);
-
-  useEffect(() => {
-    if (fetcher.data && "ok" in fetcher.data && fetcher.data.ok) {
+    if ("ok" in fetcherData && fetcherData.ok) {
       appBridge.toast.show("Field updated");
+      return;
     }
-  }, [appBridge, fetcher.data]);
-
-  useEffect(() => {
-    if (fetcher.data && "error" in fetcher.data && fetcher.data.error) {
-      appBridge.toast.show(fetcher.data.error, { isError: true });
+    if ("error" in fetcherData && fetcherData.error) {
+      appBridge.toast.show(fetcherData.error, { isError: true });
     }
-  }, [appBridge, fetcher.data]);
+  });
 
   const resourceName = useMemo(
     () => ({ singular: "field", plural: "fields" }),

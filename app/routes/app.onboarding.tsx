@@ -12,7 +12,12 @@ import {
   listUploadSessions,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
-import { detectCartTransformActive, detectThemeBlockEnabled } from "../services/app-setup-status.server";
+import { detectThemeBlockEnabled } from "../services/app-setup-status.server";
+import {
+  detectPrintDockCartTransform,
+  registerPrintDockCartTransform,
+  type CartTransformStatusCode,
+} from "../services/cart-transform.server";
 
 type SetupState = {
   themeBlockEnabled: boolean;
@@ -20,12 +25,21 @@ type SetupState = {
   themeVerificationUnavailable: boolean;
   themeVerificationMessage: string | null;
   cartValidationVerified: boolean;
-  cartTransformVerified: boolean;
+  cartTransformEnabled: boolean;
+  cartTransformStatusCode: CartTransformStatusCode;
   cartTransformVerificationUnavailable: boolean;
   cartTransformVerificationMessage: string | null;
   fieldsConfigured: boolean;
   themeEditorUrl: string;
+  reauthUrl: string;
 };
+
+const CART_TRANSFORM_UNAVAILABLE_CODES = new Set<CartTransformStatusCode>([
+  "verification_unavailable",
+  "permission_denied",
+  "missing_scope",
+  "not_supported",
+]);
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
@@ -48,7 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         stats,
       ] = await Promise.all([
         detectThemeBlockEnabled(admin),
-        detectCartTransformActive(admin),
+        detectPrintDockCartTransform(admin),
         listUploadFields(shopDomain),
         listUploadSessions(shopDomain),
         listOrderJobs(shopDomain),
@@ -61,6 +75,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         ? `https://${shopDomain}/admin/themes/${themeStatus.themeId.replace("gid://shopify/OnlineStoreTheme/", "")}/editor?context=apps`
         : `https://${shopDomain}/admin/themes`;
 
+      const cartTransformVerificationUnavailable = CART_TRANSFORM_UNAVAILABLE_CODES.has(
+        cartTransformStatus.code,
+      );
+
+      const reauthUrl = `/auth?shop=${encodeURIComponent(shopDomain)}`;
+
       const setup: SetupState = {
         themeBlockEnabled: themeStatus.enabled,
         themeBlockVerified: Boolean(shopSettings.themeBlockVerified),
@@ -70,21 +90,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         cartValidationVerified:
           fields.some((field) => field.isRequired === true) ||
           Boolean(shopSettings.cartValidationVerified),
-        cartTransformVerified:
-          cartTransformStatus.enabled || Boolean(shopSettings.cartTransformVerified),
-        cartTransformVerificationUnavailable: cartTransformStatus.verificationUnavailable,
-        cartTransformVerificationMessage: cartTransformStatus.verificationMessage,
+        cartTransformEnabled: cartTransformStatus.enabled,
+        cartTransformStatusCode: cartTransformStatus.code,
+        cartTransformVerificationUnavailable,
+        cartTransformVerificationMessage: cartTransformStatus.message,
         themeEditorUrl,
+        reauthUrl,
       };
 
       const themeStepVerified =
         setup.themeVerificationUnavailable || setup.themeBlockEnabled || setup.themeBlockVerified;
 
+      // Real cart transform detection drives setup completion. We treat
+      // "verification unavailable" cases (missing scope, not supported, etc.)
+      // as soft passes so merchants on plans without Cart Transform are not
+      // blocked from finishing onboarding.
+      const cartTransformStepReady =
+        setup.cartTransformEnabled || cartTransformVerificationUnavailable;
+
       const setupComplete =
         themeStepVerified &&
         setup.fieldsConfigured &&
         setup.cartValidationVerified &&
-        setup.cartTransformVerified;
+        cartTransformStepReady;
 
       const checks = [
         {
@@ -97,7 +125,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           id: "onboarding",
           label: "Setup wizard completed",
           help: "Cart validation and dynamic pricing have both been verified.",
-          pass: Boolean(setup.cartValidationVerified && setup.cartTransformVerified),
+          pass: Boolean(setup.cartValidationVerified && cartTransformStepReady),
         },
         {
           id: "fields",
@@ -168,7 +196,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     try {
-      const { session } = await authenticate.admin(request);
+      const { admin, session } = await authenticate.admin(request);
       setLogShopDomain(session.shop);
       const formData = await request.formData();
       const intent = formData.get("intent");
@@ -177,19 +205,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (intent === "verify_cart_validation") {
         log.event("onboarding_verify_cart_validation", {});
         await shopDoc.set({ cartValidationVerified: true }, { merge: true });
-        return data({ ok: true });
+        return data({ ok: true, intent: "verify_cart_validation" });
       }
 
       if (intent === "verify_theme_block") {
         log.event("onboarding_verify_theme_block", {});
         await shopDoc.set({ themeBlockVerified: true }, { merge: true });
-        return data({ ok: true });
+        return data({ ok: true, intent: "verify_theme_block" });
       }
 
-      if (intent === "verify_cart_transform") {
-        log.event("onboarding_verify_cart_transform", {});
-        await shopDoc.set({ cartTransformVerified: true }, { merge: true });
-        return data({ ok: true });
+      if (intent === "register_cart_transform") {
+        log.event("onboarding_register_cart_transform", {});
+        const result = await registerPrintDockCartTransform(admin);
+        const okStatuses: CartTransformStatusCode[] = ["active"];
+        return data({
+          ok: okStatuses.includes(result.code),
+          intent: "register_cart_transform",
+          cartTransform: {
+            code: result.code,
+            enabled: result.enabled,
+            created: result.created,
+            cartTransformId: result.cartTransformId,
+            message: result.message,
+          },
+        });
       }
 
       log.warn("onboarding_unknown_intent", "Unknown onboarding intent", {
@@ -212,11 +251,125 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
   );
 }
 
+function CartTransformBadge({
+  enabled,
+  unavailable,
+}: {
+  enabled: boolean;
+  unavailable: boolean;
+}) {
+  if (enabled) return <Badge tone="success">Registered</Badge>;
+  if (unavailable) return <Badge tone="warning">Verification unavailable</Badge>;
+  return <Badge tone="attention">Not registered</Badge>;
+}
+
+function CartTransformExplanation({
+  code,
+  message,
+  enabled,
+}: {
+  code: CartTransformStatusCode;
+  message: string | null;
+  enabled: boolean;
+}) {
+  if (enabled) {
+    return (
+      <Text as="p" tone="success">
+        Dynamic pricing is registered. Shopify will adjust cart line prices using the
+        PrintDock function.
+      </Text>
+    );
+  }
+  switch (code) {
+    case "missing":
+      return (
+        <Text as="p" tone="subdued">
+          Cart properties are reaching Shopify, but the Cart Transform is not registered yet.
+          Click &ldquo;Enable dynamic pricing&rdquo; to register it for this store.
+        </Text>
+      );
+    case "missing_scope":
+      return (
+        <Text as="p" tone="critical">
+          {message ??
+            "PrintDock needs the `write_cart_transforms` permission. Reauthorize the app to grant it."}
+        </Text>
+      );
+    case "function_not_deployed":
+      return (
+        <Text as="p" tone="critical">
+          {message ??
+            "The PrintDock pricing function is not deployed yet. Run `shopify app deploy` and reinstall the app."}
+        </Text>
+      );
+    case "permission_denied":
+      return (
+        <Text as="p" tone="critical">
+          {message ??
+            "Shopify denied access to Cart Transform APIs for this store. Confirm the installer has the right permissions."}
+        </Text>
+      );
+    case "not_supported":
+      return (
+        <Text as="p" tone="caution">
+          {message ??
+            "Dynamic price overrides require Shopify Plus on this Cart Transform operation. Static fees still work."}
+        </Text>
+      );
+    case "verification_unavailable":
+      return (
+        <Text as="p" tone="caution">
+          {message ??
+            "Cart Transform APIs are not available for this store. Verify dynamic pricing manually in Shopify settings."}
+        </Text>
+      );
+    case "unknown_error":
+      return (
+        <Text as="p" tone="critical">
+          {message ??
+            "Unexpected error while enabling dynamic pricing. Check the app logs and try again."}
+        </Text>
+      );
+    default:
+      return null;
+  }
+}
+
 export default function OnboardingPage() {
   const { setup, themeStepVerified, setupComplete, checks, passedCount, totalChecks, metrics } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const ready = passedCount === totalChecks;
+
+  const cartTransformResult =
+    fetcher.data && (fetcher.data as { intent?: string }).intent === "register_cart_transform"
+      ? (fetcher.data as {
+          ok: boolean;
+          cartTransform: {
+            code: CartTransformStatusCode;
+            enabled: boolean;
+            created: boolean;
+            cartTransformId: string | null;
+            message: string | null;
+          };
+        })
+      : null;
+
+  const liveCartTransformCode: CartTransformStatusCode =
+    cartTransformResult?.cartTransform.code ?? setup.cartTransformStatusCode;
+  const liveCartTransformEnabled =
+    cartTransformResult?.cartTransform.enabled ?? setup.cartTransformEnabled;
+  const liveCartTransformMessage =
+    cartTransformResult?.cartTransform.message ?? setup.cartTransformVerificationMessage;
+  const liveCartTransformUnavailable =
+    cartTransformResult?.cartTransform
+      ? CART_TRANSFORM_UNAVAILABLE_CODES.has(cartTransformResult.cartTransform.code)
+      : setup.cartTransformVerificationUnavailable;
+  const showRegisterButton =
+    !liveCartTransformEnabled &&
+    (liveCartTransformCode === "missing" ||
+      liveCartTransformCode === "function_not_deployed" ||
+      liveCartTransformCode === "unknown_error");
 
   return (
     <Page title="PrintDock Setup">
@@ -321,32 +474,33 @@ export default function OnboardingPage() {
               <Text as="h2" variant="headingMd">
                 4. Cart Transform
               </Text>
-              <StatusBadge enabled={setup.cartTransformVerified} />
+              <CartTransformBadge
+                enabled={liveCartTransformEnabled}
+                unavailable={liveCartTransformUnavailable}
+              />
             </InlineStack>
             <Text as="p" tone="subdued">
-              If you plan to charge customers based on file size or dimensions, enable dynamic
-              pricing.
+              If you plan to charge customers based on file size or dimensions, register the
+              PrintDock Cart Transform so Shopify applies the calculated price to the cart line.
             </Text>
-            <Text as="p" tone="subdued">
-              Ensure the PrintDock Cart Transform function is active in your Shopify settings.
-            </Text>
-            {setup.cartTransformVerificationUnavailable && setup.cartTransformVerificationMessage ? (
-              <Text as="p" tone="critical">
-                {setup.cartTransformVerificationMessage}
-              </Text>
+            <CartTransformExplanation
+              code={liveCartTransformCode}
+              message={liveCartTransformMessage}
+              enabled={liveCartTransformEnabled}
+            />
+            {liveCartTransformCode === "missing_scope" ? (
+              <Button url={setup.reauthUrl} target="_top">
+                Reauthorize PrintDock
+              </Button>
             ) : null}
-            {!setup.cartTransformVerified ? (
+            {showRegisterButton ? (
               <fetcher.Form method="post">
-                <input type="hidden" name="intent" value="verify_cart_transform" />
-                <Button submit loading={fetcher.state === "submitting"}>
-                  Mark as verified
+                <input type="hidden" name="intent" value="register_cart_transform" />
+                <Button submit loading={fetcher.state === "submitting"} variant="primary">
+                  Enable dynamic pricing
                 </Button>
               </fetcher.Form>
-            ) : (
-              <Text as="p" tone="success">
-                Dynamic pricing is verified.
-              </Text>
-            )}
+            ) : null}
           </BlockStack>
         </Card>
 

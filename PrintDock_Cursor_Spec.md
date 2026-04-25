@@ -155,7 +155,7 @@ model UploadField {
   status          String   @default("active")   // active | draft | archived
   productIds      String[]                      // Shopify product GIDs this field applies to
   // Pricing config
-  pricingMode     String?                       // inch_height | inch_square | per_file | flat | null
+  pricingMode     String?                       // inch_height | inch_square | flat | null
   unitPrice       Float?                        // Price per unit
   minPrice        Float?                        // Minimum charge regardless of size
   // Validation rules stored as JSON array
@@ -566,7 +566,7 @@ export function hasBlockingError(results: ValidationResult[]): boolean {
 ```typescript
 import type { FileMetadata } from "./validation.server";
 
-export type PricingMode = "inch_height" | "inch_square" | "per_file" | "flat" | null;
+export type PricingMode = "inch_height" | "inch_square" | "flat" | null;
 
 export interface PricingConfig {
   mode: PricingMode;
@@ -604,10 +604,6 @@ export function calculatePrice(
         rawPrice = area * unitPrice;
         explanation = `${metadata.widthInch.toFixed(2)}" × ${metadata.heightInch.toFixed(2)}" = ${area.toFixed(2)} in² × $${unitPrice}/in²`;
       }
-      break;
-    case "per_file":
-      rawPrice = unitPrice;
-      explanation = `$${unitPrice} per file`;
       break;
     case "flat":
       rawPrice = unitPrice;

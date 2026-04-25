@@ -31,7 +31,7 @@ const FEATURES = [
   {
     title: "Dynamic pricing that scales",
     description:
-      "Charge per file, per inch of height, per square inch, or a flat upload fee. PrintDock computes the price from the uploaded artwork and applies it to checkout via a Shopify Cart Transform function.",
+      "Charge per inch of height, per square inch, or a flat upload fee. PrintDock computes the price from the uploaded artwork and applies it to checkout via a Shopify Cart Transform function.",
     icon: "price",
   },
   {
@@ -81,7 +81,7 @@ const PLANS = [
     highlighted: true,
     features: [
       "Everything in Starter",
-      "Dynamic pricing (per-inch, per-sq-inch, per-file, flat)",
+      "Dynamic pricing (per-inch, per-sq-inch, flat)",
       "1 GB per file, 30 GB total storage",
       "30-day file retention",
     ],
@@ -283,7 +283,7 @@ export default function LandingPage() {
                 <h3 className={styles.stepTitle}>Configure rules & pricing</h3>
                 <p className={styles.stepText}>
                   Set allowed file types, dimensions, DPI thresholds, and upload fees
-                  — per file, per inch, per square inch, or flat.
+                  — per inch, per square inch, or flat.
                 </p>
               </div>
             </li>

@@ -7,14 +7,14 @@
         "lines": [
           {
             "id": "gid://shopify/CartLine/1",
-            "quantity": 2,
+            "quantity": 1,
             "cost": {
               "amountPerQuantity": {
-                "amount": "9.99"
+                "amount": "14.00"
               }
             },
             "priceAttribute": {
-              "value": "12.00"
+              "value": "not-a-number"
             },
             "sessionAttribute": {
               "value": "session_123"
@@ -24,20 +24,7 @@
       }
     },
     "output": {
-      "operations": [
-        {
-          "lineUpdate": {
-            "cartLineId": "gid://shopify/CartLine/1",
-            "price": {
-              "adjustment": {
-                "fixedPricePerUnit": {
-                  "amount": "21.99"
-                }
-              }
-            }
-          }
-        }
-      ]
+      "operations": []
     }
   }
 }

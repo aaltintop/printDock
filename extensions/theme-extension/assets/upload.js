@@ -5,6 +5,7 @@
   if (!root) return;
 
   const PRODUCT_ID = root.dataset.productId;
+  const BASE_VARIANT_PRICE = Number(root.dataset.variantPrice || "0");
   const BLOCK_REQUIRED = root.dataset.required === "true";
   const SESSION_STORAGE_KEY = `printdock_session_${PRODUCT_ID}`;
   const SESSION_EXPIRES_STORAGE_KEY = `${SESSION_STORAGE_KEY}_expires`;
@@ -406,48 +407,27 @@
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     if (!sessionToken || successfulFiles.length === 0) return {};
 
-    const perFileMode =
-      fieldConfig.fileQuantityManagement &&
-      fieldConfig.fileQuantityManagement.enabled &&
-      fieldConfig.fileQuantityManagement.mode === "per_file";
     const properties = {
       _uc_session: sessionToken,
       "_View uploads": getMerchantUploadsLink(sessionToken),
       _Artwork: successfulFiles.map((entry) => entry.name).join(", "),
     };
-    // Only emit `_pd_file_quantities` in per-file mode. In product-quantity mode the cart line
-    // quantity is the source of truth, and writing a stale upload-time snapshot here would cause
-    // the order webhook to record the wrong `calculatedPrice` when the shopper changes qty.
-    if (perFileMode) {
-      properties._pd_file_quantities = JSON.stringify(
-        successfulFiles.map((entry) => ({
-          fileName: entry.name,
-          quantity: Number(entry.quantity || 1),
-        })),
-      );
-    }
     const printUrl = successfulFiles[0]?.printReadyFileUrl;
     if (printUrl) {
       properties["_Print Ready File"] = printUrl;
     }
 
-    // `_pd_calculated_price` carries the PER-UNIT upload fee that the Cart
-    // Transform function applies via `fixedPricePerUnit`. Shopify then
-    // multiplies it by the cart line quantity, so the fee scales correctly
-    // when the shopper changes the cart quantity.
+    // `_pd_calculated_price` carries only the PER-UNIT dynamic upload fee.
+    // The Cart Transform adds this fee on top of the variant base price and
+    // applies the resulting per-unit total with `fixedPricePerUnit`.
     //
-    // - `product_quantity` mode: each file contributes `filePrice` once per
-    //   product unit. The line quantity naturally scales the fee.
-    // - `per_file` mode: the shopper controls each file's own quantity; the
-    //   line quantity is expected to be 1. The per-unit figure is the sum
-    //   of `filePrice × fileQty` across files.
+    // Each file contributes its per-unit `filePrice`; line quantity scales naturally.
     const unitPriceForLine = successfulFiles.reduce((sum, entry) => {
       if (!entry.pricing) return sum;
       const fileUnitPrice =
         entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
       if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
-      const multiplier = perFileMode ? Math.max(1, Number(entry.quantity || 1)) : 1;
-      return sum + fileUnitPrice * multiplier;
+      return sum + fileUnitPrice;
     }, 0);
     if (Number.isFinite(unitPriceForLine) && unitPriceForLine > 0) {
       properties._pd_calculated_price = unitPriceForLine.toFixed(2);
@@ -720,25 +700,21 @@
       return;
     }
 
-    // Mirror the Cart Transform math so the shopper sees what they'll actually
-    // pay: line qty × sum(filePrice × per-file qty).
-    //   - per_file mode: multiply each file's price by its per-file quantity,
-    //     then scale by the current product quantity (line qty).
-    //   - product_quantity mode: sum per-unit file prices, then scale by the
-    //     current product quantity (line qty).
-    const perFileMode =
-      fieldConfig.fileQuantityManagement &&
-      fieldConfig.fileQuantityManagement.enabled &&
-      fieldConfig.fileQuantityManagement.mode === "per_file";
+    // Mirror the Cart Transform math so the shopper sees the final line total:
+    // line qty × (base variant unit price + upload fee per unit).
+    // Sum per-unit file prices, then scale by the current product quantity (line qty).
     const productQuantity = Math.max(1, getProductQuantity());
     const unitTotal = successfulFiles.reduce((sum, entry) => {
       const fileUnitPrice =
         entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
       if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
-      const multiplier = perFileMode ? Math.max(1, Number(entry.quantity || 1)) : 1;
-      return sum + fileUnitPrice * multiplier;
+      return sum + fileUnitPrice;
     }, 0);
-    const total = Math.round(unitTotal * productQuantity * 100) / 100;
+    const baseUnitPrice = Number.isFinite(BASE_VARIANT_PRICE) && BASE_VARIANT_PRICE > 0
+      ? BASE_VARIANT_PRICE
+      : 0;
+    const finalUnitPrice = baseUnitPrice + unitTotal;
+    const total = Math.round(finalUnitPrice * productQuantity * 100) / 100;
 
     let priceEl = document.getElementById("printdock-price");
     if (!priceEl) {
@@ -751,7 +727,9 @@
       <div class="printdock-price-display">
         <span class="printdock-price-label">${escapeHtml(LABELS.priceLabel)}</span>
         <span class="printdock-price-amount">$${total.toFixed(2)}</span>
-        <span class="printdock-price-explanation">${successfulFiles.length} file(s) in session</span>
+        <span class="printdock-price-explanation">
+          ${successfulFiles.length} file(s) in session · per unit: $${baseUnitPrice.toFixed(2)} base + $${unitTotal.toFixed(2)} upload fee
+        </span>
       </div>
     `;
   }
@@ -764,13 +742,6 @@
   }
 
   function defaultFileQuantity() {
-    if (
-      fieldConfig.fileQuantityManagement &&
-      fieldConfig.fileQuantityManagement.enabled &&
-      fieldConfig.fileQuantityManagement.mode === "per_file"
-    ) {
-      return 1;
-    }
     return getProductQuantity();
   }
 
@@ -869,11 +840,7 @@
           .filter((rule) => rule.severity === "blocking")
           .map((rule) => rule.message)
           .join(", ");
-        const showQuantity =
-          file.status === "success" &&
-          fieldConfig.fileQuantityManagement &&
-          fieldConfig.fileQuantityManagement.enabled &&
-          fieldConfig.fileQuantityManagement.mode === "per_file";
+        const showQuantity = false;
         const propertyLabels = [];
         if (file.metadata?.widthInch && file.metadata?.heightInch) {
           propertyLabels.push(`${file.metadata.widthInch.toFixed(1)}" × ${file.metadata.heightInch.toFixed(1)}"`);

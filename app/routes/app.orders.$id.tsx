@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { data, useFetcher, useLoaderData } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
@@ -22,6 +22,7 @@ import {
   listOrderJobs,
   saveOrderJob,
 } from "../services/shop-data.server";
+import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function normalizeStatus(status: string) {
@@ -166,9 +167,11 @@ export default function OrderJobDetailPage() {
   const [reuploadUrl, setReuploadUrl] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  useEffect(() => {
-    if (downloadFetcher.data && "downloadUrl" in downloadFetcher.data && downloadFetcher.data.downloadUrl) {
-      const downloadUrl = String(downloadFetcher.data.downloadUrl);
+  // `useNewValueEffect` runs once per new fetcher response, so the download
+  // doesn't start twice and toasts don't stutter when the page re-renders.
+  useNewValueEffect(downloadFetcher.data, (fetcherData) => {
+    if ("downloadUrl" in fetcherData && fetcherData.downloadUrl) {
+      const downloadUrl = String(fetcherData.downloadUrl);
       void downloadFileWithoutNavigation(
         downloadUrl,
         job.assetSnapshot?.originalName || "PrintDock-file",
@@ -181,24 +184,25 @@ export default function OrderJobDetailPage() {
           setIsDownloading(false);
           appBridge.toast.show("Failed to download file", { isError: true });
         });
+      return;
     }
-    if (downloadFetcher.data && "error" in downloadFetcher.data && downloadFetcher.data.error) {
+    if ("error" in fetcherData && fetcherData.error) {
       setIsDownloading(false);
-      appBridge.toast.show(String(downloadFetcher.data.error), { isError: true });
+      appBridge.toast.show(String(fetcherData.error), { isError: true });
     }
-  }, [appBridge, downloadFetcher.data, job.assetSnapshot?.originalName]);
+  });
 
-  useEffect(() => {
-    if (actionFetcher.data && "reuploadUrl" in actionFetcher.data && actionFetcher.data.reuploadUrl) {
-      setReuploadUrl(actionFetcher.data.reuploadUrl as string);
+  useNewValueEffect(actionFetcher.data, (fetcherData) => {
+    if ("reuploadUrl" in fetcherData && fetcherData.reuploadUrl) {
+      setReuploadUrl(fetcherData.reuploadUrl as string);
     }
-    if (actionFetcher.data && "message" in actionFetcher.data && actionFetcher.data.message) {
-      appBridge.toast.show(String(actionFetcher.data.message));
+    if ("message" in fetcherData && fetcherData.message) {
+      appBridge.toast.show(String(fetcherData.message));
     }
-    if (actionFetcher.data && "error" in actionFetcher.data && actionFetcher.data.error) {
-      appBridge.toast.show(String(actionFetcher.data.error), { isError: true });
+    if ("error" in fetcherData && fetcherData.error) {
+      appBridge.toast.show(String(fetcherData.error), { isError: true });
     }
-  }, [actionFetcher.data, appBridge]);
+  });
 
   return (
     <Page title={`Order ${job.shopifyOrderName}`} backAction={{ content: "Order jobs", url: "/app/orders" }}>

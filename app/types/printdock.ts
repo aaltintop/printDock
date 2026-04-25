@@ -9,11 +9,11 @@ export type FieldDimensionType =
 
 export type FieldOperator = "gt" | "lt" | "eq" | "gte" | "lte";
 export type FieldRuleAction = "warning" | "prevent";
-export type QuantityMode = "per_file" | "product_quantity";
-export type PricingUnitType = "inch_height" | "inch_square" | "per_file" | "flat";
+export type PricingUnitType = "inch_height" | "inch_square" | "flat";
 
 export interface UploadFieldDimensionRule {
   id: string;
+  groupId?: string;
   dimensionType: FieldDimensionType;
   operator: FieldOperator;
   value: number;
@@ -65,10 +65,6 @@ export interface UploadFieldConfig {
   maxFiles: number;
   allowedExtensions: string[];
   maxFileMB: number;
-  fileQuantityManagement: {
-    enabled: boolean;
-    mode: QuantityMode;
-  };
   pricing: UploadFieldPricing;
   dimensionRules: UploadFieldDimensionRule[];
   planRequirement: import("../config/plans").PlanCode;

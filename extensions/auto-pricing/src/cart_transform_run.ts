@@ -12,13 +12,15 @@ export function cartTransformRun(input: CartTransformRunInput): CartTransformRun
 
   for (const line of input.cart.lines) {
     const hasSession = Boolean(line.sessionAttribute?.value);
-    const unitPrice = Number(line.priceAttribute?.value ?? "");
-    if (!hasSession || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+    const dynamicFee = Number(line.priceAttribute?.value ?? "");
+    if (!hasSession || !Number.isFinite(dynamicFee) || dynamicFee <= 0) {
       continue;
     }
 
-    const rounded = Math.round(unitPrice * 100) / 100;
-    if (rounded <= 0) continue;
+    const baseUnitPrice = Number(line.cost.amountPerQuantity.amount ?? "");
+    const nextUnitPrice = baseUnitPrice + dynamicFee;
+    const rounded = Math.round(nextUnitPrice * 100) / 100;
+    if (!Number.isFinite(rounded) || rounded <= 0) continue;
 
     operations.push({
       lineUpdate: {

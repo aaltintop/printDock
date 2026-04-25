@@ -60,8 +60,8 @@ export async function extractMetadata(
           widthPx: meta.width ?? null,
           heightPx: meta.height ?? null,
           dpi,
-          widthInch: dpi && meta.width ? Math.round((meta.width / dpi) * 100) / 100 : null,
-          heightInch: dpi && meta.height ? Math.round((meta.height / dpi) * 100) / 100 : null,
+          widthInch: dpi && meta.width ? meta.width / dpi : null,
+          heightInch: dpi && meta.height ? meta.height / dpi : null,
           pageCount: null,
           fileSizeMB: Math.round(fileSizeMB * 100) / 100,
         },
@@ -80,8 +80,8 @@ export async function extractMetadata(
           widthPx: null,
           heightPx: null,
           dpi: 72, // PDF native
-          widthInch: Math.round((width / 72) * 100) / 100,
-          heightInch: Math.round((height / 72) * 100) / 100,
+          widthInch: width / 72,
+          heightInch: height / 72,
           pageCount: pages.length,
           fileSizeMB: Math.round(fileSizeMB * 100) / 100,
         },
@@ -121,7 +121,9 @@ export function runValidationRules(
     const actual = metadata[rule.type] as number | null;
     if (actual === null) continue; // Can't check what we don't have
 
-    const triggered = checkOperator(actual, rule.operator, rule.value);
+    // Operators in saved rules represent "valid/pass" conditions (e.g. lte = max, gte = min).
+    // Trigger when the file VIOLATES that pass condition.
+    const triggered = violatesRule(actual, rule.operator, rule.value);
     if (triggered) {
       results.push({
         ruleId: rule.id,
@@ -145,6 +147,10 @@ function checkOperator(actual: number, operator: string, expected: number): bool
     case "lte": return actual <= expected;
     default:    return false;
   }
+}
+
+function violatesRule(actual: number, operator: string, expected: number): boolean {
+  return !checkOperator(actual, operator, expected);
 }
 
 export function hasBlockingError(results: ValidationResult[]): boolean {

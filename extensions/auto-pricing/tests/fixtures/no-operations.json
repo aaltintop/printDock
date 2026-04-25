@@ -8,6 +8,11 @@
           {
             "id": "gid://shopify/CartLine/1",
             "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "14.00"
+              }
+            },
             "priceAttribute": null,
             "sessionAttribute": null
           }

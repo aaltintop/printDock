@@ -12,6 +12,18 @@ automatically_update_urls_on_dev = true
 api_version = "2026-07"
 
   [[webhooks.subscriptions]]
+  topics = [ "app_subscriptions/update" ]
+  uri = "/webhooks/app_subscriptions/update"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create" ]
+  uri = "/webhooks/orders/create"
+
+  [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
   uri = "/webhooks/app/uninstalled"
 
@@ -19,25 +31,14 @@ api_version = "2026-07"
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
-  [[webhooks.subscriptions]]
-  topics = [ "orders/create" ]
-  uri = "/webhooks/orders/create"
-
-  [[webhooks.subscriptions]]
-  topics = [ "app_subscriptions/update" ]
-  uri = "/webhooks/app_subscriptions/update"
-
-  # Mandatory App Store compliance (GDPR-style data requests / redaction). @see https://shopify.dev/docs/apps/build/compliance/privacy-law-compliance
-  [[webhooks.subscriptions]]
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-  uri = "/webhooks/compliance"
-
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,read_orders,read_themes"
+scopes = "read_cart_transforms,read_orders,read_products,read_themes,write_cart_transforms"
 
 [auth]
-redirect_urls = [ "https://printdock-service-u6yavvnujq-uc.a.run.app/auth/callback" ]
+redirect_urls = [
+  "https://printdock-service-u6yavvnujq-uc.a.run.app/auth/callback"
+]
 
 [app_proxy]
 url = "https://printdock-service-u6yavvnujq-uc.a.run.app"

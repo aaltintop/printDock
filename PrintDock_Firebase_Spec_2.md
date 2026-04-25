@@ -427,7 +427,7 @@ export interface UploadField {
   maxFiles: number;
   allowedTypes: string[];
   maxFileMB: number;
-  pricingMode?: "inch_height" | "inch_square" | "per_file" | "flat" | null;
+  pricingMode?: "inch_height" | "inch_square" | "flat" | null;
   unitPrice?: number;
   minPrice?: number;
   validationRules: ValidationRule[];
