@@ -7,9 +7,6 @@ export interface PricingConfig {
   unitPrice: number;
   minPrice: number;
   roundingEnabled?: boolean;
-  printWidth?: number;
-  /** Merchant-configured "assumed DPI" used to infer inches when the file itself has none. */
-  assumedDpi?: number;
 }
 
 export interface PricingResult {
@@ -19,7 +16,7 @@ export interface PricingResult {
   currency: string;
   /**
    * Machine-readable error code when pricing could not be computed (e.g. the file lacks the
-   * dimensions the chosen pricing mode requires and no assumed DPI is configured).
+   * dimensions the chosen pricing mode requires).
    */
   error?: "missing_dimensions" | "invalid_unit_price";
 }
@@ -30,7 +27,7 @@ export function calculatePrice(
   quantity = 1,
   currency = "USD"
 ): PricingResult {
-  const { mode, unitPrice, minPrice, printWidth = 0, assumedDpi = 0 } = config;
+  const { mode, unitPrice, minPrice } = config;
   let rawPrice = 0;
   let explanation = "";
 
@@ -44,36 +41,18 @@ export function calculatePrice(
     };
   }
 
-  // Infer inches from pixel dimensions when the file has no embedded DPI but the merchant has
-  // configured an "assumed DPI" on the field. Without this fallback, PNG/JPG files saved without
-  // DPI metadata would silently price at $0 under inch_* modes.
-  const inferredHeightInch =
-    metadata.heightInch ??
-    (metadata.heightPx && assumedDpi > 0
-      ? metadata.heightPx / assumedDpi
-      : null);
-  const inferredWidthInch =
-    metadata.widthInch ??
-    (metadata.widthPx && assumedDpi > 0
-      ? metadata.widthPx / assumedDpi
-      : null);
-  const dimensionsAreInferred =
-    (inferredHeightInch !== null && metadata.heightInch === null) ||
-    (inferredWidthInch !== null && metadata.widthInch === null);
-
   switch (mode) {
     case "inch_height":
-      if (inferredHeightInch !== null && inferredHeightInch > 0) {
-        const height = inferredHeightInch;
+      if (metadata.heightInch !== null && metadata.heightInch > 0) {
+        const height = metadata.heightInch;
         rawPrice = height * unitPrice;
         explanation = `${height.toFixed(2)}" height × $${unitPrice}/inch`;
-        if (dimensionsAreInferred) explanation += ` (using assumed ${assumedDpi} DPI)`;
       } else {
         return {
           filePrice: 0,
           total: 0,
           explanation:
-            "Price could not be calculated: file is missing a height and no assumed DPI is configured.",
+            "Price could not be calculated: file is missing measurable height in inches.",
           currency,
           error: "missing_dimensions",
         };
@@ -81,25 +60,23 @@ export function calculatePrice(
       break;
     case "inch_square":
       {
-        const effectiveWidth = printWidth > 0 ? printWidth : inferredWidthInch;
         if (
-          effectiveWidth !== null &&
-          effectiveWidth > 0 &&
-          inferredHeightInch !== null &&
-          inferredHeightInch > 0
+          metadata.widthInch !== null &&
+          metadata.widthInch > 0 &&
+          metadata.heightInch !== null &&
+          metadata.heightInch > 0
         ) {
-          const width = effectiveWidth;
-          const height = inferredHeightInch;
+          const width = metadata.widthInch;
+          const height = metadata.heightInch;
           const area = width * height;
           rawPrice = area * unitPrice;
           explanation = `${width.toFixed(2)}" × ${height.toFixed(2)}" = ${area.toFixed(2)} in² × $${unitPrice}/in²`;
-          if (dimensionsAreInferred && printWidth <= 0) explanation += ` (using assumed ${assumedDpi} DPI)`;
         } else {
           return {
             filePrice: 0,
             total: 0,
             explanation:
-              "Price could not be calculated: file is missing width/height and no assumed DPI or print width is configured.",
+              "Price could not be calculated: file is missing measurable width and/or height in inches.",
             currency,
             error: "missing_dimensions",
           };

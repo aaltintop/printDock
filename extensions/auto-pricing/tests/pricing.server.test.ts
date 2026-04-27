@@ -31,18 +31,17 @@ describe("calculatePrice precision", () => {
     expect(result.total).toBe(10);
   });
 
-  it("uses full precision for inferred dimensions with assumed DPI", () => {
+  it("uses full precision for file-provided inch dimensions", () => {
     const result = calculatePrice(
       {
         ...baseMetadata,
-        widthPx: 1000,
-        heightPx: 3000,
+        widthInch: 3.333333,
+        heightInch: 10,
       },
       {
         mode: "inch_square",
         unitPrice: 0.1,
         minPrice: 0,
-        assumedDpi: 300,
       },
       1,
     );

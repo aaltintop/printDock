@@ -32,18 +32,6 @@ function isSafeSessionStoragePath(path: string, shopDomain: string): boolean {
   return path.startsWith(prefix) && !path.includes("..");
 }
 
-function inferDimensionsForValidation(metadata: FileMetadata, assumedDpi: number): FileMetadata {
-  if (!(assumedDpi > 0)) return metadata;
-  const inferred: FileMetadata = { ...metadata };
-  if (inferred.widthInch === null && inferred.widthPx && inferred.widthPx > 0) {
-    inferred.widthInch = inferred.widthPx / assumedDpi;
-  }
-  if (inferred.heightInch === null && inferred.heightPx && inferred.heightPx > 0) {
-    inferred.heightInch = inferred.heightPx / assumedDpi;
-  }
-  return inferred;
-}
-
 type SupportedDimensionType = "widthInch" | "heightInch" | "dpi";
 type DimensionRuleMeta = {
   groupId: string;
@@ -300,11 +288,7 @@ export async function action({ request }: ActionFunctionArgs) {
           };
         });
 
-      const metadataForValidation = inferDimensionsForValidation(
-        metadata,
-        field?.pricing?.enabled ? field.pricing.dpi ?? 0 : 0,
-      );
-      let validationResults = runValidationRules(metadataForValidation, rules);
+      let validationResults = runValidationRules(metadata, rules);
       validationResults = consolidateDimensionRuleResults(validationResults, dimensionRuleMetaById);
       const extension = originalName.split(".").pop()?.toLowerCase() ?? "";
 
@@ -328,21 +312,6 @@ export async function action({ request }: ActionFunctionArgs) {
         });
       }
 
-      if (
-        field?.pricing?.enabled &&
-        field.pricing.dpi > 0 &&
-        metadata.dpi &&
-        metadata.dpi < field.pricing.dpi
-      ) {
-        validationResults.push({
-          ruleId: "dpi_target",
-          severity: "warning",
-          message: `DPI is below recommended minimum (${field.pricing.dpi})`,
-          actual: metadata.dpi,
-          expected: field.pricing.dpi,
-        });
-      }
-
       const blocked = hasBlockingError(validationResults);
 
       // Calculate price
@@ -355,14 +324,12 @@ export async function action({ request }: ActionFunctionArgs) {
             unitPrice: field.pricing.unitPrice ?? 0,
             minPrice: field.pricing.minPrice ?? 0,
             roundingEnabled: field.pricing.roundingEnabled,
-            printWidth: field.pricing.printWidth,
-            assumedDpi: field.pricing.dpi ?? 0,
           },
           quantity,
         );
         if (priceResult.error) {
-          // Pricing needs dimensions that the file does not carry and no assumed DPI is configured,
-          // or the merchant has misconfigured unit price. Block add-to-cart with a clear message
+          // Pricing needs dimensions that the file does not carry, or the merchant has
+          // misconfigured unit price. Block add-to-cart with a clear message
           // instead of silently pricing the line at $0.
           validationResults.push({
             ruleId: `pricing_${priceResult.error}`,

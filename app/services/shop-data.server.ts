@@ -168,8 +168,6 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
           : "flat",
       unitPrice: Number(isRecord(field.pricing) ? field.pricing.unitPrice ?? 0 : 0),
       minPrice: Number(isRecord(field.pricing) ? field.pricing.minPrice ?? 0 : 0),
-      dpi: Number(isRecord(field.pricing) ? field.pricing.dpi ?? 300 : 300),
-      printWidth: Number(isRecord(field.pricing) ? field.pricing.printWidth ?? 22 : 22),
       roundingEnabled: Boolean(isRecord(field.pricing) && field.pricing.roundingEnabled),
     },
     dimensionRules: Array.isArray(field.dimensionRules)

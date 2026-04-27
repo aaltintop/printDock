@@ -28,8 +28,6 @@ export interface UploadFieldPricing {
   unitType: PricingUnitType;
   unitPrice: number;
   minPrice: number;
-  dpi: number;
-  printWidth: number;
   roundingEnabled: boolean;
 }
 

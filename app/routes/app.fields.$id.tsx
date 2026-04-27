@@ -22,7 +22,6 @@ import {
   InlineStack,
   Page,
   Popover,
-  RangeSlider,
   Select,
   SkeletonBodyText,
   SkeletonPage,
@@ -89,8 +88,6 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
       unitType: "flat",
       unitPrice: 0,
       minPrice: 0,
-      dpi: 300,
-      printWidth: 22,
       roundingEnabled: true,
     },
     dimensionRules: [],
@@ -419,9 +416,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 const FILE_SIZE_LIMITS = { min: 1, step: 1 } as const;
-const PRICE_LIMITS = { min: 0, max: 9999, step: 0.01 } as const;
-const DPI_LIMITS = { min: 1, max: 2400, step: 1, sliderMin: 72, sliderMax: 1200 } as const;
-const PRINT_WIDTH_LIMITS = { min: 1, max: 500, step: 0.5, sliderMin: 1, sliderMax: 200 } as const;
+const PRICE_LIMITS = { min: 0, max: 9999, step: 0.00000001 } as const;
 const DIMENSION_INCH_LIMITS = { min: 0.01, max: 500, step: 0.01 } as const;
 const DIMENSION_DPI_LIMITS = { min: 1, max: 2400, step: 1 } as const;
 
@@ -432,11 +427,20 @@ function parseBoundedNumberInput(
   label: string,
   range: NumericRange,
   fallback: number,
+  options?: { allowDecimalComma?: boolean },
 ): { value: number; error: string | null } {
   if (raw === null || String(raw).trim() === "") {
     return { value: fallback, error: null };
   }
-  const parsed = Number(raw);
+  const text = String(raw).trim();
+  if (options?.allowDecimalComma && text.includes(",") && text.includes(".")) {
+    return {
+      value: fallback,
+      error: `${label} must use either comma or dot as decimal separator, not both.`,
+    };
+  }
+  const normalizedText = options?.allowDecimalComma ? text.replace(",", ".") : text;
+  const parsed = Number(normalizedText);
   if (!Number.isFinite(parsed)) {
     return { value: fallback, error: `${label} must be a valid number.` };
   }
@@ -447,16 +451,6 @@ function parseBoundedNumberInput(
     };
   }
   return { value: parsed, error: null };
-}
-
-function clampNumber(value: number, range: NumericRange): number {
-  return Math.min(range.max, Math.max(range.min, value));
-}
-
-function parseNumberForSlider(value: string, range: NumericRange, fallback: number): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return clampNumber(parsed, range);
 }
 
 function getDimensionNumericLimits(
@@ -572,6 +566,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         unitPriceLabelForMethod(pricingUnitType),
         PRICE_LIMITS,
         existingField?.pricing.unitPrice ?? 0,
+        { allowDecimalComma: true },
       );
       if (pricingEnabled && unitPriceParse.error) {
         return data({ error: unitPriceParse.error }, { status: 400 });
@@ -581,29 +576,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         "Floor price",
         PRICE_LIMITS,
         existingField?.pricing.minPrice ?? 0,
+        { allowDecimalComma: true },
       );
       if (pricingEnabled && minPriceParse.error) {
         return data({ error: minPriceParse.error }, { status: 400 });
       }
-      const dpiParse = parseBoundedNumberInput(
-        formData.get("dpi"),
-        "Assumed DPI",
-        DPI_LIMITS,
-        existingField?.pricing.dpi ?? 300,
-      );
-      if (pricingEnabled && dpiParse.error) {
-        return data({ error: dpiParse.error }, { status: 400 });
-      }
-      const printWidthParse = parseBoundedNumberInput(
-        formData.get("printWidth"),
-        "Roll / print width",
-        PRINT_WIDTH_LIMITS,
-        existingField?.pricing.printWidth ?? 22,
-      );
-      if (pricingEnabled && printWidthParse.error) {
-        return data({ error: printWidthParse.error }, { status: 400 });
-      }
-
       for (const rule of dimensionRules) {
         if (!SUPPORTED_DIMENSIONS.includes(rule.dimensionType as SupportedDimensionType)) continue;
         const limits = getDimensionNumericLimits(rule.dimensionType as SupportedDimensionType);
@@ -654,8 +631,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           unitType: pricingUnitType,
           unitPrice: unitPriceParse.value,
           minPrice: minPriceParse.value,
-          dpi: dpiParse.value,
-          printWidth: printWidthParse.value,
           roundingEnabled: parseBoolean(formData.get("roundingEnabled")),
         },
         dimensionRules,
@@ -721,8 +696,6 @@ export default function FieldEditorPage() {
       pricingUnitType: field.pricing.unitType,
       unitPrice: String(field.pricing.unitPrice),
       minPrice: String(field.pricing.minPrice),
-      dpi: String(field.pricing.dpi),
-      printWidth: String(field.pricing.printWidth),
       roundingEnabled: field.pricing.roundingEnabled,
       dimensionCards: derivedDimensionState.cards,
       legacyDimensionRules: derivedDimensionState.legacyRules,
@@ -746,8 +719,6 @@ export default function FieldEditorPage() {
   const [pricingUnitType, setPricingUnitType] = useState(initialState.pricingUnitType);
   const [unitPrice, setUnitPrice] = useState(initialState.unitPrice);
   const [minPrice, setMinPrice] = useState(initialState.minPrice);
-  const [dpi, setDpi] = useState(initialState.dpi);
-  const [printWidth, setPrintWidth] = useState(initialState.printWidth);
   const [renameHelpOpen, setRenameHelpOpen] = useState(false);
   const [dimensionCards, setDimensionCards] = useState(initialState.dimensionCards);
   const [legacyDimensionRules, setLegacyDimensionRules] = useState<UploadFieldDimensionRule[]>(
@@ -818,8 +789,6 @@ export default function FieldEditorPage() {
     pricingUnitType,
     unitPrice,
     minPrice,
-    dpi,
-    printWidth,
     dimensionCards,
     legacyDimensionRules,
   });
@@ -842,8 +811,6 @@ export default function FieldEditorPage() {
     setPricingUnitType(initialState.pricingUnitType);
     setUnitPrice(initialState.unitPrice);
     setMinPrice(initialState.minPrice);
-    setDpi(initialState.dpi);
-    setPrintWidth(initialState.printWidth);
     setDimensionCards(initialState.dimensionCards);
     setLegacyDimensionRules(initialState.legacyDimensionRules);
     setDimensionRulesSimplified(initialState.dimensionRulesSimplified);
@@ -919,18 +886,6 @@ export default function FieldEditorPage() {
   const firstProductHandle = targetProducts[0]?.handle;
   const isSaving = navigation.state === "submitting";
   const showMinPrice = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
-  const showDpi = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
-  const showPrintWidth = pricingUnitType === "inch_square";
-  const dpiSliderValue = parseNumberForSlider(
-    dpi,
-    { min: DPI_LIMITS.sliderMin, max: DPI_LIMITS.sliderMax },
-    clampNumber(300, { min: DPI_LIMITS.sliderMin, max: DPI_LIMITS.sliderMax }),
-  );
-  const printWidthSliderValue = parseNumberForSlider(
-    printWidth,
-    { min: PRINT_WIDTH_LIMITS.sliderMin, max: PRINT_WIDTH_LIMITS.sliderMax },
-    clampNumber(22, { min: PRINT_WIDTH_LIMITS.sliderMin, max: PRINT_WIDTH_LIMITS.sliderMax }),
-  );
   const allowedDimensionTypes = allowedDimensionTypesForMethod(pricingUnitType) as SupportedDimensionType[];
   const serializedDimensionRules = useMemo(
     () => serializeDimensionCards(dimensionCards, allowedDimensionTypes, legacyDimensionRules),
@@ -1392,8 +1347,6 @@ export default function FieldEditorPage() {
                   <input type="hidden" name="pricingUnitType" value={pricingUnitType} />
                   <input type="hidden" name="unitPrice" value={unitPrice} />
                   <input type="hidden" name="minPrice" value={minPrice} />
-                  <input type="hidden" name="dpi" value={dpi} />
-                  <input type="hidden" name="printWidth" value={printWidth} />
                   <input type="hidden" name="roundingEnabled" value="false" />
                 </>
               ) : null}
@@ -1412,12 +1365,10 @@ export default function FieldEditorPage() {
                   </Text>
                   <Text as="p" variant="bodySm" tone="subdued">
                     {
-                      "These values are used together with the customer's file metadata (size, dimensions) where applicable."
+                      "These values are calculated directly from the uploaded file metadata (no inferred DPI or roll width fallback)."
                     }
                   </Text>
                   {!showMinPrice ? <input type="hidden" name="minPrice" value={minPrice} /> : null}
-                  {!showDpi ? <input type="hidden" name="dpi" value={dpi} /> : null}
-                  {!showPrintWidth ? <input type="hidden" name="printWidth" value={printWidth} /> : null}
                   <FormLayout>
                     <Select
                       name="pricingUnitType"
@@ -1438,15 +1389,13 @@ export default function FieldEditorPage() {
                         <TextField
                           name="unitPrice"
                           label={unitPriceLabelForMethod(pricingUnitType)}
-                          type="number"
+                          type="text"
+                          inputMode="decimal"
                           prefix="$"
                           autoComplete="off"
                           value={unitPrice}
                           onChange={setUnitPrice}
-                          min={PRICE_LIMITS.min}
-                          max={PRICE_LIMITS.max}
-                          step={PRICE_LIMITS.step}
-                          helpText="Used by the selected calculation method."
+                          helpText="Used by the selected calculation method. Decimal comma is accepted."
                         />
                       </Box>
                       {showMinPrice ? (
@@ -1454,75 +1403,13 @@ export default function FieldEditorPage() {
                           <TextField
                             name="minPrice"
                             label="Floor price"
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             prefix="$"
                             autoComplete="off"
                             value={minPrice}
                             onChange={setMinPrice}
-                            min={PRICE_LIMITS.min}
-                            max={PRICE_LIMITS.max}
-                            step={PRICE_LIMITS.step}
-                            helpText="Minimum fee charged for an upload (0 = no floor)."
-                          />
-                        </Box>
-                      ) : null}
-                    </InlineStack>
-                    <InlineStack gap="400" align="start" blockAlign="start" wrap>
-                      {showDpi ? (
-                        <Box minWidth="200px" width="100%">
-                          <TextField
-                            name="dpi"
-                            label="Assumed DPI"
-                            type="number"
-                            suffix="DPI"
-                            helpText="Used to convert pixels to physical inches for area/height pricing."
-                            autoComplete="off"
-                            value={dpi}
-                            onChange={setDpi}
-                            min={DPI_LIMITS.min}
-                            max={DPI_LIMITS.max}
-                            step={DPI_LIMITS.step}
-                          />
-                          <RangeSlider
-                            label="Assumed DPI quick adjust"
-                            labelHidden
-                            min={DPI_LIMITS.sliderMin}
-                            max={DPI_LIMITS.sliderMax}
-                            step={DPI_LIMITS.step}
-                            value={dpiSliderValue}
-                            onChange={(value) => {
-                              setDpi(String(value));
-                            }}
-                            output
-                          />
-                        </Box>
-                      ) : null}
-                      {showPrintWidth ? (
-                        <Box minWidth="200px" width="100%">
-                          <TextField
-                            name="printWidth"
-                            label="Roll / print width"
-                            type="number"
-                            suffix="in"
-                            helpText="Reference width for layout calculations (e.g. wide-format rolls)."
-                            autoComplete="off"
-                            value={printWidth}
-                            onChange={setPrintWidth}
-                            min={PRINT_WIDTH_LIMITS.min}
-                            max={PRINT_WIDTH_LIMITS.max}
-                            step={PRINT_WIDTH_LIMITS.step}
-                          />
-                          <RangeSlider
-                            label="Print width quick adjust"
-                            labelHidden
-                            min={PRINT_WIDTH_LIMITS.sliderMin}
-                            max={PRINT_WIDTH_LIMITS.sliderMax}
-                            step={PRINT_WIDTH_LIMITS.step}
-                            value={printWidthSliderValue}
-                            onChange={(value) => {
-                              setPrintWidth(String(value));
-                            }}
-                            output
+                            helpText="Minimum fee charged for an upload (0 = no floor). Decimal comma is accepted."
                           />
                         </Box>
                       ) : null}
