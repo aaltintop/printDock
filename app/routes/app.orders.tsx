@@ -1,13 +1,12 @@
-import { data, useFetcher, useLoaderData, useNavigation, useSubmit } from "react-router";
+import { data, useFetcher, useLoaderData, useNavigation } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   BlockStack,
   Button,
   Card,
   EmptyState,
-  Filters,
   IndexTable,
   InlineStack,
   Link,
@@ -190,8 +189,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       };
     }),
   );
-  const availableStatuses = Array.from(new Set(allOrders.map((order) => order.status)));
-
       return data({
         orders,
         pagination: {
@@ -207,7 +204,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           endDate,
         },
         quickStats,
-        availableStatuses,
         shopDomain: session.shop,
       });
     } catch (err) {
@@ -339,17 +335,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Orders() {
-  const { orders, pagination, filters, quickStats, availableStatuses, shopDomain } =
+  const { orders, pagination, filters, quickStats, shopDomain } =
     useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const actionFetcher = useFetcher<typeof action>();
   const downloadFetcher = useFetcher<typeof action>();
-  const submit = useSubmit();
   const appBridge = useAppBridge();
-  const [queryValue, setQueryValue] = useState(filters.q);
-  const [statusValue, setStatusValue] = useState(filters.status);
-  const [startDateValue, setStartDateValue] = useState(filters.startDate);
-  const [endDateValue, setEndDateValue] = useState(filters.endDate);
   const [downloadingStoragePath, setDownloadingStoragePath] = useState<string | null>(null);
   const [downloadedStoragePath, setDownloadedStoragePath] = useState<string | null>(null);
   const [downloadingFileName, setDownloadingFileName] = useState<string>("PrintDock-file");
@@ -401,16 +392,6 @@ export default function Orders() {
     }
   }, [actionFetcher.state]);
 
-  const submitFilterValues = (next: {
-    q: string;
-    status: string;
-    startDate: string;
-    endDate: string;
-  }) => {
-    const nextUrl = buildOrdersUrl(next);
-    submit(new URLSearchParams(), { method: "get", action: nextUrl });
-  };
-
   const handleDownload = (storagePath: string, fileName: string) => {
     setDownloadingStoragePath(storagePath);
     setDownloadedStoragePath(null);
@@ -430,71 +411,6 @@ export default function Orders() {
     );
   };
 
-  const appliedFilters = useMemo(() => {
-    const chips: Array<{ key: string; label: string; onRemove: () => void }> = [];
-    if (filters.q) {
-      chips.push({
-        key: "q",
-        label: `Search: ${filters.q}`,
-        onRemove: () => {
-          setQueryValue("");
-          submitFilterValues({
-            q: "",
-            status: statusValue,
-            startDate: startDateValue,
-            endDate: endDateValue,
-          });
-        },
-      });
-    }
-    if (statusValue !== "all") {
-      chips.push({
-        key: "status",
-        label: `Status: ${getStatusLabel(statusValue)}`,
-        onRemove: () => {
-          setStatusValue("all");
-          submitFilterValues({
-            q: queryValue,
-            status: "all",
-            startDate: startDateValue,
-            endDate: endDateValue,
-          });
-        },
-      });
-    }
-    if (startDateValue) {
-      chips.push({
-        key: "startDate",
-        label: `Start: ${startDateValue}`,
-        onRemove: () => {
-          setStartDateValue("");
-          submitFilterValues({
-            q: queryValue,
-            status: statusValue,
-            startDate: "",
-            endDate: endDateValue,
-          });
-        },
-      });
-    }
-    if (endDateValue) {
-      chips.push({
-        key: "endDate",
-        label: `End: ${endDateValue}`,
-        onRemove: () => {
-          setEndDateValue("");
-          submitFilterValues({
-            q: queryValue,
-            status: statusValue,
-            startDate: startDateValue,
-            endDate: "",
-          });
-        },
-      });
-    }
-    return chips;
-  }, [endDateValue, filters.q, queryValue, startDateValue, statusValue]);
-
   if (navigation.state === "loading") {
     return (
       <Page title="Order Jobs">
@@ -510,83 +426,6 @@ export default function Orders() {
   return (
     <Page title="Order Jobs">
       <BlockStack gap="400">
-        <Card>
-          <form method="get">
-            <BlockStack gap="300">
-              <Filters
-                queryValue={queryValue}
-                queryPlaceholder="Search order number or file name"
-                onQueryChange={setQueryValue}
-                onQueryClear={() => setQueryValue("")}
-                filters={[
-                  {
-                    key: "status",
-                    label: "Status",
-                    filter: (
-                      <select
-                        name="status"
-                        value={statusValue}
-                        onChange={(event) => setStatusValue(event.target.value)}
-                      >
-                        <option value="all">All statuses</option>
-                        {availableStatuses.map((value) => (
-                          <option key={value} value={value}>
-                            {value}
-                          </option>
-                        ))}
-                      </select>
-                    ),
-                  },
-                  {
-                    key: "startDate",
-                    label: "Start date",
-                    filter: (
-                      <input
-                        type="date"
-                        name="startDate"
-                        value={startDateValue}
-                        onChange={(event) => setStartDateValue(event.target.value)}
-                      />
-                    ),
-                  },
-                  {
-                    key: "endDate",
-                    label: "End date",
-                    filter: (
-                      <input
-                        type="date"
-                        name="endDate"
-                        value={endDateValue}
-                        onChange={(event) => setEndDateValue(event.target.value)}
-                      />
-                    ),
-                  },
-                ]}
-                appliedFilters={appliedFilters}
-                onClearAll={() => {
-                  setStatusValue("all");
-                  setStartDateValue("");
-                  setEndDateValue("");
-                  setQueryValue("");
-                  submitFilterValues({
-                    q: "",
-                    status: "all",
-                    startDate: "",
-                    endDate: "",
-                  });
-                }}
-              />
-              <InlineStack gap="200">
-                <input type="hidden" name="q" value={queryValue} />
-                <input type="hidden" name="status" value={statusValue} />
-                <input type="hidden" name="startDate" value={startDateValue} />
-                <input type="hidden" name="endDate" value={endDateValue} />
-                <Button submit>Apply filters</Button>
-              </InlineStack>
-            </BlockStack>
-          </form>
-        </Card>
-
         <Card>
           <InlineStack gap="400" align="space-between">
             <Text as="p">Pending review: {quickStats.pendingReview}</Text>

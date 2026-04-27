@@ -22,6 +22,7 @@ import {
   InlineStack,
   Page,
   Popover,
+  RangeSlider,
   Select,
   SkeletonBodyText,
   SkeletonPage,
@@ -417,10 +418,52 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   });
 };
 
-function parseNumber(value: FormDataEntryValue | null, fallback: number): number {
-  if (value === null) return fallback;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
+const FILE_SIZE_LIMITS = { min: 1, step: 1 } as const;
+const PRICE_LIMITS = { min: 0, max: 9999, step: 0.01 } as const;
+const DPI_LIMITS = { min: 1, max: 2400, step: 1, sliderMin: 72, sliderMax: 1200 } as const;
+const PRINT_WIDTH_LIMITS = { min: 1, max: 500, step: 0.5, sliderMin: 1, sliderMax: 200 } as const;
+const DIMENSION_INCH_LIMITS = { min: 0.01, max: 500, step: 0.01 } as const;
+const DIMENSION_DPI_LIMITS = { min: 1, max: 2400, step: 1 } as const;
+
+type NumericRange = { min: number; max: number };
+
+function parseBoundedNumberInput(
+  raw: FormDataEntryValue | null,
+  label: string,
+  range: NumericRange,
+  fallback: number,
+): { value: number; error: string | null } {
+  if (raw === null || String(raw).trim() === "") {
+    return { value: fallback, error: null };
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return { value: fallback, error: `${label} must be a valid number.` };
+  }
+  if (parsed < range.min || parsed > range.max) {
+    return {
+      value: fallback,
+      error: `${label} must be between ${range.min} and ${range.max}.`,
+    };
+  }
+  return { value: parsed, error: null };
+}
+
+function clampNumber(value: number, range: NumericRange): number {
+  return Math.min(range.max, Math.max(range.min, value));
+}
+
+function parseNumberForSlider(value: string, range: NumericRange, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return clampNumber(parsed, range);
+}
+
+function getDimensionNumericLimits(
+  dimensionType: SupportedDimensionType,
+): { min: number; max: number; step: number } {
+  if (dimensionType === "dpi") return DIMENSION_DPI_LIMITS;
+  return DIMENSION_INCH_LIMITS;
 }
 
 function parseBoolean(value: FormDataEntryValue | null): boolean {
@@ -489,11 +532,25 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
       const fieldId = id === "new" ? crypto.randomUUID() : id;
       const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
-      const maxFileMB = Math.max(1, parseNumber(formData.get("maxFileMB"), 50));
+      const requestedPricingUnitType = String(formData.get("pricingUnitType"));
+      const pricingUnitType: UploadFieldConfig["pricing"]["unitType"] =
+        requestedPricingUnitType === "inch_height" || requestedPricingUnitType === "inch_square"
+          ? requestedPricingUnitType
+          : "flat";
 
       const planCode = billingPlan.planCode;
       const planLimits = getPlan(planCode);
       const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+      const maxFileMBParse = parseBoundedNumberInput(
+        formData.get("maxFileMB"),
+        "Max file size",
+        { min: FILE_SIZE_LIMITS.min, max: maxFileMBFromPlan },
+        50,
+      );
+      if (maxFileMBParse.error) {
+        return data({ error: maxFileMBParse.error }, { status: 400 });
+      }
+      const maxFileMB = maxFileMBParse.value;
 
       if (!canUseFeature(planCode, "advancedValidation")) {
         dimensionRules = [];
@@ -508,6 +565,56 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       if (maxFileMB > maxFileMBFromPlan) {
         return data({ error: merchantUpgradeHint(fileSizeUpgradeReason(planCode)) }, { status: 402 });
+      }
+
+      const unitPriceParse = parseBoundedNumberInput(
+        formData.get("unitPrice"),
+        unitPriceLabelForMethod(pricingUnitType),
+        PRICE_LIMITS,
+        existingField?.pricing.unitPrice ?? 0,
+      );
+      if (pricingEnabled && unitPriceParse.error) {
+        return data({ error: unitPriceParse.error }, { status: 400 });
+      }
+      const minPriceParse = parseBoundedNumberInput(
+        formData.get("minPrice"),
+        "Floor price",
+        PRICE_LIMITS,
+        existingField?.pricing.minPrice ?? 0,
+      );
+      if (pricingEnabled && minPriceParse.error) {
+        return data({ error: minPriceParse.error }, { status: 400 });
+      }
+      const dpiParse = parseBoundedNumberInput(
+        formData.get("dpi"),
+        "Assumed DPI",
+        DPI_LIMITS,
+        existingField?.pricing.dpi ?? 300,
+      );
+      if (pricingEnabled && dpiParse.error) {
+        return data({ error: dpiParse.error }, { status: 400 });
+      }
+      const printWidthParse = parseBoundedNumberInput(
+        formData.get("printWidth"),
+        "Roll / print width",
+        PRINT_WIDTH_LIMITS,
+        existingField?.pricing.printWidth ?? 22,
+      );
+      if (pricingEnabled && printWidthParse.error) {
+        return data({ error: printWidthParse.error }, { status: 400 });
+      }
+
+      for (const rule of dimensionRules) {
+        if (!SUPPORTED_DIMENSIONS.includes(rule.dimensionType as SupportedDimensionType)) continue;
+        const limits = getDimensionNumericLimits(rule.dimensionType as SupportedDimensionType);
+        if (rule.value < limits.min || rule.value > limits.max) {
+          return data(
+            {
+              error: `${dimensionLabel(rule.dimensionType as SupportedDimensionType)} rule value must be between ${limits.min} and ${limits.max}.`,
+            },
+            { status: 400 },
+          );
+        }
       }
 
       const planAllowsRenaming = canUseFeature(planCode, "fileRenaming");
@@ -544,15 +651,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         maxFileMB,
         pricing: {
           enabled: pricingEnabled,
-          unitType:
-            String(formData.get("pricingUnitType")) === "inch_height" ||
-              String(formData.get("pricingUnitType")) === "inch_square"
-              ? (String(formData.get("pricingUnitType")) as "inch_height" | "inch_square")
-              : "flat",
-          unitPrice: parseNumber(formData.get("unitPrice"), 0),
-          minPrice: parseNumber(formData.get("minPrice"), 0),
-          dpi: parseNumber(formData.get("dpi"), 300),
-          printWidth: parseNumber(formData.get("printWidth"), 22),
+          unitType: pricingUnitType,
+          unitPrice: unitPriceParse.value,
+          minPrice: minPriceParse.value,
+          dpi: dpiParse.value,
+          printWidth: printWidthParse.value,
           roundingEnabled: parseBoolean(formData.get("roundingEnabled")),
         },
         dimensionRules,
@@ -818,6 +921,16 @@ export default function FieldEditorPage() {
   const showMinPrice = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
   const showDpi = pricingUnitType === "inch_height" || pricingUnitType === "inch_square";
   const showPrintWidth = pricingUnitType === "inch_square";
+  const dpiSliderValue = parseNumberForSlider(
+    dpi,
+    { min: DPI_LIMITS.sliderMin, max: DPI_LIMITS.sliderMax },
+    clampNumber(300, { min: DPI_LIMITS.sliderMin, max: DPI_LIMITS.sliderMax }),
+  );
+  const printWidthSliderValue = parseNumberForSlider(
+    printWidth,
+    { min: PRINT_WIDTH_LIMITS.sliderMin, max: PRINT_WIDTH_LIMITS.sliderMax },
+    clampNumber(22, { min: PRINT_WIDTH_LIMITS.sliderMin, max: PRINT_WIDTH_LIMITS.sliderMax }),
+  );
   const allowedDimensionTypes = allowedDimensionTypesForMethod(pricingUnitType) as SupportedDimensionType[];
   const serializedDimensionRules = useMemo(
     () => serializeDimensionCards(dimensionCards, allowedDimensionTypes, legacyDimensionRules),
@@ -1231,6 +1344,9 @@ export default function FieldEditorPage() {
                   autoComplete="off"
                   value={maxFileMB}
                   onChange={setMaxFileMB}
+                  min={FILE_SIZE_LIMITS.min}
+                  max={maxFileMBFromPlan}
+                  step={FILE_SIZE_LIMITS.step}
                   helpText={`Your plan allows up to ${maxFileMBFromPlan}MB`}
                 />
                 {Number(maxFileMB) > maxFileMBFromPlan && (
@@ -1327,6 +1443,9 @@ export default function FieldEditorPage() {
                           autoComplete="off"
                           value={unitPrice}
                           onChange={setUnitPrice}
+                          min={PRICE_LIMITS.min}
+                          max={PRICE_LIMITS.max}
+                          step={PRICE_LIMITS.step}
                           helpText="Used by the selected calculation method."
                         />
                       </Box>
@@ -1340,6 +1459,9 @@ export default function FieldEditorPage() {
                             autoComplete="off"
                             value={minPrice}
                             onChange={setMinPrice}
+                            min={PRICE_LIMITS.min}
+                            max={PRICE_LIMITS.max}
+                            step={PRICE_LIMITS.step}
                             helpText="Minimum fee charged for an upload (0 = no floor)."
                           />
                         </Box>
@@ -1357,6 +1479,21 @@ export default function FieldEditorPage() {
                             autoComplete="off"
                             value={dpi}
                             onChange={setDpi}
+                            min={DPI_LIMITS.min}
+                            max={DPI_LIMITS.max}
+                            step={DPI_LIMITS.step}
+                          />
+                          <RangeSlider
+                            label="Assumed DPI quick adjust"
+                            labelHidden
+                            min={DPI_LIMITS.sliderMin}
+                            max={DPI_LIMITS.sliderMax}
+                            step={DPI_LIMITS.step}
+                            value={dpiSliderValue}
+                            onChange={(value) => {
+                              setDpi(String(value));
+                            }}
+                            output
                           />
                         </Box>
                       ) : null}
@@ -1371,6 +1508,21 @@ export default function FieldEditorPage() {
                             autoComplete="off"
                             value={printWidth}
                             onChange={setPrintWidth}
+                            min={PRINT_WIDTH_LIMITS.min}
+                            max={PRINT_WIDTH_LIMITS.max}
+                            step={PRINT_WIDTH_LIMITS.step}
+                          />
+                          <RangeSlider
+                            label="Print width quick adjust"
+                            labelHidden
+                            min={PRINT_WIDTH_LIMITS.sliderMin}
+                            max={PRINT_WIDTH_LIMITS.sliderMax}
+                            step={PRINT_WIDTH_LIMITS.step}
+                            value={printWidthSliderValue}
+                            onChange={(value) => {
+                              setPrintWidth(String(value));
+                            }}
+                            output
                           />
                         </Box>
                       ) : null}
@@ -1454,6 +1606,9 @@ export default function FieldEditorPage() {
                               autoComplete="off"
                               value={card.fixedValue}
                               suffix={dimensionSuffix(dimensionType)}
+                              min={getDimensionNumericLimits(dimensionType).min}
+                              max={getDimensionNumericLimits(dimensionType).max}
+                              step={getDimensionNumericLimits(dimensionType).step}
                               onChange={(value) =>
                                 setDimensionCards((prev) => ({
                                   ...prev,
@@ -1477,6 +1632,9 @@ export default function FieldEditorPage() {
                                   autoComplete="off"
                                   value={card.rangeMin}
                                   suffix={dimensionSuffix(dimensionType)}
+                                  min={getDimensionNumericLimits(dimensionType).min}
+                                  max={getDimensionNumericLimits(dimensionType).max}
+                                  step={getDimensionNumericLimits(dimensionType).step}
                                   onChange={(value) =>
                                     setDimensionCards((prev) => ({
                                       ...prev,
@@ -1492,6 +1650,9 @@ export default function FieldEditorPage() {
                                   autoComplete="off"
                                   value={card.rangeMax}
                                   suffix={dimensionSuffix(dimensionType)}
+                                  min={getDimensionNumericLimits(dimensionType).min}
+                                  max={getDimensionNumericLimits(dimensionType).max}
+                                  step={getDimensionNumericLimits(dimensionType).step}
                                   onChange={(value) =>
                                     setDimensionCards((prev) => ({
                                       ...prev,
