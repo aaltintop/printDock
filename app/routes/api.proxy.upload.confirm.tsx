@@ -347,18 +347,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
       // Calculate price
       let pricing = null;
-      const hasDynamicPricing = canUseFeature(billingPlan.planCode, "dynamicPricing");
-      if (field?.pricing?.enabled && !hasDynamicPricing) {
-        validationResults.push({
-          ruleId: "plan_auto_pricing",
-          severity: "warning",
-          message: "Dynamic pricing is not available on your current plan",
-          actual: null,
-          expected: 0,
-        });
-      }
-
-      if (field?.pricing?.enabled && hasDynamicPricing && !blocked) {
+      if (field?.pricing?.enabled && !blocked) {
         const priceResult = calculatePrice(
           metadata,
           {

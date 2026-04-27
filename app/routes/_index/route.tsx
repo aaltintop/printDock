@@ -60,6 +60,7 @@ const PLANS = [
     tagline: "Try it on a live store",
     features: [
       "Up to 2 upload fields",
+      "Dynamic pricing (per-inch, per-sq-inch, flat)",
       "Basic file-type & size validation",
       "50 MB per file, 500 MB total storage",
       "7-day file retention",
@@ -77,11 +78,10 @@ const PLANS = [
   },
   {
     name: "Pro",
-    tagline: "Dynamic pricing unlocked",
+    tagline: "For larger upload workflows",
     highlighted: true,
     features: [
       "Everything in Starter",
-      "Dynamic pricing (per-inch, per-sq-inch, flat)",
       "1 GB per file, 30 GB total storage",
       "30-day file retention",
     ],

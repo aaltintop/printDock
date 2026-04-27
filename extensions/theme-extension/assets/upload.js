@@ -431,6 +431,12 @@
     }, 0);
     if (Number.isFinite(unitPriceForLine) && unitPriceForLine > 0) {
       properties._pd_calculated_price = unitPriceForLine.toFixed(2);
+      const baseUnitPrice = Number.isFinite(BASE_VARIANT_PRICE) && BASE_VARIANT_PRICE > 0
+        ? BASE_VARIANT_PRICE
+        : 0;
+      const finalUnitPrice = baseUnitPrice + unitPriceForLine;
+      properties["Upload pricing"] =
+        `$${baseUnitPrice.toFixed(2)} base + $${unitPriceForLine.toFixed(2)} upload fee = $${finalUnitPrice.toFixed(2)} per unit`;
     }
 
     return properties;

@@ -69,7 +69,7 @@ All enforcement reads from [`app/config/plans.ts`](../app/config/plans.ts). Appr
 
 **Total storage:** the app sums **billable** bytes from upload session assets (skips expired / purged assets—see `getShopStorageUsageBytes` in [`app/services/shop-data.server.ts`](../app/services/shop-data.server.ts)). New uploads that would exceed `maxTotalStorageBytes` get **402** `storage_cap_exceeded` from [`app/routes/api.proxy.upload.session.tsx`](../app/routes/api.proxy.upload.session.tsx) and [`app/routes/api.proxy.upload.confirm.tsx`](../app/routes/api.proxy.upload.confirm.tsx).
 
-**Feature flags** (`advancedValidation`, `fileRenaming`, `dynamicPricing`): see `PLANS` in code—Free locks advanced validation, renaming, and dynamic pricing; Starter unlocks validation + renaming; Pro/Business unlock dynamic pricing.
+**Feature flags** (`advancedValidation`, `fileRenaming`, `dynamicPricing`): see `PLANS` in code. Dynamic pricing is available on every plan; Free locks advanced validation and renaming; Starter unlocks validation + renaming.
 
 ---
 

@@ -41,7 +41,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     basicValidation: true,
     advancedValidation: false,
     fileRenaming: false,
-    dynamicPricing: false,
+    dynamicPricing: true,
   },
   starter: {
     planCode: "starter",
@@ -53,7 +53,7 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     basicValidation: true,
     advancedValidation: true,
     fileRenaming: true,
-    dynamicPricing: false,
+    dynamicPricing: true,
   },
   pro: {
     planCode: "pro",

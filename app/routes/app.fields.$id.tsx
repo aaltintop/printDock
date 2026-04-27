@@ -443,127 +443,124 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       const { session } = await authenticate.admin(request);
       setLogShopDomain(session.shop);
       const formData = await request.formData();
-  const id = params.id || "new";
-  const nowIso = new Date().toISOString();
-  const billingPlan = await getEffectiveBillingPlan(session.shop);
+      const id = params.id || "new";
+      const nowIso = new Date().toISOString();
+      const billingPlan = await getEffectiveBillingPlan(session.shop);
 
-  const targetProducts: FieldTargetProduct[] = parseJsonArray(
-    String(formData.get("targetProducts") || "[]"),
-    [],
-  );
-  const targetCollections: FieldTargetCollection[] = parseJsonArray(
-    String(formData.get("targetCollections") || "[]"),
-    [],
-  );
+      const targetProducts: FieldTargetProduct[] = parseJsonArray(
+        String(formData.get("targetProducts") || "[]"),
+        [],
+      );
+      const targetCollections: FieldTargetCollection[] = parseJsonArray(
+        String(formData.get("targetCollections") || "[]"),
+        [],
+      );
 
-  if (targetProducts.length === 0 && targetCollections.length === 0) {
-    return data({ error: "Select at least one product or collection" }, { status: 400 });
-  }
+      if (targetProducts.length === 0 && targetCollections.length === 0) {
+        return data({ error: "Select at least one product or collection" }, { status: 400 });
+      }
 
-  const targetProductIds = targetProducts.map((p) => p.id).filter(Boolean);
-  const targetCollectionIds = targetCollections.map((c) => c.id).filter(Boolean);
+      const targetProductIds = targetProducts.map((p) => p.id).filter(Boolean);
+      const targetCollectionIds = targetCollections.map((c) => c.id).filter(Boolean);
 
-  const targetVariantIds = parseJsonArray<string>(
-    String(formData.get("targetVariantIds") || "[]"),
-    [],
-  );
+      const targetVariantIds = parseJsonArray<string>(
+        String(formData.get("targetVariantIds") || "[]"),
+        [],
+      );
 
-  const allowedExtensions = String(formData.get("allowedExtensions") || "")
-    .split(",")
-    .map((ext) => ext.trim().toLowerCase())
-    .filter(Boolean);
+      const allowedExtensions = String(formData.get("allowedExtensions") || "")
+        .split(",")
+        .map((ext) => ext.trim().toLowerCase())
+        .filter(Boolean);
 
-  const dimensionRulesRaw = String(formData.get("dimensionRules") || "[]").trim();
-  let dimensionRules: UploadFieldConfig["dimensionRules"] = [];
-  try {
-    const parsedRules = JSON.parse(dimensionRulesRaw);
-    if (Array.isArray(parsedRules)) {
-      dimensionRules = normalizeIncomingDimensionRules(parsedRules);
-    }
-  } catch {
-    return data({ error: "Dimension rules must be valid JSON array" }, { status: 400 });
-  }
+      const dimensionRulesRaw = String(formData.get("dimensionRules") || "[]").trim();
+      let dimensionRules: UploadFieldConfig["dimensionRules"] = [];
+      try {
+        const parsedRules = JSON.parse(dimensionRulesRaw);
+        if (Array.isArray(parsedRules)) {
+          dimensionRules = normalizeIncomingDimensionRules(parsedRules);
+        }
+      } catch {
+        return data({ error: "Dimension rules must be valid JSON array" }, { status: 400 });
+      }
 
-  const existingField = id !== "new" ? await getUploadField(session.shop, id) : null;
-  if (id !== "new" && !existingField) {
-    return data({ error: "This field no longer exists or was removed." }, { status: 404 });
-  }
-  const fieldId = id === "new" ? crypto.randomUUID() : id;
-  const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
-  const maxFileMB = Math.max(1, parseNumber(formData.get("maxFileMB"), 50));
+      const existingField = id !== "new" ? await getUploadField(session.shop, id) : null;
+      if (id !== "new" && !existingField) {
+        return data({ error: "This field no longer exists or was removed." }, { status: 404 });
+      }
+      const fieldId = id === "new" ? crypto.randomUUID() : id;
+      const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
+      const maxFileMB = Math.max(1, parseNumber(formData.get("maxFileMB"), 50));
 
-  const planCode = billingPlan.planCode;
-  const planLimits = getPlan(planCode);
-  const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
+      const planCode = billingPlan.planCode;
+      const planLimits = getPlan(planCode);
+      const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
 
-  if (!canUseFeature(planCode, "advancedValidation")) {
-    dimensionRules = [];
-  }
+      if (!canUseFeature(planCode, "advancedValidation")) {
+        dimensionRules = [];
+      }
 
-  if (id === "new") {
-    const allFields = await listUploadFields(session.shop);
-    if (!isWithinFieldLimit(planCode, allFields.length)) {
-      return data({ error: merchantUpgradeHint("moreUploadFields") }, { status: 402 });
-    }
-  }
+      if (id === "new") {
+        const allFields = await listUploadFields(session.shop);
+        if (!isWithinFieldLimit(planCode, allFields.length)) {
+          return data({ error: merchantUpgradeHint("moreUploadFields") }, { status: 402 });
+        }
+      }
 
-  if (pricingEnabled && !canUseFeature(planCode, "dynamicPricing")) {
-    return data({ error: merchantUpgradeHint("dynamicPricing") }, { status: 402 });
-  }
-  if (maxFileMB > maxFileMBFromPlan) {
-    return data({ error: merchantUpgradeHint(fileSizeUpgradeReason(planCode)) }, { status: 402 });
-  }
+      if (maxFileMB > maxFileMBFromPlan) {
+        return data({ error: merchantUpgradeHint(fileSizeUpgradeReason(planCode)) }, { status: 402 });
+      }
 
-  const planAllowsRenaming = canUseFeature(planCode, "fileRenaming");
-  let resolvedFileRenamingPattern: string;
-  if (planAllowsRenaming) {
-    const raw = String(formData.get("fileRenamingPattern") ?? "").trim();
-    resolvedFileRenamingPattern = raw ? raw.slice(0, 200) : DEFAULT_FILE_RENAME_PATTERN;
-  } else if (id === "new" || !existingField) {
-    resolvedFileRenamingPattern = DEFAULT_FILE_RENAME_PATTERN;
-  } else {
-    resolvedFileRenamingPattern = existingField.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
-  }
+      const planAllowsRenaming = canUseFeature(planCode, "fileRenaming");
+      let resolvedFileRenamingPattern: string;
+      if (planAllowsRenaming) {
+        const raw = String(formData.get("fileRenamingPattern") ?? "").trim();
+        resolvedFileRenamingPattern = raw ? raw.slice(0, 200) : DEFAULT_FILE_RENAME_PATTERN;
+      } else if (id === "new" || !existingField) {
+        resolvedFileRenamingPattern = DEFAULT_FILE_RENAME_PATTERN;
+      } else {
+        resolvedFileRenamingPattern = existingField.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
+      }
 
-  const firstProduct = targetProducts[0];
+      const firstProduct = targetProducts[0];
 
-  const nextField: UploadFieldConfig = {
-    id: fieldId,
-    productId: firstProduct?.id ?? "",
-    productHandle: firstProduct?.handle ?? "",
-    targetVariantIds,
-    targetProducts,
-    targetCollections,
-    targetProductIds,
-    targetCollectionIds,
-    isActive: parseBoolean(formData.get("isActive")),
-    isRequired: true,
-    adminTitle: String(formData.get("adminTitle") || "Field"),
-    storefrontTitle: String(formData.get("storefrontTitle") || "Upload your file"),
-    storefrontDescription: String(formData.get("storefrontDescription") || ""),
-    fileRenamingPattern: resolvedFileRenamingPattern,
-    minFiles: 1,
-    maxFiles: 1,
-    allowedExtensions,
-    maxFileMB,
-    pricing: {
-      enabled: pricingEnabled,
-      unitType:
-        String(formData.get("pricingUnitType")) === "inch_height" ||
-        String(formData.get("pricingUnitType")) === "inch_square"
-          ? (String(formData.get("pricingUnitType")) as "inch_height" | "inch_square")
-          : "flat",
-      unitPrice: parseNumber(formData.get("unitPrice"), 0),
-      minPrice: parseNumber(formData.get("minPrice"), 0),
-      dpi: parseNumber(formData.get("dpi"), 300),
-      printWidth: parseNumber(formData.get("printWidth"), 22),
-      roundingEnabled: parseBoolean(formData.get("roundingEnabled")),
-    },
-    dimensionRules,
-    planRequirement: "free",
-    createdAt: existingField?.createdAt || nowIso,
-    updatedAt: nowIso,
-  };
+      const nextField: UploadFieldConfig = {
+        id: fieldId,
+        productId: firstProduct?.id ?? "",
+        productHandle: firstProduct?.handle ?? "",
+        targetVariantIds,
+        targetProducts,
+        targetCollections,
+        targetProductIds,
+        targetCollectionIds,
+        isActive: parseBoolean(formData.get("isActive")),
+        isRequired: true,
+        adminTitle: String(formData.get("adminTitle") || "Field"),
+        storefrontTitle: String(formData.get("storefrontTitle") || "Upload your file"),
+        storefrontDescription: String(formData.get("storefrontDescription") || ""),
+        fileRenamingPattern: resolvedFileRenamingPattern,
+        minFiles: 1,
+        maxFiles: 1,
+        allowedExtensions,
+        maxFileMB,
+        pricing: {
+          enabled: pricingEnabled,
+          unitType:
+            String(formData.get("pricingUnitType")) === "inch_height" ||
+              String(formData.get("pricingUnitType")) === "inch_square"
+              ? (String(formData.get("pricingUnitType")) as "inch_height" | "inch_square")
+              : "flat",
+          unitPrice: parseNumber(formData.get("unitPrice"), 0),
+          minPrice: parseNumber(formData.get("minPrice"), 0),
+          dpi: parseNumber(formData.get("dpi"), 300),
+          printWidth: parseNumber(formData.get("printWidth"), 22),
+          roundingEnabled: parseBoolean(formData.get("roundingEnabled")),
+        },
+        dimensionRules,
+        planRequirement: "free",
+        createdAt: existingField?.createdAt || nowIso,
+        updatedAt: nowIso,
+      };
 
       await saveUploadField(session.shop, nextField);
       log.event(id === "new" ? "field_created" : "field_updated", {
@@ -584,7 +581,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 export default function FieldEditorPage() {
   const { field, isNew, shopDomain, planCode, maxFileMBFromPlan, fieldCreationBlocked, allFields } =
     useLoaderData<typeof loader>();
-  const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
   const planAllowsAdvancedValidation = canUseFeature(planCode, "advancedValidation");
   const planAllowsFileRenaming = canUseFeature(planCode, "fileRenaming");
   const patternIsCustom =
@@ -598,14 +594,14 @@ export default function FieldEditorPage() {
     const derivedDimensionState = canUseFeature(planCode, "advancedValidation")
       ? deriveDimensionCards(field.dimensionRules)
       : {
-          cards: {
-            widthInch: defaultDimensionCard("widthInch"),
-            heightInch: defaultDimensionCard("heightInch"),
-            dpi: defaultDimensionCard("dpi"),
-          } as Record<SupportedDimensionType, DimensionCard>,
-          legacyRules: [] as UploadFieldDimensionRule[],
-          simplifiedLegacyRules: false,
-        };
+        cards: {
+          widthInch: defaultDimensionCard("widthInch"),
+          heightInch: defaultDimensionCard("heightInch"),
+          dpi: defaultDimensionCard("dpi"),
+        } as Record<SupportedDimensionType, DimensionCard>,
+        legacyRules: [] as UploadFieldDimensionRule[],
+        simplifiedLegacyRules: false,
+      };
 
     return {
       adminTitle: field.adminTitle,
@@ -619,7 +615,7 @@ export default function FieldEditorPage() {
       contentTypeRestricted: field.allowedExtensions.length > 0,
       allowedExtensions: field.allowedExtensions,
       maxFileMB: String(field.maxFileMB),
-      pricingEnabled: canUseFeature(planCode, "dynamicPricing") && field.pricing.enabled,
+      pricingEnabled: field.pricing.enabled,
       pricingUnitType: field.pricing.unitType,
       unitPrice: String(field.pricing.unitPrice),
       minPrice: String(field.pricing.minPrice),
@@ -1260,41 +1256,16 @@ export default function FieldEditorPage() {
                 </Text>
               </BlockStack>
 
-              {!planAllowsDynamicPricing ? (
-                <input type="hidden" name="pricingEnabled" value="" />
-              ) : (
-                <input type="hidden" name="pricingEnabled" value={pricingEnabled ? "true" : "false"} />
-              )}
+              <input type="hidden" name="pricingEnabled" value={pricingEnabled ? "true" : "false"} />
 
-              {planAllowsDynamicPricing ? (
-                <Checkbox
-                  label="Charge using dynamic pricing"
-                  helpText="When off, no upload fee is added from this field."
-                  checked={pricingEnabled}
-                  onChange={() => setPricingEnabled((prev) => !prev)}
-                />
-              ) : (
-                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
-                  <BlockStack gap="300">
-                    <InlineStack gap="400" align="space-between" blockAlign="center" wrap>
-                      <Checkbox
-                        label="Charge using dynamic pricing"
-                        checked={false}
-                        onChange={setPricingEnabled}
-                        disabled
-                      />
-                      <Button url="/app/plans" variant="primary">
-                        Upgrade to {planDisplayName(suggestUpgradeFor("dynamicPricing"))}
-                      </Button>
-                    </InlineStack>
-                    <Text as="p" variant="bodyMd">
-                      {merchantUpgradeHint("dynamicPricing")}
-                    </Text>
-                  </BlockStack>
-                </Box>
-              )}
+              <Checkbox
+                label="Charge using dynamic pricing"
+                helpText="When off, no upload fee is added from this field."
+                checked={pricingEnabled}
+                onChange={() => setPricingEnabled((prev) => !prev)}
+              />
 
-              {!(planAllowsDynamicPricing && pricingEnabled) ? (
+              {!pricingEnabled ? (
                 <>
                   <input type="hidden" name="pricingUnitType" value={pricingUnitType} />
                   <input type="hidden" name="unitPrice" value={unitPrice} />
@@ -1305,13 +1276,13 @@ export default function FieldEditorPage() {
                 </>
               ) : null}
 
-              {planAllowsDynamicPricing && !pricingEnabled ? (
+              {!pricingEnabled ? (
                 <Text as="p" variant="bodySm" tone="subdued">
                   Turn on dynamic pricing to set how the upload fee is calculated.
                 </Text>
               ) : null}
 
-              {planAllowsDynamicPricing && pricingEnabled ? (
+              {pricingEnabled ? (
                 <BlockStack gap="300">
                   <Divider />
                   <Text as="h3" variant="headingSm">
