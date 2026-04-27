@@ -195,6 +195,15 @@
     return fieldConfig.allowedExtensions.map((ext) => `.${ext}`).join(",");
   }
 
+  function maxUploadSlots() {
+    const max = Number(fieldConfig.maxFiles);
+    return Number.isFinite(max) && max > 0 ? Math.floor(max) : 1;
+  }
+
+  function isUploadSelectionDisabled() {
+    return uploadedFiles.length >= maxUploadSlots();
+  }
+
   async function uploadFile(file) {
     const fileEntry = {
       id: Math.random().toString(36).slice(2),
@@ -711,6 +720,7 @@
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     isBlocked = uploadedFiles.some((entry) => entry.blocked);
     syncFormProperties();
+    syncUploadControls();
     const btn = document.querySelector('[name="add"], [id*="add-to-cart"], .product-form__submit');
     if (!btn) return;
 
@@ -849,19 +859,26 @@
     const fileInput = document.getElementById("printdock-file-input");
     const chooseBtn = document.getElementById("printdock-choose-btn");
 
-    chooseBtn.addEventListener("click", () => fileInput.click());
+    chooseBtn.addEventListener("click", () => {
+      if (isUploadSelectionDisabled()) return;
+      fileInput.click();
+    });
     fileInput.addEventListener("change", (e) => handleFiles(Array.from(e.target.files || [])));
 
     dropzone.addEventListener("dragover", (e) => {
+      if (isUploadSelectionDisabled()) return;
       e.preventDefault();
       dropzone.classList.add("printdock-dragover");
     });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("printdock-dragover"));
     dropzone.addEventListener("drop", (e) => {
+      if (isUploadSelectionDisabled()) return;
       e.preventDefault();
       dropzone.classList.remove("printdock-dragover");
       handleFiles(Array.from(e.dataTransfer.files || []));
     });
+
+    syncUploadControls();
   }
 
   function renderFileList() {
@@ -988,6 +1005,24 @@
     }
 
     return true;
+  }
+
+  function syncUploadControls() {
+    const dropzone = document.getElementById("printdock-dropzone");
+    const fileInput = document.getElementById("printdock-file-input");
+    const chooseBtn = document.getElementById("printdock-choose-btn");
+    if (!dropzone || !fileInput || !chooseBtn) return;
+
+    const disabled = isUploadSelectionDisabled();
+
+    chooseBtn.disabled = disabled;
+    chooseBtn.setAttribute("aria-disabled", disabled ? "true" : "false");
+
+    fileInput.disabled = disabled;
+
+    dropzone.classList.toggle("printdock-dropzone-disabled", disabled);
+    dropzone.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (disabled) dropzone.classList.remove("printdock-dragover");
   }
 
   function showError(msg) {

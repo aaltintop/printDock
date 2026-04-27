@@ -43,20 +43,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         Math.round((planLimits.maxTotalStorageBytes / (1024 * 1024)) * 100) / 100;
       const storageUsageLabel = `Upload storage: ${stats.storageUsedMB} / ${storageCapMB} MB`;
 
-  const recentUploads = sessions
-    .flatMap((uploadSession) => {
-      const assets = uploadSession.assets.length > 0 ? uploadSession.assets : uploadSession.asset ? [uploadSession.asset] : [];
-      return assets.map((asset) => ({
-        id: `${uploadSession.id}_${asset.id}`,
-        sessionId: uploadSession.id,
-        fileName: asset.originalName,
-        status: asset.blocked ? "blocked" : uploadSession.status,
-        createdAt: uploadSession.createdAt,
-      }));
-    })
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 5);
-
   const recentOrders = jobs
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 5)
@@ -69,7 +55,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       return data({
         stats,
-        recentUploads,
         recentOrders,
         currentPlan: {
           planCode: billingPlan.planCode,
@@ -91,7 +76,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function Index() {
   const navigation = useNavigation();
-  const { stats, recentUploads, recentOrders, currentPlan } = useLoaderData<typeof loader>();
+  const { stats, recentOrders, currentPlan } = useLoaderData<typeof loader>();
 
   const storageProgress =
     currentPlan.storageCapMB > 0
@@ -100,13 +85,17 @@ export default function Index() {
   const storageNearCap = storageProgress >= 90;
 
   const planStatusTone =
-    currentPlan.status === "active"
+    currentPlan.planCode === "free"
+      ? "success"
+      : currentPlan.status === "active"
       ? "success"
       : currentPlan.status === "trial"
         ? "attention"
         : "critical";
   const planStatusLabel =
-    currentPlan.status === "active"
+    currentPlan.planCode === "free"
+      ? "Free"
+      : currentPlan.status === "active"
       ? "Active"
       : currentPlan.status === "trial"
         ? "Trial"
@@ -187,25 +176,6 @@ export default function Index() {
               </div>
             ))}
           </InlineStack>
-        </Layout.Section>
-
-        <Layout.Section variant="oneHalf">
-          <Card>
-            <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">
-                Quick actions
-              </Text>
-              <InlineStack gap="200" wrap>
-                <Button url="/app/fields/new" variant="primary">
-                  New Field
-                </Button>
-                <Button url="/app/orders">View Orders</Button>
-              </InlineStack>
-              <Text as="p" tone="subdued">
-                Recent uploads this month: {recentUploads.length}
-              </Text>
-            </BlockStack>
-          </Card>
         </Layout.Section>
 
         <Layout.Section>

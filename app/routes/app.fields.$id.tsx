@@ -17,7 +17,6 @@ import {
   Card,
   Checkbox,
   ChoiceList,
-  ContextualSaveBar,
   Divider,
   FormLayout,
   InlineStack,
@@ -865,26 +864,33 @@ export default function FieldEditorPage() {
       backAction={{ content: "Fields", url: "/app/fields" }}
     >
       {isDirty ? (
-        <ContextualSaveBar
-          message="Unsaved changes"
-          saveAction={{
-            content: "Save field",
-            loading: isSaving,
-            disabled: fieldCreationBlocked || isSaving,
-            onAction: () => {
-              if (fieldCreationBlocked || isSaving) return;
-              const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
-              form?.requestSubmit();
-            },
-          }}
-          discardAction={{
-            disabled: isSaving,
-            onAction: () => {
-              if (isSaving) return;
-              resetForm();
-            },
-          }}
-        />
+        <Box paddingBlockEnd="300">
+          <Banner tone="info" title="Unsaved changes">
+            <InlineStack gap="200">
+              <Button
+                variant="primary"
+                loading={isSaving}
+                disabled={fieldCreationBlocked || isSaving}
+                onClick={() => {
+                  if (fieldCreationBlocked || isSaving) return;
+                  const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
+                  form?.requestSubmit();
+                }}
+              >
+                Save field
+              </Button>
+              <Button
+                disabled={isSaving}
+                onClick={() => {
+                  if (isSaving) return;
+                  resetForm();
+                }}
+              >
+                Discard
+              </Button>
+            </InlineStack>
+          </Banner>
+        </Box>
       ) : null}
       <Form
         method="post"

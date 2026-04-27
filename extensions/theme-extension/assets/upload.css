@@ -61,6 +61,16 @@
   background-color: color-mix(in srgb, var(--pd-primary) 6%, var(--pd-surface-subdued));
 }
 
+.printdock-dropzone-disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.printdock-dropzone-disabled:hover {
+  border-color: var(--pd-border-strong);
+  background-color: var(--pd-surface-subdued);
+}
+
 .printdock-drop-title {
   font-weight: bold;
   margin-bottom: 0.5rem;
@@ -81,6 +91,11 @@
   border-radius: calc(var(--pd-radius) / 2);
   cursor: pointer;
   font: inherit;
+}
+
+.printdock-choose-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .printdock-file-card {

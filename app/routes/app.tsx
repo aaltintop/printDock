@@ -1,8 +1,9 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Link, Outlet, redirect, useLoaderData, useRouteError } from "react-router";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
-import { AppProvider as PolarisAppProvider, Frame } from "@shopify/polaris";
+import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
 
 import { authenticate } from "../shopify.server";
@@ -21,7 +22,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     const { admin, session } = await authenticate.admin(request);
     setLogShopDomain(session.shop);
-    const path = new URL(request.url).pathname;
+    const currentUrl = new URL(request.url);
+    const path = currentUrl.pathname;
     log.event("admin_page_view", { path });
 
     if (session.shop && !isPathExemptFromSetupRedirect(path)) {
@@ -32,7 +34,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         // `/app/onboarding` to authenticate without any shop hint, which makes
         // `authenticate.admin()` bounce to `/auth/login` and shows the public
         // shop-domain form inside the admin iframe.
-        throw redirect(`/app/onboarding${new URL(request.url).search}`);
+        const onboardingUrl = new URL(`/app/onboarding${currentUrl.search}`, currentUrl.origin);
+        onboardingUrl.searchParams.set("returnTo", `${path}${currentUrl.search}`);
+        throw redirect(`${onboardingUrl.pathname}${onboardingUrl.search}`);
       }
     }
 
@@ -86,7 +90,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           accessToken: session.accessToken,
           installedAt: new Date().toISOString(),
           billingStatus,
-          scopes: appInstallation?.accessScopes?.map((s: any) => s.handle) || [],
+          scopes:
+            appInstallation?.accessScopes?.map((scope: { handle?: string }) => scope.handle) || [],
         },
         { merge: true },
       );
@@ -99,8 +104,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
+  type PolarisLinkProps = {
+    url?: string;
+    external?: boolean;
+    children?: ReactNode;
+  } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">;
 
-  const PolarisLink = ({ url, external, children, ...rest }: any) => {
+  const PolarisLink = ({ url, external, children, ...rest }: PolarisLinkProps) => {
     if (external || typeof url !== "string") {
       return (
         <a href={url} {...rest}>
@@ -119,16 +129,14 @@ export default function App() {
   return (
     <ShopifyAppProvider embedded apiKey={apiKey}>
       <PolarisAppProvider i18n={enTranslations} linkComponent={PolarisLink}>
-        <Frame>
-          <s-app-nav>
-            <s-link href="/app/onboarding">Setup</s-link>
-            <s-link href="/app">Dashboard</s-link>
-            <s-link href="/app/fields">Fields</s-link>
-            <s-link href="/app/orders">Orders</s-link>
-            <s-link href="/app/plans">Plans</s-link>
-          </s-app-nav>
-          <Outlet />
-        </Frame>
+        <ui-nav-menu>
+          <a href="/app">Dashboard</a>
+          <a href="/app/onboarding">Setup</a>
+          <a href="/app/fields">Fields</a>
+          <a href="/app/orders">Orders</a>
+          <a href="/app/plans">Plans</a>
+        </ui-nav-menu>
+        <Outlet />
       </PolarisAppProvider>
     </ShopifyAppProvider>
   );

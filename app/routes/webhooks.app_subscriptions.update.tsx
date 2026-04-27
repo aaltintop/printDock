@@ -49,7 +49,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         await updateShopPlan(shop, "free");
         await saveBillingPlan(shop, {
           planCode: "free",
-          status: "inactive",
+          status: "active",
           subscriptionId: null,
         });
         log.event("webhook_processed", { topic: "APP_SUBSCRIPTIONS_UPDATE", shopDomain: shop });

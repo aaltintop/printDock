@@ -866,19 +866,24 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
     return;
   }
 
-  if (current.status === "active") {
+  const shouldFallbackToFreeActive =
+    current.planCode !== "free" ||
+    current.status !== "active" ||
+    (current.subscriptionId ?? null) !== null;
+
+  if (shouldFallbackToFreeActive) {
     log.event("billing_plan_reconciled", {
       shopDomain,
       source: "admin_load",
       fromPlanCode: current.planCode,
       fromStatus: current.status,
       toPlanCode: "free",
-      toStatus: "inactive",
+      toStatus: "active",
     });
     await updateShopPlan(shopDomain, "free");
     await saveBillingPlan(shopDomain, {
       planCode: "free",
-      status: "inactive",
+      status: "active",
       subscriptionId: null,
     });
   }

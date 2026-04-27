@@ -41,13 +41,21 @@ const CART_TRANSFORM_UNAVAILABLE_CODES = new Set<CartTransformStatusCode>([
   "not_supported",
 ]);
 
+function normalizeRequestedPath(input: string | null): string | null {
+  if (!input || !input.startsWith("/app")) return null;
+  if (input.startsWith("/app/onboarding")) return null;
+  return input;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     try {
+      const requestUrl = new URL(request.url);
       const { admin, session } = await authenticate.admin(request);
       const shopDomain = session.shop;
       setLogShopDomain(shopDomain);
       log.event("admin_page_view", { path: "/app/onboarding" });
+      const returnTo = normalizeRequestedPath(requestUrl.searchParams.get("returnTo"));
 
       const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
       const shopSettings = shopSettingsDoc.data() ?? {};
@@ -171,6 +179,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         setup,
         themeStepVerified,
         setupComplete,
+        returnTo,
         checks,
         passedCount,
         totalChecks: checks.length,
@@ -336,7 +345,7 @@ function CartTransformExplanation({
 }
 
 export default function OnboardingPage() {
-  const { setup, themeStepVerified, setupComplete, checks, passedCount, totalChecks, metrics } =
+  const { setup, themeStepVerified, setupComplete, returnTo, checks, passedCount, totalChecks, metrics } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const ready = passedCount === totalChecks;
@@ -374,6 +383,18 @@ export default function OnboardingPage() {
   return (
     <Page title="PrintDock Setup">
       <BlockStack gap="400">
+        {!setupComplete && returnTo ? (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="h2" variant="headingMd">
+                Setup required before this page
+              </Text>
+              <Text as="p" tone="subdued">
+                You tried to open {returnTo}. Finish setup below, then continue to that page.
+              </Text>
+            </BlockStack>
+          </Card>
+        ) : null}
         <Card>
           <BlockStack gap="300">
             <InlineStack align="space-between">
