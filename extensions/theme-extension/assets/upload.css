@@ -7,8 +7,8 @@
   --pd-radius: 8px;
   --pd-primary: #111111;
   --pd-primary-on: #ffffff;
-  --pd-success: #1f8b5c;
-  --pd-success-strong: #0d8246;
+  --pd-success: #22c55e;
+  --pd-success-strong: #16a34a;
   --pd-danger: #d82c0d;
   --pd-warning: #ffc453;
   --pd-surface: #ffffff;
@@ -148,23 +148,22 @@
 }
 
 .printdock-progress-bar {
-  height: 8px;
-  background: var(--pd-progress-track);
+  height: 12px;
+  --pd-progress: 0%;
+  background: linear-gradient(
+    90deg,
+    #22c55e 0 var(--pd-progress),
+    #dfe6eb var(--pd-progress) 100%
+  );
   border-radius: 999px;
   overflow: hidden;
   flex: 1;
 }
 
-.printdock-progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--pd-success), var(--pd-success-strong));
-  transition: width 0.25s ease;
-}
-
 .printdock-status {
   font-size: 0.875em;
   color: var(--pd-text-subdued);
+  font-weight: 500;
 }
 
 .printdock-status-ok {

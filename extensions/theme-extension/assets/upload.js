@@ -35,7 +35,6 @@
   };
 
   let fieldConfig = { ...DEFAULT_CONFIG };
-  let billingPlan = null;
   let isRequired = BLOCK_REQUIRED;
   let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || null;
   let sessionExpiresAt = localStorage.getItem(SESSION_EXPIRES_STORAGE_KEY) || null;
@@ -57,7 +56,9 @@
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       localStorage.removeItem(SESSION_EXPIRES_STORAGE_KEY);
-    } catch (_) {}
+    } catch (_) {
+      // Ignore storage access failures (private mode / blocked storage).
+    }
   }
 
   async function fetchUploadSession(file, tokenToUse) {
@@ -138,7 +139,6 @@
       const res = await fetch(configUrl);
       if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
       const payload = await res.json();
-      billingPlan = payload.billingPlan || null;
       if (payload.field) {
         fieldConfig = Object.assign({}, DEFAULT_CONFIG, payload.field);
       }
@@ -210,7 +210,9 @@
       quantity: defaultFileQuantity(),
       storagePath: null,
       printReadyFileUrl: null,
+      xhrUpload: null,
     };
+    const isEntryActive = () => uploadedFiles.some((entry) => entry.id === fileEntry.id);
 
     uploadedFiles.push(fileEntry);
     renderFileList();
@@ -234,9 +236,11 @@
           );
           fileEntry.status = "error";
           fileEntry.error = "Storage limit reached.";
-          renderFileList();
-          updateCartState();
-          updatePriceDisplay();
+          if (isEntryActive()) {
+            renderFileList();
+            updateCartState();
+            updatePriceDisplay();
+          }
           return;
         }
         const hint =
@@ -259,9 +263,16 @@
 
       // Step 2: Upload directly to Firebase Storage
       await uploadToFirebase(file, presignedUrl, (progress) => {
+        if (!isEntryActive()) return;
         fileEntry.progress = progress;
-        renderFileList();
+        if (!updateUploadingProgressUI(fileEntry)) {
+          renderFileList();
+        }
+      }, (xhr) => {
+        fileEntry.xhrUpload = xhr;
       });
+      fileEntry.xhrUpload = null;
+      if (!isEntryActive()) return;
 
       // Step 3: Confirm upload to our server for validation + pricing
       fileEntry.status = "validating";
@@ -289,6 +300,7 @@
       }
 
       if (!confirmRes.ok) {
+        if (!isEntryActive()) return;
         if (confirmRes.status === 402 && confirmData?.error === "storage_cap_exceeded") {
           console.warn("PrintDock storage cap hit", confirmData);
           showError(
@@ -305,6 +317,7 @@
         throw new Error(serverMsg);
       }
 
+      if (!isEntryActive()) return;
       fileEntry.status = confirmData.blocked ? "blocked" : "success";
       fileEntry.metadata = confirmData.metadata;
       fileEntry.pricing = confirmData.pricing;
@@ -317,6 +330,7 @@
           : null;
 
     } catch (err) {
+      if (!isEntryActive()) return;
       fileEntry.status = "error";
       const msg = err instanceof Error ? err.message : String(err);
       fileEntry.error =
@@ -324,14 +338,16 @@
       console.error("PrintDock upload error:", err);
     }
 
+    if (!isEntryActive()) return;
     renderFileList();
     updateCartState();
     updatePriceDisplay();
   }
 
-  async function uploadToFirebase(file, presignedUrl, onProgress) {
+  async function uploadToFirebase(file, presignedUrl, onProgress, onCreateXhr) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      if (typeof onCreateXhr === "function") onCreateXhr(xhr);
       xhr.open("PUT", presignedUrl, true);
       xhr.setRequestHeader(
         "Content-Type",
@@ -344,6 +360,7 @@
 
       xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error(`Storage upload failed: ${xhr.status}`));
       xhr.onerror = () => reject(new Error("Storage upload network error"));
+      xhr.onabort = () => reject(new Error("Storage upload canceled"));
       xhr.send(file);
     });
   }
@@ -375,6 +392,7 @@
   }
 
   function injectCartProperties(form) {
+    clearPrintdockHiddenInputs(form);
     const properties = getCartProperties();
     Object.entries(properties).forEach(([key, value]) => {
       setHiddenInput(form, `properties[${key}]`, value);
@@ -674,14 +692,25 @@
       input = document.createElement("input");
       input.type = "hidden";
       input.name = name;
+      input.dataset.printdockProperty = "1";
       form.appendChild(input);
     }
     input.value = value;
   }
 
+  function clearPrintdockHiddenInputs(form) {
+    form.querySelectorAll('input[data-printdock-property="1"]').forEach((input) => input.remove());
+  }
+
+  function syncFormProperties() {
+    const forms = document.querySelectorAll('form[action*="/cart/add"]');
+    forms.forEach((form) => injectCartProperties(form));
+  }
+
   function updateCartState() {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     isBlocked = uploadedFiles.some((entry) => entry.blocked);
+    syncFormProperties();
     const btn = document.querySelector('[name="add"], [id*="add-to-cart"], .product-form__submit');
     if (!btn) return;
 
@@ -760,16 +789,25 @@
   }
 
   function removeFile(fileId) {
-    uploadedFiles = uploadedFiles.filter((entry) => {
-      if (entry.id !== fileId) return true;
-      if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
-      return false;
-    });
+    const target = uploadedFiles.find((entry) => entry.id === fileId);
+    if (!target) return;
+    if (target.xhrUpload) {
+      try {
+        target.xhrUpload.abort();
+      } catch (_error) {
+        // Ignore abort errors from browsers/themes with patched XHR.
+      }
+      target.xhrUpload = null;
+    }
+    if (target.previewUrl) URL.revokeObjectURL(target.previewUrl);
+
+    uploadedFiles = uploadedFiles.filter((entry) => entry.id !== fileId);
     if (uploadedFiles.length === 0) {
-      sessionToken = null;
-      sessionExpiresAt = null;
-      localStorage.removeItem(SESSION_STORAGE_KEY);
-      localStorage.removeItem(SESSION_EXPIRES_STORAGE_KEY);
+      clearStoredSession();
+      const fileInput = document.getElementById("printdock-file-input");
+      if (fileInput) fileInput.value = "";
+      const msgs = document.getElementById("printdock-messages");
+      if (msgs) msgs.innerHTML = "";
     }
     renderFileList();
     updateCartState();
@@ -864,10 +902,9 @@
           file.status === "uploading"
             ? `
               <div class="printdock-progress-wrap">
-                <div class="printdock-progress-bar">
-                  <div class="printdock-progress-fill" style="width:${file.progress}%"></div>
+                <div class="printdock-progress-bar" style="--pd-progress:${file.progress}%">
                 </div>
-                <span class="printdock-status">${file.progress}%</span>
+                <span class="printdock-status printdock-progress-percent">${file.progress}%</span>
               </div>
             `
             : "";
@@ -883,7 +920,7 @@
           `;
 
         return `
-          <div class="printdock-file-card printdock-file-${file.status}">
+          <div class="printdock-file-card printdock-file-${file.status}" data-file-id="${file.id}">
             <div class="printdock-file-thumb">
               ${thumbnailHtml}
             </div>
@@ -932,6 +969,25 @@
         if (fileId) updateFileQuantity(fileId, quantity);
       });
     });
+  }
+
+  function updateUploadingProgressUI(fileEntry) {
+    const card = root.querySelector(`.printdock-file-card[data-file-id="${fileEntry.id}"]`);
+    if (!card) return false;
+
+    const progressBar = card.querySelector(".printdock-progress-bar");
+    const progressText = card.querySelector(".printdock-progress-percent");
+
+    if (!progressBar && !progressText) return false;
+
+    if (progressBar) {
+      progressBar.style.setProperty("--pd-progress", `${fileEntry.progress}%`);
+    }
+    if (progressText) {
+      progressText.textContent = `${fileEntry.progress}%`;
+    }
+
+    return true;
   }
 
   function showError(msg) {
