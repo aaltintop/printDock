@@ -130,7 +130,7 @@ export default function App() {
     <ShopifyAppProvider embedded apiKey={apiKey}>
       <PolarisAppProvider i18n={enTranslations} linkComponent={PolarisLink}>
         <ui-nav-menu>
-          <a href="/app">Dashboard</a>
+          <a href="/app" rel="home">Dashboard</a>
           <a href="/app/onboarding">Setup</a>
           <a href="/app/fields">Fields</a>
           <a href="/app/orders">Orders</a>
