@@ -345,7 +345,7 @@ function CartTransformExplanation({
 }
 
 export default function OnboardingPage() {
-  const { setup, themeStepVerified, setupComplete, returnTo, checks, passedCount, totalChecks, metrics } =
+  const { setup, themeStepVerified, setupComplete, checks, passedCount, totalChecks, metrics } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const ready = passedCount === totalChecks;
@@ -353,15 +353,15 @@ export default function OnboardingPage() {
   const cartTransformResult =
     fetcher.data && (fetcher.data as { intent?: string }).intent === "register_cart_transform"
       ? (fetcher.data as {
-          ok: boolean;
-          cartTransform: {
-            code: CartTransformStatusCode;
-            enabled: boolean;
-            created: boolean;
-            cartTransformId: string | null;
-            message: string | null;
-          };
-        })
+        ok: boolean;
+        cartTransform: {
+          code: CartTransformStatusCode;
+          enabled: boolean;
+          created: boolean;
+          cartTransformId: string | null;
+          message: string | null;
+        };
+      })
       : null;
 
   const liveCartTransformCode: CartTransformStatusCode =
@@ -383,23 +383,11 @@ export default function OnboardingPage() {
   return (
     <Page title="PrintDock Setup">
       <BlockStack gap="400">
-        {!setupComplete && returnTo ? (
-          <Card>
-            <BlockStack gap="200">
-              <Text as="h2" variant="headingMd">
-                Setup required before this page
-              </Text>
-              <Text as="p" tone="subdued">
-                You tried to open {returnTo}. Finish setup below, then continue to that page.
-              </Text>
-            </BlockStack>
-          </Card>
-        ) : null}
         <Card>
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                1. First field
+                1. Create your first field
               </Text>
               <StatusBadge enabled={setup.fieldsConfigured} />
             </InlineStack>

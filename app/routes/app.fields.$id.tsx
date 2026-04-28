@@ -4,6 +4,7 @@ import {
   redirect,
   useActionData,
   useLoaderData,
+  useNavigate,
   useNavigation,
   useSearchParams,
 } from "react-router";
@@ -525,7 +526,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return data({ error: "This field no longer exists or was removed." }, { status: 404 });
       }
       const fieldId = id === "new" ? crypto.randomUUID() : id;
-      const pricingEnabled = parseBoolean(formData.get("pricingEnabled"));
+      const requestedPricingEnabled = parseBoolean(formData.get("pricingEnabled"));
       const requestedPricingUnitType = String(formData.get("pricingUnitType"));
       const pricingUnitType: UploadFieldConfig["pricing"]["unitType"] =
         requestedPricingUnitType === "inch_height" || requestedPricingUnitType === "inch_square"
@@ -533,6 +534,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           : "flat";
 
       const planCode = billingPlan.planCode;
+      const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
+      const pricingEnabled = planAllowsDynamicPricing ? requestedPricingEnabled : false;
       const planLimits = getPlan(planCode);
       const maxFileMBFromPlan = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
       const maxFileMBParse = parseBoundedNumberInput(
@@ -660,10 +663,12 @@ export default function FieldEditorPage() {
     useLoaderData<typeof loader>();
   const planAllowsAdvancedValidation = canUseFeature(planCode, "advancedValidation");
   const planAllowsFileRenaming = canUseFeature(planCode, "fileRenaming");
+  const planAllowsDynamicPricing = canUseFeature(planCode, "dynamicPricing");
   const patternIsCustom =
     !isNew && field.fileRenamingPattern.trim() !== DEFAULT_FILE_RENAME_PATTERN;
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+  const navigate = useNavigate();
   const appBridge = useAppBridge();
   const [searchParams] = useSearchParams();
 
@@ -715,7 +720,9 @@ export default function FieldEditorPage() {
   const [allowedExtensions, setAllowedExtensions] = useState<string[]>(initialState.allowedExtensions);
   const [newExtension, setNewExtension] = useState("");
   const [maxFileMB, setMaxFileMB] = useState(initialState.maxFileMB);
-  const [pricingEnabled, setPricingEnabled] = useState(initialState.pricingEnabled);
+  const [pricingEnabled, setPricingEnabled] = useState(
+    planAllowsDynamicPricing ? initialState.pricingEnabled : false,
+  );
   const [pricingUnitType, setPricingUnitType] = useState(initialState.pricingUnitType);
   const [unitPrice, setUnitPrice] = useState(initialState.unitPrice);
   const [minPrice, setMinPrice] = useState(initialState.minPrice);
@@ -773,7 +780,7 @@ export default function FieldEditorPage() {
     </Card>
   );
 
-  const serializedCurrent = JSON.stringify({
+  const dirtyComparableCurrent = {
     adminTitle,
     targetProducts,
     targetCollections,
@@ -789,13 +796,37 @@ export default function FieldEditorPage() {
     pricingUnitType,
     unitPrice,
     minPrice,
+    roundingEnabled: initialState.roundingEnabled,
     dimensionCards,
     legacyDimensionRules,
-  });
-  const serializedInitial = JSON.stringify(initialState);
+    dimensionRulesSimplified,
+  };
+  const dirtyComparableInitial = {
+    adminTitle: initialState.adminTitle,
+    targetProducts: initialState.targetProducts,
+    targetCollections: initialState.targetCollections,
+    targetVariantIds: initialState.targetVariantIds,
+    isActive: initialState.isActive,
+    storefrontTitle: initialState.storefrontTitle,
+    storefrontDescription: initialState.storefrontDescription,
+    fileRenamingPattern: initialState.fileRenamingPattern,
+    contentTypeRestricted: initialState.contentTypeRestricted,
+    allowedExtensions: initialState.allowedExtensions,
+    maxFileMB: initialState.maxFileMB,
+    pricingEnabled: initialState.pricingEnabled,
+    pricingUnitType: initialState.pricingUnitType,
+    unitPrice: initialState.unitPrice,
+    minPrice: initialState.minPrice,
+    roundingEnabled: initialState.roundingEnabled,
+    dimensionCards: initialState.dimensionCards,
+    legacyDimensionRules: initialState.legacyDimensionRules,
+    dimensionRulesSimplified: initialState.dimensionRulesSimplified,
+  };
+  const serializedCurrent = JSON.stringify(dirtyComparableCurrent);
+  const serializedInitial = JSON.stringify(dirtyComparableInitial);
   const isDirty = serializedCurrent !== serializedInitial;
 
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setAdminTitle(initialState.adminTitle);
     setTargetProducts(initialState.targetProducts);
     setTargetCollections(initialState.targetCollections);
@@ -807,14 +838,14 @@ export default function FieldEditorPage() {
     setContentTypeRestricted(initialState.contentTypeRestricted);
     setAllowedExtensions(initialState.allowedExtensions);
     setMaxFileMB(initialState.maxFileMB);
-    setPricingEnabled(initialState.pricingEnabled);
+    setPricingEnabled(planAllowsDynamicPricing ? initialState.pricingEnabled : false);
     setPricingUnitType(initialState.pricingUnitType);
     setUnitPrice(initialState.unitPrice);
     setMinPrice(initialState.minPrice);
     setDimensionCards(initialState.dimensionCards);
     setLegacyDimensionRules(initialState.legacyDimensionRules);
     setDimensionRulesSimplified(initialState.dimensionRulesSimplified);
-  };
+  }, [initialState, planAllowsDynamicPricing]);
 
   const openProductPicker = useCallback(async () => {
     const selection = await (appBridge as unknown as ResourcePickerBridge).resourcePicker({
@@ -914,6 +945,21 @@ export default function FieldEditorPage() {
     return errors;
   }, [allowedDimensionTypes, dimensionCards]);
 
+  const handleSave = useCallback(() => {
+    if (fieldCreationBlocked || isSaving) return;
+    const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
+    form?.requestSubmit();
+  }, [fieldCreationBlocked, isSaving]);
+
+  const handleDiscard = useCallback(() => {
+    if (isSaving) return;
+    if (isNew) {
+      navigate("/app/fields");
+      return;
+    }
+    resetForm();
+  }, [isSaving, isNew, navigate, resetForm]);
+
   if (navigation.state === "loading") {
     return (
       <Page title={pageTitle}>
@@ -931,35 +977,23 @@ export default function FieldEditorPage() {
       title={pageTitle}
       backAction={{ content: "Fields", url: "/app/fields" }}
     >
-      {isDirty ? (
-        <Box paddingBlockEnd="300">
-          <Banner tone="info" title="Unsaved changes">
-            <InlineStack gap="200">
-              <Button
-                variant="primary"
-                loading={isSaving}
-                disabled={fieldCreationBlocked || isSaving}
-                onClick={() => {
-                  if (fieldCreationBlocked || isSaving) return;
-                  const form = document.getElementById("field-editor-form") as HTMLFormElement | null;
-                  form?.requestSubmit();
-                }}
-              >
-                Save field
-              </Button>
-              <Button
-                disabled={isSaving}
-                onClick={() => {
-                  if (isSaving) return;
-                  resetForm();
-                }}
-              >
-                Discard
-              </Button>
-            </InlineStack>
-          </Banner>
-        </Box>
-      ) : null}
+      <style>
+        {`
+          .field-editor-form-content {
+            padding-bottom: ${isDirty ? "88px" : "0"};
+          }
+          .field-editor-sticky-actions {
+            position: sticky;
+            bottom: 0;
+            z-index: 30;
+            margin-top: 16px;
+            padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+            border-top: 1px solid var(--p-border-subdued, #dfe3e8);
+            background: var(--p-color-bg-surface, #ffffff);
+            box-shadow: 0 -6px 12px rgba(0, 0, 0, 0.06);
+          }
+        `}
+      </style>
       <Form
         method="post"
         id="field-editor-form"
@@ -974,7 +1008,8 @@ export default function FieldEditorPage() {
         <input type="hidden" name="dimensionRules" value={JSON.stringify(serializedDimensionRules)} />
         <input type="hidden" name="isActive" value={isActive ? "true" : "false"} />
 
-        <BlockStack gap="400">
+        <div className="field-editor-form-content">
+          <BlockStack gap="400">
           {fieldCreationBlocked ? (
             <Banner
               tone="warning"
@@ -1333,91 +1368,110 @@ export default function FieldEditorPage() {
                 </Text>
               </BlockStack>
 
-              <input type="hidden" name="pricingEnabled" value={pricingEnabled ? "true" : "false"} />
-
-              <Checkbox
-                label="Charge using dynamic pricing"
-                helpText="When off, no upload fee is added from this field."
-                checked={pricingEnabled}
-                onChange={() => setPricingEnabled((prev) => !prev)}
+              <input
+                type="hidden"
+                name="pricingEnabled"
+                value={planAllowsDynamicPricing && pricingEnabled ? "true" : "false"}
               />
 
-              {!pricingEnabled ? (
+              {!planAllowsDynamicPricing ? (
+                <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+                  <BlockStack gap="300">
+                    <Text as="p" variant="bodyMd">
+                      {merchantUpgradeHint("dynamicPricing")}
+                    </Text>
+                    <Button url="/app/plans" variant="primary">
+                      Upgrade to {planDisplayName(suggestUpgradeFor("dynamicPricing"))}
+                    </Button>
+                  </BlockStack>
+                </Box>
+              ) : (
                 <>
-                  <input type="hidden" name="pricingUnitType" value={pricingUnitType} />
-                  <input type="hidden" name="unitPrice" value={unitPrice} />
-                  <input type="hidden" name="minPrice" value={minPrice} />
-                  <input type="hidden" name="roundingEnabled" value="false" />
-                </>
-              ) : null}
+                  <Checkbox
+                    label="Charge using dynamic pricing"
+                    helpText="When off, no upload fee is added from this field."
+                    checked={pricingEnabled}
+                    onChange={() => setPricingEnabled((prev) => !prev)}
+                  />
 
-              {!pricingEnabled ? (
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Turn on dynamic pricing to set how the upload fee is calculated.
-                </Text>
-              ) : null}
+                  {!pricingEnabled ? (
+                    <>
+                      <input type="hidden" name="pricingUnitType" value={pricingUnitType} />
+                      <input type="hidden" name="unitPrice" value={unitPrice} />
+                      <input type="hidden" name="minPrice" value={minPrice} />
+                      <input type="hidden" name="roundingEnabled" value="false" />
+                    </>
+                  ) : null}
 
-              {pricingEnabled ? (
-                <BlockStack gap="300">
-                  <Divider />
-                  <Text as="h3" variant="headingSm">
-                    Rate settings
-                  </Text>
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    {
-                      "These values are calculated directly from the uploaded file metadata (no inferred DPI or roll width fallback)."
-                    }
-                  </Text>
-                  {!showMinPrice ? <input type="hidden" name="minPrice" value={minPrice} /> : null}
-                  <FormLayout>
-                    <Select
-                      name="pricingUnitType"
-                      label="Calculation method"
-                      helpText="Pick how the fee scales with the uploaded file."
-                      value={pricingUnitType}
-                      options={[
-                        { label: "Flat — fixed price per upload", value: "flat" },
-                        { label: "Per inch height — price × print height", value: "inch_height" },
-                        { label: "Per square inch — price × print area", value: "inch_square" },
-                      ]}
-                      onChange={(value) =>
-                        setPricingUnitType(value as UploadFieldConfig["pricing"]["unitType"])
-                      }
-                    />
-                    <InlineStack gap="400" align="start" blockAlign="start" wrap>
-                      <Box minWidth="200px" width="100%">
-                        <TextField
-                          name="unitPrice"
-                          label={unitPriceLabelForMethod(pricingUnitType)}
-                          type="text"
-                          inputMode="decimal"
-                          prefix="$"
-                          autoComplete="off"
-                          value={unitPrice}
-                          onChange={setUnitPrice}
-                          helpText="Used by the selected calculation method. Decimal comma is accepted."
+                  {!pricingEnabled ? (
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Turn on dynamic pricing to set how the upload fee is calculated.
+                    </Text>
+                  ) : null}
+
+                  {pricingEnabled ? (
+                    <BlockStack gap="300">
+                      <Divider />
+                      <Text as="h3" variant="headingSm">
+                        Rate settings
+                      </Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        {
+                          "These values are calculated directly from the uploaded file metadata (no inferred DPI or roll width fallback)."
+                        }
+                      </Text>
+                      {!showMinPrice ? <input type="hidden" name="minPrice" value={minPrice} /> : null}
+                      <FormLayout>
+                        <Select
+                          name="pricingUnitType"
+                          label="Calculation method"
+                          helpText="Pick how the fee scales with the uploaded file."
+                          value={pricingUnitType}
+                          options={[
+                            { label: "Flat — fixed price per upload", value: "flat" },
+                            { label: "Per inch height — price × print height", value: "inch_height" },
+                            { label: "Per square inch — price × print area", value: "inch_square" },
+                          ]}
+                          onChange={(value) =>
+                            setPricingUnitType(value as UploadFieldConfig["pricing"]["unitType"])
+                          }
                         />
-                      </Box>
-                      {showMinPrice ? (
-                        <Box minWidth="200px" width="100%">
-                          <TextField
-                            name="minPrice"
-                            label="Floor price"
-                            type="text"
-                            inputMode="decimal"
-                            prefix="$"
-                            autoComplete="off"
-                            value={minPrice}
-                            onChange={setMinPrice}
-                            helpText="Minimum fee charged for an upload (0 = no floor). Decimal comma is accepted."
-                          />
-                        </Box>
-                      ) : null}
-                    </InlineStack>
-                    <input type="hidden" name="roundingEnabled" value="false" />
-                  </FormLayout>
-                </BlockStack>
-              ) : null}
+                        <InlineStack gap="400" align="start" blockAlign="start" wrap>
+                          <Box minWidth="200px" width="100%">
+                            <TextField
+                              name="unitPrice"
+                              label={unitPriceLabelForMethod(pricingUnitType)}
+                              type="text"
+                              inputMode="decimal"
+                              prefix="$"
+                              autoComplete="off"
+                              value={unitPrice}
+                              onChange={setUnitPrice}
+                              helpText="Used by the selected calculation method. Decimal comma is accepted."
+                            />
+                          </Box>
+                          {showMinPrice ? (
+                            <Box minWidth="200px" width="100%">
+                              <TextField
+                                name="minPrice"
+                                label="Floor price"
+                                type="text"
+                                inputMode="decimal"
+                                prefix="$"
+                                autoComplete="off"
+                                value={minPrice}
+                                onChange={setMinPrice}
+                                helpText="Minimum fee charged for an upload (0 = no floor). Decimal comma is accepted."
+                              />
+                            </Box>
+                          ) : null}
+                        </InlineStack>
+                        <input type="hidden" name="roundingEnabled" value="false" />
+                      </FormLayout>
+                    </BlockStack>
+                  ) : null}
+                </>
+              )}
             </BlockStack>
           </Card>
 
@@ -1616,7 +1670,25 @@ export default function FieldEditorPage() {
               </InlineStack>
             </Card>
           ) : null}
-        </BlockStack>
+          </BlockStack>
+        </div>
+        {isDirty ? (
+          <div className="field-editor-sticky-actions">
+            <InlineStack align="space-between" blockAlign="center" wrap={false}>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Unsaved changes
+              </Text>
+              <InlineStack gap="200">
+                <Button onClick={handleDiscard} disabled={isSaving}>
+                  Discard
+                </Button>
+                <Button onClick={handleSave} variant="primary" loading={isSaving} disabled={fieldCreationBlocked || isSaving}>
+                  Save field
+                </Button>
+              </InlineStack>
+            </InlineStack>
+          </div>
+        ) : null}
       </Form>
     </Page>
   );

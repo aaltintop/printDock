@@ -181,13 +181,11 @@ Current order-job statuses:
 - **Uploaded:** File is received and waiting for quality review.
 - **Pending review:** File has a warning/blocking concern or is marked for manual review.
 - **Approved:** File is approved and ready for production.
-- **Re-upload requested:** Customer must upload a corrected file.
 
 How statuses are set:
 
 - New jobs start as **Uploaded** or **Pending review** automatically, based on validation warnings.
 - Merchants can change status from row action buttons (`Mark approved` / `Mark review`) or from the order detail page.
-- Requesting a re-upload sets the job to **Re-upload requested**.
 
 ---
 

@@ -14,6 +14,7 @@ import { extractMetadata, runValidationRules, hasBlockingError } from "../servic
 import { calculatePrice } from "../services/pricing.server";
 import { authenticate } from "../shopify.server";
 import {
+  adjustShopStorageUsageBytes,
   billableBytesForStoragePath,
   createCollectionIdResolver,
   getActiveFieldForProduct,
@@ -21,10 +22,11 @@ import {
   getShopStorageUsageBytes,
   getUploadField,
   getUploadSession,
+  isBillableStorageAsset,
   updateUploadSession,
 } from "../services/shop-data.server";
 import type { UploadAsset } from "../types/printdock";
-import type { FileMetadata, ValidationResult, ValidationRule } from "../services/validation.server";
+import type { ValidationResult, ValidationRule } from "../services/validation.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 function isSafeSessionStoragePath(path: string, shopDomain: string): boolean {
@@ -314,9 +316,11 @@ export async function action({ request }: ActionFunctionArgs) {
 
       const blocked = hasBlockingError(validationResults);
 
+      const planAllowsDynamicPricing = canUseFeature(billingPlan.planCode, "dynamicPricing");
+
       // Calculate price
       let pricing = null;
-      if (field?.pricing?.enabled && !blocked) {
+      if (planAllowsDynamicPricing && field?.pricing?.enabled && !blocked) {
         const priceResult = calculatePrice(
           metadata,
           {
@@ -371,11 +375,15 @@ export async function action({ request }: ActionFunctionArgs) {
       const supersededAssets = isSingleFileField
         ? sessionData.assets.filter((existingAsset) => existingAsset.storagePath !== asset.storagePath)
         : [];
+      let supersededBytesFreed = 0;
       for (const oldAsset of supersededAssets) {
         const oldPath = String(oldAsset.storagePath ?? "").trim();
         if (!oldPath || !isSafeSessionStoragePath(oldPath, shopDomain)) continue;
         try {
           await deleteFile(oldPath);
+          if (isBillableStorageAsset(oldAsset)) {
+            supersededBytesFreed += Number(oldAsset.sizeBytes) || 0;
+          }
         } catch (cleanupErr) {
           log.error("upload_confirm_superseded_cleanup_failed", cleanupErr, {
             sessionToken,
@@ -395,6 +403,15 @@ export async function action({ request }: ActionFunctionArgs) {
         assets: updatedAssets,
         status: sessionBlocked ? "blocked" : "success",
       });
+
+      // Maintain the running shop-level storage counter:
+      // + new asset bytes
+      // − bytes for the prior asset at the same storagePath (overwrite)
+      // − bytes for any superseded assets we just deleted (single-file replace)
+      const counterDelta = sizeBytes - bytesFreed - supersededBytesFreed;
+      if (counterDelta !== 0) {
+        await adjustShopStorageUsageBytes(shopDomain, counterDelta);
+      }
 
       const downloadSecret = process.env.SHOPIFY_API_SECRET || "";
       const printReadyToken = createPrintReadyFileToken(

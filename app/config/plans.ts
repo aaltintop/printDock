@@ -6,6 +6,7 @@ export type UpgradeReason =
   | "advancedValidation"
   | "fileRenaming"
   | "fileSize_gt50mb"
+  | "fileSize_gt100mb"
   | "totalStorage_gt500mb"
   | "dynamicPricing"
   | "fileStorage_gt7days"
@@ -41,24 +42,24 @@ export const PLANS: Record<PlanCode, PlanLimits> = {
     basicValidation: true,
     advancedValidation: false,
     fileRenaming: false,
-    dynamicPricing: true,
+    dynamicPricing: false,
   },
   starter: {
     planCode: "starter",
     displayName: "Starter",
-    maxFileSizeBytes: 314_572_800, // 300 MB
+    maxFileSizeBytes: 104_857_600, // 100 MB
     maxUploadFields: -1,
-    fileStorageDays: 7,
+    fileStorageDays: 30,
     maxTotalStorageBytes: 16_106_127_360, // 15 GB
     basicValidation: true,
-    advancedValidation: true,
-    fileRenaming: true,
-    dynamicPricing: true,
+    advancedValidation: false,
+    fileRenaming: false,
+    dynamicPricing: false,
   },
   pro: {
     planCode: "pro",
     displayName: "Pro",
-    maxFileSizeBytes: 1_073_741_824, // 1 GB
+    maxFileSizeBytes: 314_572_800, // 300 MB
     maxUploadFields: -1,
     fileStorageDays: 30,
     maxTotalStorageBytes: 32_212_254_720, // 30 GB
@@ -148,16 +149,17 @@ export function isWithinTotalStorage(
 export function suggestUpgradeFor(reason: UpgradeReason): PlanCode {
   switch (reason) {
     case "moreUploadFields":
-    case "advancedValidation":
-    case "fileRenaming":
     case "fileSize_gt50mb":
+    case "fileStorage_gt7days":
     case "totalStorage_gt500mb":
       return "starter";
+    case "fileSize_gt100mb":
+    case "advancedValidation":
+    case "fileRenaming":
     case "dynamicPricing":
-    case "fileStorage_gt7days":
-    case "fileSize_gt300mb":
     case "totalStorage_gt15gb":
       return "pro";
+    case "fileSize_gt300mb":
     case "fileSize_gt1gb":
     case "totalStorage_gt30gb":
       return "business";
@@ -181,6 +183,7 @@ export function merchantUpgradeHint(reason: UpgradeReason): string {
     advancedValidation: `Upgrade to ${target} to use advanced file validation (dimensions, DPI, page count).`,
     fileRenaming: `Upgrade to ${target} to use custom file renaming patterns.`,
     fileSize_gt50mb: `Upgrade to ${target} for a higher per-file size limit.`,
+    fileSize_gt100mb: `Upgrade to ${target} for a higher per-file size limit.`,
     totalStorage_gt500mb: `Upgrade to ${target} for more total upload storage.`,
     dynamicPricing: `Upgrade to ${target} to use dynamic price calculation.`,
     fileStorage_gt7days: `Upgrade to ${target} for longer file retention.`,
@@ -198,11 +201,11 @@ export function fileSizeUpgradeReason(currentPlan: PlanCode): UpgradeReason {
     case "free":
       return "fileSize_gt50mb";
     case "starter":
-      return "fileSize_gt300mb";
+      return "fileSize_gt100mb";
     case "pro":
-      return "fileSize_gt1gb";
+      return "fileSize_gt300mb";
     case "business":
-      return "fileSize_gt1gb";
+      return "fileSize_gt300mb";
   }
 }
 

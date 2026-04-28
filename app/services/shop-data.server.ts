@@ -1,3 +1,4 @@
+import { FieldValue } from "firebase-admin/firestore";
 import { DEFAULT_FILE_RENAME_PATTERN } from "../utils/file-rename-pattern";
 import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
@@ -262,10 +263,6 @@ export function jobsCollection(shopDomain: string) {
 
 export function jobAuditCollection(shopDomain: string, jobId: string) {
   return jobsCollection(shopDomain).doc(jobId).collection("audit");
-}
-
-export function reuploadRequestsCollection(shopDomain: string, jobId: string) {
-  return jobsCollection(shopDomain).doc(jobId).collection("reuploadRequests");
 }
 
 export async function listUploadFields(shopDomain: string): Promise<UploadFieldConfig[]> {
@@ -747,17 +744,6 @@ export async function listOrderJobAuditEvents(
   });
 }
 
-export async function createReuploadRequest(shopDomain: string, jobId: string): Promise<string> {
-  const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-  const nowIso = new Date().toISOString();
-  await reuploadRequestsCollection(shopDomain, jobId).doc(token).set({
-    token,
-    status: "pending",
-    createdAt: nowIso,
-  });
-  return token;
-}
-
 export async function getShopPlan(shopDomain: string): Promise<PlanCode> {
   const billing = await getEffectiveBillingPlan(shopDomain);
   return billing.planCode;
@@ -954,20 +940,86 @@ export function sumBillableStorageBytesFromSessions(sessions: UploadSession[]): 
   );
 }
 
-export async function getShopStorageUsageBytes(shopDomain: string): Promise<number> {
+/**
+ * Field on `shops/{shopDomain}` that holds the running total of billable bytes
+ * currently stored for the shop. Maintained incrementally by upload, supersede,
+ * retention, and orphan-sweep flows so we never have to scan all sessions.
+ */
+export const STORAGE_USED_BYTES_FIELD = "storageUsedBytes";
+const STORAGE_USED_RECONCILED_AT_FIELD = "storageUsedBytesReconciledAt";
+
+/**
+ * Recompute the shop's billable storage usage from sessions and persist it on
+ * the shop document. Use sparingly (lazy migration / explicit reconciliation),
+ * since it scans every session for the shop.
+ */
+export async function recomputeShopStorageUsageBytes(shopDomain: string): Promise<number> {
   const sessions = await listUploadSessions(shopDomain);
-  return sumBillableStorageBytesFromSessions(sessions);
+  const total = sumBillableStorageBytesFromSessions(sessions);
+  await shopDoc(shopDomain).set(
+    {
+      [STORAGE_USED_BYTES_FIELD]: total,
+      [STORAGE_USED_RECONCILED_AT_FIELD]: new Date().toISOString(),
+    },
+    { merge: true },
+  );
+  return total;
+}
+
+/**
+ * Atomically adjust the running storage counter on the shop document.
+ *
+ * - `deltaBytes > 0` for new bytes added (e.g. confirmed upload).
+ * - `deltaBytes < 0` for bytes freed (e.g. retention purge, supersede, sweep).
+ *
+ * Negative results are clamped to 0 in a follow-up read by callers; we do not
+ * block here because the counter is eventually-consistent and reconciled by
+ * `recomputeShopStorageUsageBytes`.
+ */
+export async function adjustShopStorageUsageBytes(
+  shopDomain: string,
+  deltaBytes: number,
+): Promise<void> {
+  if (!Number.isFinite(deltaBytes) || deltaBytes === 0) return;
+  try {
+    await shopDoc(shopDomain).set(
+      { [STORAGE_USED_BYTES_FIELD]: FieldValue.increment(deltaBytes) },
+      { merge: true },
+    );
+  } catch (err) {
+    log.error("storage_counter_adjust_failed", err, {
+      shopDomain,
+      deltaBytes,
+    });
+  }
+}
+
+/**
+ * Returns the shop's billable storage usage in bytes.
+ *
+ * Fast path: read the running counter from the shop document.
+ * Slow path (lazy migration): if the counter is missing for a legacy shop,
+ * recompute once from sessions and persist it for subsequent reads.
+ */
+export async function getShopStorageUsageBytes(shopDomain: string): Promise<number> {
+  const snap = await shopDoc(shopDomain).get();
+  const raw = snap.exists ? snap.data()?.[STORAGE_USED_BYTES_FIELD] : undefined;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, raw);
+  }
+  const recomputed = await recomputeShopStorageUsageBytes(shopDomain);
+  return Math.max(0, recomputed);
 }
 
 export async function computeDashboardStats(shopDomain: string): Promise<DashboardStats> {
-  const [sessions, jobs] = await Promise.all([
+  const [sessions, jobs, storageUsedBytes] = await Promise.all([
     listUploadSessions(shopDomain),
     listOrderJobs(shopDomain),
+    getShopStorageUsageBytes(shopDomain),
   ]);
 
   const blockedUploads = sessions.filter((session) => session.status === "blocked").length;
   const convertedSessions = sessions.filter((session) => session.status === "converted").length;
-  const storageUsedBytes = sumBillableStorageBytesFromSessions(sessions);
 
   return {
     totalUploads: sessions.length,

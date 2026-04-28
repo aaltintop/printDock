@@ -4,14 +4,15 @@ import { getPlan } from "../config/plans";
 import type { OrderJob, UploadAsset, UploadSession } from "../types/printdock";
 import { deleteFile, deleteStorageByPrefix } from "./storage.server";
 import {
+  adjustShopStorageUsageBytes,
   fieldsCollection,
   getEffectiveBillingPlan,
+  isBillableStorageAsset,
   jobAuditCollection,
   jobsCollection,
   listOrderJobs,
   listUploadSessions,
   mergeOrderJob,
-  reuploadRequestsCollection,
   sessionsCollection,
   sessionAssetsCollection,
   shopDoc,
@@ -115,6 +116,7 @@ export async function sweepOrphanUploadSessions(
   let sessionsDeleted = 0;
   let bytesDeleted = 0;
 
+  let billableBytesFreed = 0;
   for (const session of sessions) {
     const eligibleStatus =
       session.status === "active" ||
@@ -134,6 +136,14 @@ export async function sweepOrphanUploadSessions(
       }
     }
 
+    // Counter decrement is per-asset (matches the per-asset sum used when adding)
+    // so it's correct even if multiple assets share the same storagePath.
+    for (const asset of session.assets) {
+      if (isBillableStorageAsset(asset)) {
+        billableBytesFreed += Number(asset.sizeBytes) || 0;
+      }
+    }
+
     const nestedSessionRef = sessionsCollection(shopDomain).doc(session.id);
     const nestedSessionSnap = await nestedSessionRef.get();
     if (nestedSessionSnap.exists) {
@@ -148,6 +158,10 @@ export async function sweepOrphanUploadSessions(
     }
 
     sessionsDeleted++;
+  }
+
+  if (billableBytesFreed > 0) {
+    await adjustShopStorageUsageBytes(shopDomain, -billableBytesFreed);
   }
 
   return {
@@ -217,11 +231,15 @@ export async function runStorageRetentionForShop(
   }
 
   let sessionsUpdated = 0;
+  let billableBytesFreed = 0;
   for (const session of sessions) {
     let changed = false;
     const nextAssets = session.assets.map((a) => {
       if (a.storagePath && deleted.has(a.storagePath)) {
         changed = true;
+        if (isBillableStorageAsset(a)) {
+          billableBytesFreed += Number(a.sizeBytes) || 0;
+        }
         return stripExpiredAsset(a);
       }
       return a;
@@ -238,6 +256,10 @@ export async function runStorageRetentionForShop(
       status: nextStatus,
     });
     sessionsUpdated++;
+  }
+
+  if (billableBytesFreed > 0) {
+    await adjustShopStorageUsageBytes(shopDomain, -billableBytesFreed);
   }
 
   return {
@@ -274,7 +296,6 @@ async function purgeShopFirestore(shopDomain: string): Promise<void> {
   const jobSnaps = await jobsCollection(shopDomain).get();
   for (const doc of jobSnaps.docs) {
     await deleteCollectionInBatches(jobAuditCollection(shopDomain, doc.id));
-    await deleteCollectionInBatches(reuploadRequestsCollection(shopDomain, doc.id));
     await doc.ref.delete();
   }
 
@@ -361,7 +382,6 @@ async function fullyDeleteOrderJobDocument(
     await deleteFile(path);
   }
   await deleteCollectionInBatches(jobAuditCollection(shopDomain, jobId));
-  await deleteCollectionInBatches(reuploadRequestsCollection(shopDomain, jobId));
 
   const nestedRef = jobsCollection(shopDomain).doc(jobId);
   const legacyRef = db.collection("jobs").doc(jobId);

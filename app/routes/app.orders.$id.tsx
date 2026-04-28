@@ -6,7 +6,6 @@ import {
   Button,
   Card,
   Layout,
-  Modal,
   Page,
   Select,
   Text,
@@ -17,7 +16,6 @@ import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
-  createReuploadRequest,
   listOrderJobAuditEvents,
   listOrderJobs,
   saveOrderJob,
@@ -126,24 +124,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         return data({ ok: true, message: "Internal note saved" });
       }
 
-      if (intent === "request_reupload") {
-        log.event("order_job_reupload_requested", { jobId });
-        const token = await createReuploadRequest(session.shop, jobId);
-        await saveOrderJob(session.shop, { ...job, status: "reupload_requested" });
-        await appendOrderJobAuditEvent(session.shop, jobId, {
-          eventType: "job_updated",
-          message: "re-upload requested",
-          metadata: { status: "reupload_requested", token },
-          actor: "admin-ui",
-        });
-
-        const url = new URL(request.url);
-        const origin = url.origin;
-        const reuploadUrl = `${origin}/api/reupload/${token}`;
-
-        return data({ ok: true, message: "Re-upload requested", reuploadUrl });
-      }
-
       log.warn("order_detail_unknown_intent", "Unsupported order detail intent", { intent });
       return data({ error: "Unsupported action" }, { status: 400 });
     } catch (err) {
@@ -163,8 +143,6 @@ export default function OrderJobDetailPage() {
   const appBridge = useAppBridge();
   const [status, setStatus] = useState(normalizeStatus(job.status));
   const [internalNotes, setInternalNotes] = useState(job.internalNotes || "");
-  const [requestModalOpen, setRequestModalOpen] = useState(false);
-  const [reuploadUrl, setReuploadUrl] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
   // `useNewValueEffect` runs once per new fetcher response, so the download
@@ -193,9 +171,6 @@ export default function OrderJobDetailPage() {
   });
 
   useNewValueEffect(actionFetcher.data, (fetcherData) => {
-    if ("reuploadUrl" in fetcherData && fetcherData.reuploadUrl) {
-      setReuploadUrl(fetcherData.reuploadUrl as string);
-    }
     if ("message" in fetcherData && fetcherData.message) {
       appBridge.toast.show(String(fetcherData.message));
     }
@@ -263,7 +238,6 @@ export default function OrderJobDetailPage() {
                         { label: "Uploaded", value: "uploaded" },
                         { label: "Pending review", value: "pending_review" },
                         { label: "Approved", value: "approved" },
-                        { label: "Re-upload requested", value: "reupload_requested" },
                       ]}
                       onChange={setStatus}
                     />
@@ -290,26 +264,6 @@ export default function OrderJobDetailPage() {
               </actionFetcher.Form>
             </Card>
 
-            <Card>
-              <BlockStack gap="300">
-                <Button tone="critical" onClick={() => setRequestModalOpen(true)}>
-                  Request Re-upload
-                </Button>
-                {reuploadUrl && (
-                  <BlockStack gap="200">
-                    <Text as="p" tone="subdued">Share this link with the customer to re-upload their file:</Text>
-                    <TextField
-                      label="Re-upload URL"
-                      labelHidden
-                      value={reuploadUrl}
-                      autoComplete="off"
-                      readOnly
-                      selectTextOnFocus
-                    />
-                  </BlockStack>
-                )}
-              </BlockStack>
-            </Card>
           </BlockStack>
         </Layout.Section>
 
@@ -334,27 +288,6 @@ export default function OrderJobDetailPage() {
           </Card>
         </Layout.Section>
       </Layout>
-
-      <Modal
-        open={requestModalOpen}
-        onClose={() => setRequestModalOpen(false)}
-        title="Request re-upload"
-        primaryAction={{
-          content: "Send request",
-          onAction: () => {
-            actionFetcher.submit({ intent: "request_reupload" }, { method: "post" });
-            setRequestModalOpen(false);
-          },
-          destructive: true,
-        }}
-        secondaryActions={[{ content: "Cancel", onAction: () => setRequestModalOpen(false) }]}
-      >
-        <Modal.Section>
-          <Text as="p">
-            This will update the job status and mark this order as waiting for a new upload.
-          </Text>
-        </Modal.Section>
-      </Modal>
     </Page>
   );
 }

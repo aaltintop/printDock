@@ -1,7 +1,7 @@
 import { data } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getPlan } from "../config/plans";
+import { canUseFeature, getPlan } from "../config/plans";
 import {
   createCollectionIdResolver,
   getActiveFieldForProduct,
@@ -38,6 +38,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       );
       const billingPlan = await getEffectiveBillingPlan(shopDomain);
       const planLimits = getPlan(billingPlan.planCode);
+      const planAllowsDynamicPricing = canUseFeature(billingPlan.planCode, "dynamicPricing");
 
       const planLimitsResponse = {
         maxFileSizeBytes: planLimits.maxFileSizeBytes,
@@ -77,7 +78,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
           maxFileMB: effectiveMaxMB,
           minFiles: field.minFiles,
           maxFiles: field.maxFiles,
-          pricing: field.pricing,
+          pricing: planAllowsDynamicPricing
+            ? field.pricing
+            : { ...field.pricing, enabled: false },
           dimensionRules: field.dimensionRules,
           planRequirement: field.planRequirement,
           fileRenamingPattern: field.fileRenamingPattern,

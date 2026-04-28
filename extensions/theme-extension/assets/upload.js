@@ -49,6 +49,7 @@
   let isBlocked = false;
   const boundForms = new WeakSet();
   let formObserver = null;
+  let pagehideCleanupBound = false;
 
   function clearStoredSession() {
     sessionToken = null;
@@ -94,6 +95,335 @@
     );
   }
 
+  const Preflight = (() => {
+    const MAX_PIXELS = 10000 * 10000;
+    const HEADER_READ_BYTES = 512 * 1024;
+
+    function bytesToString(bytes, start, end) {
+      let out = "";
+      for (let i = start; i < end && i < bytes.length; i += 1) {
+        out += String.fromCharCode(bytes[i]);
+      }
+      return out;
+    }
+
+    function readHead(file, maxBytes = HEADER_READ_BYTES) {
+      return file.slice(0, maxBytes).arrayBuffer().then((buf) => new Uint8Array(buf));
+    }
+
+    async function magicMime(file) {
+      const header = await readHead(file, 16);
+      if (
+        header.length >= 8 &&
+        header[0] === 0x89 &&
+        header[1] === 0x50 &&
+        header[2] === 0x4e &&
+        header[3] === 0x47 &&
+        header[4] === 0x0d &&
+        header[5] === 0x0a &&
+        header[6] === 0x1a &&
+        header[7] === 0x0a
+      ) {
+        return "image/png";
+      }
+      if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
+        return "image/jpeg";
+      }
+      if (
+        header.length >= 12 &&
+        bytesToString(header, 0, 4) === "RIFF" &&
+        bytesToString(header, 8, 12) === "WEBP"
+      ) {
+        return "image/webp";
+      }
+      if (header.length >= 6) {
+        const sig = bytesToString(header, 0, 6);
+        if (sig === "GIF87a" || sig === "GIF89a") return "image/gif";
+      }
+      if (
+        header.length >= 5 &&
+        header[0] === 0x25 &&
+        header[1] === 0x50 &&
+        header[2] === 0x44 &&
+        header[3] === 0x46 &&
+        header[4] === 0x2d
+      ) {
+        return "application/pdf";
+      }
+      return file.type || "application/octet-stream";
+    }
+
+    function parsePngDimensions(bytes) {
+      if (bytes.length < 24) return null;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return {
+        width: view.getUint32(16, false),
+        height: view.getUint32(20, false),
+      };
+    }
+
+    function parseJpegDimensions(bytes) {
+      if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+      let i = 2;
+      while (i + 9 < bytes.length) {
+        if (bytes[i] !== 0xff) {
+          i += 1;
+          continue;
+        }
+        while (i < bytes.length && bytes[i] === 0xff) i += 1;
+        if (i >= bytes.length) break;
+        const marker = bytes[i];
+        i += 1;
+        if (marker === 0xd8 || marker === 0xd9) continue;
+        if (i + 1 >= bytes.length) break;
+        const length = (bytes[i] << 8) | bytes[i + 1];
+        if (length < 2 || i + length > bytes.length) break;
+        if (
+          (marker >= 0xc0 && marker <= 0xc3) ||
+          (marker >= 0xc5 && marker <= 0xc7) ||
+          (marker >= 0xc9 && marker <= 0xcb) ||
+          (marker >= 0xcd && marker <= 0xcf)
+        ) {
+          if (length >= 7) {
+            return {
+              height: (bytes[i + 3] << 8) | bytes[i + 4],
+              width: (bytes[i + 5] << 8) | bytes[i + 6],
+            };
+          }
+        }
+        i += length;
+      }
+      return null;
+    }
+
+    function parsePngDpi(bytes) {
+      if (bytes.length < 40) return null;
+      let offset = 8;
+      while (offset + 12 <= bytes.length) {
+        const length =
+          ((bytes[offset] << 24) >>> 0) |
+          (bytes[offset + 1] << 16) |
+          (bytes[offset + 2] << 8) |
+          bytes[offset + 3];
+        const type = bytesToString(bytes, offset + 4, offset + 8);
+        const dataStart = offset + 8;
+        const next = dataStart + length + 4;
+        if (next > bytes.length) break;
+        if (type === "pHYs" && length >= 9) {
+          const view = new DataView(bytes.buffer, bytes.byteOffset + dataStart, length);
+          const xPpu = view.getUint32(0, false);
+          const yPpu = view.getUint32(4, false);
+          const unit = view.getUint8(8);
+          if (unit !== 1 || !xPpu || !yPpu) return null;
+          return Math.round(((xPpu + yPpu) / 2) * 0.0254);
+        }
+        offset = next;
+      }
+      return null;
+    }
+
+    function readRational(view, offset, littleEndian) {
+      if (offset + 8 > view.byteLength) return null;
+      const numerator = view.getUint32(offset, littleEndian);
+      const denominator = view.getUint32(offset + 4, littleEndian);
+      if (!denominator) return null;
+      return numerator / denominator;
+    }
+
+    function parseExifDpi(app1) {
+      if (app1.length < 14 || bytesToString(app1, 0, 6) !== "Exif\u0000\u0000") return null;
+      const tiffOffset = 6;
+      const view = new DataView(app1.buffer, app1.byteOffset + tiffOffset, app1.length - tiffOffset);
+      if (view.byteLength < 8) return null;
+
+      const byteOrder = String.fromCharCode(view.getUint8(0), view.getUint8(1));
+      const littleEndian = byteOrder === "II";
+      if (!littleEndian && byteOrder !== "MM") return null;
+      if (view.getUint16(2, littleEndian) !== 0x2a) return null;
+
+      const ifdOffset = view.getUint32(4, littleEndian);
+      if (ifdOffset + 2 > view.byteLength) return null;
+      const entryCount = view.getUint16(ifdOffset, littleEndian);
+      let xRes = null;
+      let yRes = null;
+      let unit = 2;
+
+      for (let idx = 0; idx < entryCount; idx += 1) {
+        const entryOffset = ifdOffset + 2 + idx * 12;
+        if (entryOffset + 12 > view.byteLength) break;
+        const tag = view.getUint16(entryOffset, littleEndian);
+        const valueOffset = view.getUint32(entryOffset + 8, littleEndian);
+        if (tag === 0x011a || tag === 0x011b) {
+          const val = readRational(view, valueOffset, littleEndian);
+          if (val) {
+            if (tag === 0x011a) xRes = val;
+            if (tag === 0x011b) yRes = val;
+          }
+        } else if (tag === 0x0128) {
+          unit = view.getUint16(entryOffset + 8, littleEndian);
+        }
+      }
+
+      const avg = xRes && yRes ? (xRes + yRes) / 2 : xRes || yRes;
+      if (!avg) return null;
+      if (unit === 3) return Math.round(avg * 2.54);
+      return Math.round(avg);
+    }
+
+    function parseJpegDpi(bytes) {
+      if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+      let i = 2;
+      while (i + 4 < bytes.length) {
+        if (bytes[i] !== 0xff) {
+          i += 1;
+          continue;
+        }
+        while (i < bytes.length && bytes[i] === 0xff) i += 1;
+        if (i >= bytes.length) break;
+        const marker = bytes[i];
+        i += 1;
+        if (i + 1 >= bytes.length) break;
+        const segmentLength = (bytes[i] << 8) | bytes[i + 1];
+        if (segmentLength < 2 || i + segmentLength > bytes.length) break;
+        const dataStart = i + 2;
+        const dataEnd = i + segmentLength;
+
+        if (marker === 0xe0 && segmentLength >= 16 && bytesToString(bytes, dataStart, dataStart + 5) === "JFIF\u0000") {
+          const unit = bytes[dataStart + 7];
+          const x = (bytes[dataStart + 8] << 8) | bytes[dataStart + 9];
+          const y = (bytes[dataStart + 10] << 8) | bytes[dataStart + 11];
+          const density = x && y ? (x + y) / 2 : x || y;
+          if (!density || unit === 0) return null;
+          if (unit === 2) return Math.round(density * 2.54);
+          return Math.round(density);
+        }
+
+        if (marker === 0xe1) {
+          const dpi = parseExifDpi(bytes.slice(dataStart, dataEnd));
+          if (dpi) return dpi;
+        }
+        i += segmentLength;
+      }
+      return null;
+    }
+
+    async function peekImageDimensions(file, mime) {
+      const bytes = await readHead(file, HEADER_READ_BYTES);
+      if (mime === "image/png") {
+        return parsePngDimensions(bytes);
+      }
+      if (mime === "image/jpeg") {
+        return parseJpegDimensions(bytes);
+      }
+      if (typeof createImageBitmap !== "function") return null;
+      try {
+        const bitmap = await createImageBitmap(file);
+        const dims = { width: bitmap.width, height: bitmap.height };
+        if (typeof bitmap.close === "function") bitmap.close();
+        return dims;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function violatesRule(actual, operator, expected) {
+      switch (operator) {
+        case "gt":
+          return !(actual > expected);
+        case "lt":
+          return !(actual < expected);
+        case "eq":
+          return !(actual === expected);
+        case "gte":
+          return !(actual >= expected);
+        case "lte":
+          return !(actual <= expected);
+        default:
+          return false;
+      }
+    }
+
+    function runRulesClient(metadata, rules) {
+      const results = [];
+      for (const rule of rules || []) {
+        const actual = metadata?.[rule.dimensionType] ?? null;
+        if (actual === null || actual === undefined) continue;
+        if (!violatesRule(actual, rule.operator, Number(rule.value))) continue;
+        results.push({
+          ruleId: rule.id || `${rule.dimensionType}_${rule.operator}_${rule.value}`,
+          severity: rule.action === "prevent" ? "blocking" : "warning",
+          message: rule.warningMessage || "File does not meet the configured rule.",
+          actual,
+          expected: Number(rule.value),
+        });
+      }
+      return results;
+    }
+
+    async function extractImageMetadataClient(file, mime) {
+      const fileSizeMB = Math.round((file.size / (1024 * 1024)) * 100) / 100;
+      const dims = await peekImageDimensions(file, mime);
+      const widthPx = dims?.width ?? null;
+      const heightPx = dims?.height ?? null;
+      const bytes = await readHead(file, HEADER_READ_BYTES);
+      const dpi =
+        mime === "image/png"
+          ? parsePngDpi(bytes)
+          : mime === "image/jpeg"
+            ? parseJpegDpi(bytes)
+            : null;
+
+      return {
+        widthPx,
+        heightPx,
+        dpi,
+        widthInch: dpi && widthPx ? widthPx / dpi : null,
+        heightInch: dpi && heightPx ? heightPx / dpi : null,
+        pageCount: null,
+        fileSizeMB,
+      };
+    }
+
+    async function preflightImage(file, config) {
+      const mime = await magicMime(file);
+      if (!mime.startsWith("image/")) return { skipped: true };
+
+      const dims = await peekImageDimensions(file, mime);
+      const px = Number(dims?.width || 0) * Number(dims?.height || 0);
+      if (px > MAX_PIXELS) {
+        return {
+          skipped: false,
+          metadata: null,
+          blocking: [
+            {
+              ruleId: "max_pixels",
+              severity: "blocking",
+              message: "Image resolution is too large for upload.",
+              actual: px,
+              expected: MAX_PIXELS,
+            },
+          ],
+          warning: [],
+        };
+      }
+
+      const metadata = await extractImageMetadataClient(file, mime);
+      const results = runRulesClient(metadata, config?.dimensionRules ?? []);
+      return {
+        skipped: false,
+        metadata,
+        blocking: results.filter((r) => r.severity === "blocking"),
+        warning: results.filter((r) => r.severity === "warning"),
+      };
+    }
+
+    return {
+      preflightImage,
+      magicMime,
+      runRulesClient,
+    };
+  })();
+
   // ─── INIT ────────────────────────────────────────────────────────────
   async function init() {
     await loadFieldConfig();
@@ -114,6 +444,7 @@
     setupCartAddFetchInterceptor();
     setupCartAddXHRInterceptor();
     setupProductQuantityListener();
+    setupPagehideCleanup();
     updateCartState();
   }
 
@@ -180,7 +511,23 @@
         showError(`File is too large. Max size is ${fieldConfig.maxFileMB}MB.`);
         continue;
       }
-      await uploadFile(selected);
+      let preflight = null;
+      try {
+        preflight = await Preflight.preflightImage(selected, fieldConfig);
+      } catch (err) {
+        console.warn("PrintDock preflight failed; falling back to server validation", err);
+      }
+
+      if (preflight && !preflight.skipped && preflight.blocking.length > 0) {
+        const msg = preflight.blocking
+          .map((result) => result.message)
+          .filter(Boolean)
+          .join(" - ");
+        showError(msg || "File does not meet upload requirements.");
+        continue;
+      }
+
+      await uploadFile(selected, preflight);
     }
     isUploading = false;
   }
@@ -204,7 +551,14 @@
     return uploadedFiles.length >= maxUploadSlots();
   }
 
-  async function uploadFile(file) {
+  async function uploadFile(file, preflight = null) {
+    const preflightWarnings = (preflight?.warning ?? []).map((entry) => ({
+      ruleId: entry.ruleId || "preflight_warning",
+      severity: "warning",
+      message: entry.message || "Potential file issue detected.",
+      actual: Number.isFinite(entry.actual) ? entry.actual : null,
+      expected: Number.isFinite(entry.expected) ? entry.expected : 0,
+    }));
     const fileEntry = {
       id: Math.random().toString(36).slice(2),
       name: file.name,
@@ -212,9 +566,9 @@
       previewUrl: file.type && file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
       status: "uploading",
       progress: 0,
-      metadata: null,
+      metadata: preflight?.metadata ?? null,
       pricing: null,
-      validationResults: [],
+      validationResults: preflightWarnings,
       blocked: false,
       quantity: defaultFileQuantity(),
       storagePath: null,
@@ -798,9 +1152,58 @@
     updateCartState();
   }
 
+  async function requestServerRemove(uploadSessionToken, storagePath, options) {
+    if (!uploadSessionToken || !storagePath) return;
+    const body = JSON.stringify({ sessionToken: uploadSessionToken, storagePath });
+    const keepalive = options?.keepalive !== false;
+    try {
+      await fetch(`${PROXY_URL}/api/proxy/upload/remove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive,
+      });
+    } catch (_error) {
+      // Best-effort cleanup. Orphan sweep remains safety net.
+    }
+  }
+
+  function requestServerRemoveWithBeacon(uploadSessionToken, storagePath) {
+    if (!uploadSessionToken || !storagePath) return false;
+    if (!navigator?.sendBeacon) return false;
+    try {
+      const body = JSON.stringify({
+        sessionToken: uploadSessionToken,
+        storagePath,
+      });
+      return navigator.sendBeacon(
+        `${PROXY_URL}/api/proxy/upload/remove`,
+        new Blob([body], { type: "application/json" }),
+      );
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function setupPagehideCleanup() {
+    if (pagehideCleanupBound) return;
+    pagehideCleanupBound = true;
+    window.addEventListener("pagehide", () => {
+      if (!sessionToken) return;
+      const inFlight = uploadedFiles.filter(
+        (entry) => entry.status === "uploading" && entry.storagePath,
+      );
+      for (const entry of inFlight) {
+        requestServerRemoveWithBeacon(sessionToken, entry.storagePath);
+      }
+    });
+  }
+
   function removeFile(fileId) {
     const target = uploadedFiles.find((entry) => entry.id === fileId);
     if (!target) return;
+    const removeSessionToken = sessionToken;
+    const removeStoragePath = target.storagePath;
     if (target.xhrUpload) {
       try {
         target.xhrUpload.abort();
@@ -810,6 +1213,10 @@
       target.xhrUpload = null;
     }
     if (target.previewUrl) URL.revokeObjectURL(target.previewUrl);
+
+    if (removeSessionToken && removeStoragePath) {
+      requestServerRemove(removeSessionToken, removeStoragePath, { keepalive: true });
+    }
 
     uploadedFiles = uploadedFiles.filter((entry) => entry.id !== fileId);
     if (uploadedFiles.length === 0) {

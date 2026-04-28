@@ -21,7 +21,6 @@ import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
-  getEffectiveBillingPlan,
   listOrderJobAuditEvents,
   listOrderJobs,
   saveOrderJob,
@@ -38,7 +37,6 @@ function getStatusLabel(status: string) {
   if (normalized === "pending_review") return "Pending review";
   if (normalized === "approved") return "Approved";
   if (normalized === "uploaded") return "Uploaded";
-  if (normalized === "reupload_requested") return "Re-upload requested";
   if (normalized === "reviewed") return "Reviewed";
   return normalized.replaceAll("_", " ");
 }
@@ -48,7 +46,6 @@ function getStatusTone(status: string) {
   if (normalized === "approved") return "success";
   if (normalized === "pending_review" || normalized === "reviewed") return "warning";
   if (normalized === "uploaded") return "attention";
-  if (normalized === "reupload_requested") return "critical";
   return "info";
 }
 
@@ -174,7 +171,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const quickStats = {
     pendingReview: allOrders.filter((order) => order.status === "pending_review").length,
     approved: allOrders.filter((order) => order.status === "approved").length,
-    reuploadRequested: allOrders.filter((order) => order.status === "reupload_requested").length,
   };
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
@@ -430,7 +426,6 @@ export default function Orders() {
           <InlineStack gap="400" align="space-between">
             <Text as="p">Pending review: {quickStats.pendingReview}</Text>
             <Text as="p">Approved: {quickStats.approved}</Text>
-            <Text as="p">Re-upload requested: {quickStats.reuploadRequested}</Text>
           </InlineStack>
         </Card>
 
@@ -447,9 +442,6 @@ export default function Orders() {
             </Text>
             <Text as="p" tone="subdued">
               Approved: file is accepted and ready for production.
-            </Text>
-            <Text as="p" tone="subdued">
-              Re-upload requested: customer must upload a corrected file.
             </Text>
             <Text as="p" tone="subdued">
               You can change status from quick action buttons in each row or from the order detail

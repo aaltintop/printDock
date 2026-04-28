@@ -67,7 +67,7 @@ All enforcement reads from [`app/config/plans.ts`](../app/config/plans.ts). Appr
 
 **Orders:** there is **no** per-month order cap in the app; all plans can process orders without a monthly upload/order counter.
 
-**Total storage:** the app sums **billable** bytes from upload session assets (skips expired / purged assets—see `getShopStorageUsageBytes` in [`app/services/shop-data.server.ts`](../app/services/shop-data.server.ts)). New uploads that would exceed `maxTotalStorageBytes` get **402** `storage_cap_exceeded` from [`app/routes/api.proxy.upload.session.tsx`](../app/routes/api.proxy.upload.session.tsx) and [`app/routes/api.proxy.upload.confirm.tsx`](../app/routes/api.proxy.upload.confirm.tsx).
+**Total storage:** the app maintains a running counter of **billable** bytes on the shop document (`shops/{shopDomain}.storageUsedBytes`) — see `getShopStorageUsageBytes` and `adjustShopStorageUsageBytes` in [`app/services/shop-data.server.ts`](../app/services/shop-data.server.ts). The counter is incremented on confirmed uploads and decremented on supersede/retention/orphan-sweep deletions. Legacy shops without the counter trigger a one-time recompute via `recomputeShopStorageUsageBytes`. New uploads that would exceed `maxTotalStorageBytes` get **402** `storage_cap_exceeded` from [`app/routes/api.proxy.upload.session.tsx`](../app/routes/api.proxy.upload.session.tsx) and [`app/routes/api.proxy.upload.confirm.tsx`](../app/routes/api.proxy.upload.confirm.tsx).
 
 **Feature flags** (`advancedValidation`, `fileRenaming`, `dynamicPricing`): see `PLANS` in code. Dynamic pricing is available on every plan; Free locks advanced validation and renaming; Starter unlocks validation + renaming.
 
