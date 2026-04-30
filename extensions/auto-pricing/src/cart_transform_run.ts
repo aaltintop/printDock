@@ -11,29 +11,39 @@ export function cartTransformRun(input: CartTransformRunInput): CartTransformRun
   const operations: CartTransformRunResult["operations"] = [];
 
   for (const line of input.cart.lines) {
-    const hasSession = Boolean(line.sessionAttribute?.value);
-    const dynamicFee = Number(line.priceAttribute?.value ?? "");
-    if (!hasSession || !Number.isFinite(dynamicFee) || dynamicFee <= 0) {
-      continue;
-    }
+    try {
+      const hasSession = Boolean(line.sessionAttribute?.value);
+      const dynamicFee = Number(line.priceAttribute?.value ?? "");
+      if (!hasSession || !Number.isFinite(dynamicFee) || dynamicFee <= 0) {
+        continue;
+      }
 
-    const baseUnitPrice = Number(line.cost.amountPerQuantity.amount ?? "");
-    const nextUnitPrice = baseUnitPrice + dynamicFee;
-    const rounded = Math.round(nextUnitPrice * 100) / 100;
-    if (!Number.isFinite(rounded) || rounded <= 0) continue;
+      const baseUnitPrice = Number(line.cost?.amountPerQuantity?.amount ?? "");
+      if (!Number.isFinite(baseUnitPrice) || baseUnitPrice < 0) {
+        continue;
+      }
 
-    operations.push({
-      lineUpdate: {
-        cartLineId: line.id,
-        price: {
-          adjustment: {
-            fixedPricePerUnit: {
-              amount: rounded.toFixed(2),
+      const nextUnitPrice = baseUnitPrice + dynamicFee;
+      const rounded = Math.round(nextUnitPrice * 100) / 100;
+      if (!Number.isFinite(rounded) || rounded <= 0) continue;
+
+      operations.push({
+        lineUpdate: {
+          cartLineId: line.id,
+          price: {
+            adjustment: {
+              fixedPricePerUnit: {
+                amount: rounded.toFixed(2),
+              },
             },
           },
         },
-      },
-    });
+      });
+    } catch {
+      // Defensive guard: invalid payload on one line should not fail
+      // the entire Shopify Function execution.
+      continue;
+    }
   }
 
   if (operations.length === 0) {
