@@ -5,6 +5,16 @@ A reusable, project-agnostic blueprint for building production-grade Shopify app
 
 This document is everything an AI agent needs to bootstrap a new Shopify app end-to-end. The **only** missing input is a filled-in [Project Spec Template](#14-project-spec-template) describing **what** the app should do. All technical and infra parameters are resolved automatically by the [Bootstrap Resolution Protocol](#15-bootstrap-resolution-protocol).
 
+## Split-document index (recommended)
+
+For context-efficient execution, prefer this split set:
+
+- `BLUEPRINT_EXECUTION.md` — process control and run-order
+- `BLUEPRINT_CORE.md` — architecture and implementation defaults
+- `BLUEPRINT_REFERENCE.md` — pitfalls, review risk, and glossary
+
+Use this file (`SHOPIFY_APP_BLUEPRINT.md`) as the canonical long-form source when deep detail is needed.
+
 ---
 
 ## Table of contents
@@ -25,7 +35,8 @@ This document is everything an AI agent needs to bootstrap a new Shopify app end
 - [13. AI Implementation Workflow](#13-ai-implementation-workflow)
 - [14. Project Spec Template](#14-project-spec-template)
 - [15. Bootstrap Resolution Protocol](#15-bootstrap-resolution-protocol)
-- [16. Glossary & References](#16-glossary--references)
+- [16. Pitfalls & Lessons from PrintDock](#16-pitfalls--lessons-from-printdock)
+- [17. Glossary & References](#17-glossary--references)
 
 ---
 
@@ -38,6 +49,14 @@ This blueprint requires **one human input** per new app:
 1. A filled-in **[Project Spec Template](#14-project-spec-template)** — pure WHAT (business). Filled by the founder/PM.
 
 Everything else (technical params, infra IDs, secrets, scope list, plan codes, webhook subscriptions) is resolved by the AI through the [Bootstrap Resolution Protocol](#15-bootstrap-resolution-protocol): CLI auto-detection first, then propose-and-confirm with alternatives, finally direct ask only when no signal exists. Resolved values are snapshot to a gitignored `BOOTSTRAP_INPUTS.local.md` for reproducibility.
+
+### AI read order (context-efficient)
+
+This blueprint includes both **execution instructions** and **reference material**.
+
+- **Read first (required, in order):** Sections **0 → 14 → 13 → 15**
+- **Read on demand (reference):** Sections **1–12, 16, 17**
+- **Rule:** do not read every section linearly before starting implementation; read only what the current workflow step needs.
 
 ### Workflow
 
@@ -63,7 +82,7 @@ flowchart LR
 
 ## 1. Tech Stack & Why
 
-These are **fixed defaults**. Choose alternatives only if the project spec explicitly demands it. For decision areas where alternatives are documented, see [Section 9](#9-decision-areas-with-alternatives).
+These are **house-stack defaults** validated in shipped apps on this template. They are defaults for consistency and speed, not universal truths for every Shopify app. Choose alternatives when the spec requires it (for example: relational-heavy analytics, multi-service architecture, or strict regional/compliance constraints). For decision areas where alternatives are documented, see [Section 9](#9-decision-areas-with-alternatives).
 
 | Layer | Choice | Why |
 |---|---|---|
@@ -872,7 +891,7 @@ flowchart TD
 
 Detailed recipes in [Section 10](#10-extension-detailed-recipes).
 
-**Reference-only** (linked in [Section 16](#16-glossary--references)): Delivery Customization, Payment Customization, POS UI, Customer Account UI, Flow Action/Trigger, Post-purchase, Order Routing Location Rule, Fulfillment Constraints, Cart and Checkout Validation, Pickup Point Delivery Option Generator, Local Pickup Delivery Option Generator.
+**Reference-only** (linked in [Section 17](#17-glossary--references)): Delivery Customization, Payment Customization, POS UI, Customer Account UI, Flow Action/Trigger, Post-purchase, Order Routing Location Rule, Fulfillment Constraints, Cart and Checkout Validation, Pickup Point Delivery Option Generator, Local Pickup Delivery Option Generator.
 
 ### 9.3 Data model home
 
@@ -1238,7 +1257,7 @@ register(({ analytics, browser, settings }) => {
 
 ### 10.7 Reference-only extension surfaces
 
-These are scaffold-able with `shopify app generate extension --type=function|ui_extension` but not detailed here. See [Section 16](#16-glossary--references) for links.
+These are scaffold-able with `shopify app generate extension --type=function|ui_extension` but not detailed here. See [Section 17](#17-glossary--references) for links.
 
 - Delivery Customization (function) — reorder, rename, hide shipping methods at checkout
 - Payment Customization (function) — reorder, rename, hide payment methods
@@ -1306,6 +1325,9 @@ Pre-submission verification. The AI runs through this and reports green/red.
 
 - [ ] All three GDPR webhooks (`customers/data_request`, `customers/redact`, `shop/redact`) deployed and respond 200 to test pings.
 - [ ] `app/uninstalled` webhook purges shop data (Firestore + Storage) and confirms deletion in logs.
+- [ ] Protected Customer Data (PCD) tier is explicitly chosen and documented:
+  - [ ] **Level 1 only** (business contact / store operations data), OR
+  - [ ] **Level 2 requested** with required justification, controls, and review artifacts.
 - [ ] Privacy Policy URL — public, mentions: data collected, retention, third-party processors (Firebase, Cloud Run, etc.).
 - [ ] Terms of Service URL — public.
 - [ ] Cookie / data processing addendum if EU customer data is handled.
@@ -1332,7 +1354,24 @@ Pre-submission verification. The AI runs through this and reports green/red.
 - [ ] Webhooks return 200 within 5 seconds (heavy work queued).
 - [ ] App handles 401 from expired tokens gracefully (offline tokens auto-refresh via the future flag).
 
-### 12.5 App Store listing assets
+### 12.5 Testing strategy (required before submission)
+
+- [ ] **Unit tests** for pure domain logic (`app/services`, validation schemas, plan limit checks).
+- [ ] **Integration tests** for webhooks (valid HMAC + invalid HMAC + idempotent replay + failure path).
+- [ ] **Route tests** for key loaders/actions (`/app`, `/app/onboarding`, `/app/plans`, critical `api.proxy.*` endpoints).
+- [ ] **Shopify API mocking approach** is documented (`shopify.clients.Graphql` wrapper + fixture responses), with at least one failure-case assertion per critical flow.
+- [ ] **Dev-store smoke script** is documented and repeatable: install app, complete onboarding, trigger required webhooks, verify plan flow, verify uninstall cleanup.
+- [ ] CI gate includes `npm run typecheck`, `npm run lint`, and test command (`npm run test`).
+
+### 12.6 Observability & alerting
+
+- [ ] Structured logs include `requestId`, shop domain, route name, and error class.
+- [ ] Error tracking configured (Sentry or equivalent) for server + client surfaces.
+- [ ] Uptime check on production app URL with alert destination (email/Slack/PagerDuty).
+- [ ] Alert policy exists for webhook 5xx spikes and elevated latency.
+- [ ] A short runbook exists for top three incidents (auth failure, webhook failures, billing mismatch).
+
+### 12.7 App Store listing assets
 
 - [ ] App name + 30-word tagline (consistent with `shopify.app.toml` `name`).
 - [ ] App icon (1200×1200 PNG, transparent or white background).
@@ -1345,7 +1384,7 @@ Pre-submission verification. The AI runs through this and reports green/red.
 - [ ] Support email + URL.
 - [ ] Test instructions for Shopify reviewer (test store, login, sample data, expected behavior).
 
-### 12.6 Common automated review failures to avoid
+### 12.8 Common automated review failures to avoid
 
 - Calling Admin API with offline token before installation completes
 - Missing `app/scopes_update` handler (any scope change fails)
@@ -1387,7 +1426,7 @@ flowchart TB
 | Spec section | Drives |
 |---|---|
 | 14.1 App identity | `APP_NAME` → `shopify.app.toml.name`, slug → service name & app proxy subpath |
-| 14.2 Target merchant | App Store listing (Section 12.5), tone of UI copy |
+| 14.2 Target merchant | App Store listing (Section 12.7), tone of UI copy |
 | 14.3 Problem & solution | App Store description, README |
 | 14.4 Merchant user stories | Admin routes (`app/routes/app.*.tsx`), services |
 | 14.5 Customer/storefront stories | Theme extension blocks, app proxy endpoints, checkout UI |
@@ -1399,6 +1438,10 @@ flowchart TB
 | 14.11 Brand/design | Polaris theming where supported, theme extension CSS vars |
 | 14.12 Integrations | `.env` keys, Secret Manager secrets, separate service modules |
 | 14.13 Out of scope | Document in README; don't scaffold |
+| 14.14 Scale & reliability targets | Cloud Run sizing/min instances, timeout, queue needs |
+| 14.15 Data sensitivity & compliance | PCD level path, retention/deletion controls, legal docs |
+| 14.16 Support/SLA expectations | Incident response targets, support workflows |
+| 14.17 App Store listing inputs | Listing copy + screenshots/video requirements |
 
 ### Loop control
 
@@ -1514,6 +1557,36 @@ Check the surfaces this app needs (each maps to a recipe in [Section 10](#10-ext
 
 - Will NOT ...
 - Will NOT ...
+
+### 14.14 Scale & reliability expectations
+
+- **Expected merchant count in first 12 months**: <!-- rough range -->
+- **Peak daily events** (orders/webhooks/uploads): <!-- rough range -->
+- **Latency sensitivity**: <!-- e.g. "must respond under 2s in admin", "overnight batch is fine" -->
+- **Downtime tolerance**: <!-- e.g. "can tolerate 30m/month" -->
+- **Cost sensitivity vs performance priority**: <!-- one sentence -->
+
+### 14.15 Data sensitivity & compliance
+
+- **Does the app need customer PII?** yes / no
+- **If yes, what categories?** <!-- email, phone, address, order history, etc. -->
+- **Target Protected Customer Data tier**: Level 1 / Level 2 / unknown
+- **Data retention policy expectations**: <!-- e.g. delete within X days after uninstall -->
+- **Jurisdiction/compliance requirements**: <!-- GDPR, CCPA, SOC2, HIPAA-like internal rules -->
+
+### 14.16 Support & SLA expectations
+
+- **Support channels**: <!-- email/chat/help center -->
+- **Target first-response time**: <!-- e.g. within 24h on business days -->
+- **Severity levels expected**: <!-- P1/P2/P3 definitions in plain language -->
+- **Escalation expectations**: <!-- who gets paged / informed for incidents -->
+
+### 14.17 App Store listing inputs (business copy)
+
+- **Listing headline** (short): <!-- app card copy -->
+- **Top 3 merchant benefits**: <!-- bullets -->
+- **Proof points**: <!-- metrics, testimonials, or "none yet" -->
+- **Required screenshots/video narrative**: <!-- what each asset should show -->
 
 ---
 
@@ -1645,7 +1718,51 @@ The AI also writes the deploy-relevant subset to `.cloudrun.env` (kept in sync w
 
 ---
 
-## 16. Glossary & References
+## 16. Pitfalls & Lessons from PrintDock
+
+Battle-tested lessons that prevent expensive rework. Treat this as a pre-flight checklist before first production deploy.
+
+### 16.1 Reliability and webhook handling
+
+- Shopify webhook timeout is strict; design handlers to acknowledge fast and offload heavy work.
+- Set production Cloud Run `min-instances=1` unless the spec explicitly prioritizes lowest cost over responsiveness.
+- Build webhook handlers to be idempotent (`event id` / natural id keys) because retries happen.
+- Never let one malformed payload crash the process; isolate per-item work with defensive guards.
+
+### 16.2 Compliance and review strategy
+
+- Decide Protected Customer Data tier early. This can dominate App Store review timeline more than feature completeness.
+- Stay at Level 1 unless Level 2 data is truly required by the product promise.
+- Capture data collection intent in `PROJECT_SPEC.md` before scaffolding routes and storage.
+- Keep uninstall + redact deletion paths demonstrably working; reviewers and merchants both test these hard.
+
+### 16.3 Pricing and packaging
+
+- File-size / usage-volume caps are often easier for merchants to understand than feature matrix complexity.
+- Keep a free tier practically useful; "empty free plan" increases churn and review friction.
+- Align in-app plan labels with Managed Pricing labels exactly to avoid support/billing confusion.
+
+### 16.4 Embedded admin UX constraints
+
+- Embedded apps run in an iframe under `admin.shopify.com`; browser cross-origin rules are non-negotiable.
+- Do not rely on parent-frame DOM access or brittle window assumptions.
+- Use App Bridge primitives for modal/navigation/toast behaviors rather than custom frame hacks.
+
+### 16.5 Theme and extension rollout gotchas
+
+- Multi-template storefronts require explicit install/placement instructions (or onboarding checks) per template context.
+- Theme app extension assets should degrade gracefully when required product/cart context is missing.
+- Extension configuration drift is common; onboarding should detect and report activation state, not just "show docs".
+
+### 16.6 Operational discipline
+
+- Keep a short smoke-test script for dev-store verification after every deployment.
+- Preserve a per-environment bootstrap snapshot (`BOOTSTRAP_INPUTS.local.md`) for reproducible recovery.
+- Document top incident playbooks early; "we'll write runbooks later" usually means never.
+
+---
+
+## 17. Glossary & References
 
 ### Glossary
 
