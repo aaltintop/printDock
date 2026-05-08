@@ -1,0 +1,19 @@
+query CartTransformRunInput {
+  cart {
+    lines {
+      id
+      quantity
+      cost {
+        amountPerQuantity {
+          amount
+        }
+      }
+      priceAttribute: attribute(key: "_pd_calculated_price") {
+        value
+      }
+      sessionAttribute: attribute(key: "_uc_session") {
+        value
+      }
+    }
+  }
+}

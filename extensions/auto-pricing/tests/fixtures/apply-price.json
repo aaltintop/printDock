@@ -1,0 +1,43 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 2,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "9.99"
+              }
+            },
+            "priceAttribute": {
+              "value": "12.00"
+            },
+            "sessionAttribute": {
+              "value": "session_123"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "lineUpdate": {
+            "cartLineId": "gid://shopify/CartLine/1",
+            "price": {
+              "adjustment": {
+                "fixedPricePerUnit": {
+                  "amount": "21.99"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

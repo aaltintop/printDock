@@ -1,0 +1,206 @@
+<div
+  id="printdock-upload-root"
+  data-product-id="{{ product.id }}"
+  data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+  data-variant-price="{{ product.selected_or_first_available_variant.price | default: 0 | divided_by: 100.0 }}"
+  data-required="{{ block.settings.required }}"
+  data-shop-domain="{{ shop.permanent_domain }}"
+  data-app-handle="printdock"
+  data-density="{{ block.settings.density | default: 'regular' }}"
+  data-drop-headline="{{ block.settings.drop_headline | default: 'Drop your artwork here' | escape }}"
+  data-choose-label="{{ block.settings.choose_label | default: 'Choose file' | escape }}"
+  data-checking-label="{{ block.settings.checking_label | default: 'Checking file...' | escape }}"
+  data-price-label="{{ block.settings.price_label | default: 'Calculated upload price:' | escape }}"
+>
+  <div class="printdock-loading">Loading PrintDock…</div>
+</div>
+
+<link rel="stylesheet" href="{{ 'upload.css' | asset_url }}">
+
+<style>
+  #printdock-upload-root .printdock-upload {
+    --pd-primary:            {{ block.settings.primary_color             | default: '#111111' }};
+    --pd-primary-on:         {{ block.settings.primary_on_color          | default: '#ffffff' }};
+    --pd-success:            {{ block.settings.success_color             | default: '#1f8b5c' }};
+    --pd-success-strong:     {{ block.settings.success_strong_color      | default: '#0d8246' }};
+    --pd-danger:             {{ block.settings.danger_color              | default: '#d82c0d' }};
+    --pd-warning:            {{ block.settings.warning_color             | default: '#ffc453' }};
+    --pd-surface:            {{ block.settings.surface_color             | default: '#ffffff' }};
+    --pd-surface-subdued:    {{ block.settings.surface_subdued_color     | default: '#f4f6f8' }};
+    --pd-border:             {{ block.settings.border_color              | default: '#e3e5e7' }};
+    --pd-border-strong:      {{ block.settings.border_strong_color       | default: '#c9cccf' }};
+    --pd-text:               {{ block.settings.text_color                | default: '#202223' }};
+    --pd-text-subdued:       {{ block.settings.text_subdued_color        | default: '#6d7175' }};
+    --pd-radius:             {{ block.settings.radius                    | default: 8 }}px;
+    font-size:               {{ block.settings.font_size_pct             | default: 100 }}%;
+  }
+
+  {% if block.settings.custom_css != blank %}
+    /* Merchant-authored custom CSS */
+    {{ block.settings.custom_css }}
+  {% endif %}
+</style>
+
+<script src="{{ 'upload.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "PrintDock Upload",
+  "target": "section",
+  "settings": [
+    { "type": "header", "content": "Behavior" },
+    {
+      "type": "checkbox",
+      "id": "required",
+      "label": "Require upload before add to cart",
+      "default": true
+    },
+
+    { "type": "header", "content": "Colors" },
+    {
+      "type": "color",
+      "id": "primary_color",
+      "label": "Primary",
+      "info": "Buttons, dropzone hover accent.",
+      "default": "#111111"
+    },
+    {
+      "type": "color",
+      "id": "primary_on_color",
+      "label": "On primary",
+      "info": "Text/icon color drawn on top of primary.",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "success_color",
+      "label": "Success",
+      "info": "Progress bar start color.",
+      "default": "#1f8b5c"
+    },
+    {
+      "type": "color",
+      "id": "success_strong_color",
+      "label": "Success (strong)",
+      "info": "Progress bar end color and success status text.",
+      "default": "#0d8246"
+    },
+    {
+      "type": "color",
+      "id": "danger_color",
+      "label": "Danger",
+      "info": "Errors and the remove X icon.",
+      "default": "#d82c0d"
+    },
+    {
+      "type": "color",
+      "id": "warning_color",
+      "label": "Warning",
+      "default": "#ffc453"
+    },
+    {
+      "type": "color",
+      "id": "surface_color",
+      "label": "Card background",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "surface_subdued_color",
+      "label": "Dropzone & price background",
+      "default": "#f4f6f8"
+    },
+    {
+      "type": "color",
+      "id": "border_color",
+      "label": "Card border",
+      "default": "#e3e5e7"
+    },
+    {
+      "type": "color",
+      "id": "border_strong_color",
+      "label": "Dropzone border",
+      "default": "#c9cccf"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text",
+      "default": "#202223"
+    },
+    {
+      "type": "color",
+      "id": "text_subdued_color",
+      "label": "Text (subdued)",
+      "default": "#6d7175"
+    },
+
+    { "type": "header", "content": "Layout" },
+    {
+      "type": "range",
+      "id": "radius",
+      "label": "Corner radius",
+      "min": 0,
+      "max": 24,
+      "step": 2,
+      "unit": "px",
+      "default": 8
+    },
+    {
+      "type": "range",
+      "id": "font_size_pct",
+      "label": "Text size",
+      "min": 85,
+      "max": 120,
+      "step": 5,
+      "unit": "%",
+      "default": 100
+    },
+    {
+      "type": "select",
+      "id": "density",
+      "label": "Density",
+      "options": [
+        { "value": "compact", "label": "Compact" },
+        { "value": "regular", "label": "Regular" },
+        { "value": "roomy",   "label": "Roomy" }
+      ],
+      "default": "regular"
+    },
+
+    { "type": "header", "content": "Text" },
+    {
+      "type": "text",
+      "id": "drop_headline",
+      "label": "Dropzone headline",
+      "default": "Drop your artwork here"
+    },
+    {
+      "type": "text",
+      "id": "choose_label",
+      "label": "Choose button label",
+      "default": "Choose file"
+    },
+    {
+      "type": "text",
+      "id": "checking_label",
+      "label": "Validating label",
+      "default": "Checking file..."
+    },
+    {
+      "type": "text",
+      "id": "price_label",
+      "label": "Calculated price label",
+      "default": "Calculated upload price:"
+    },
+
+    { "type": "header", "content": "Advanced" },
+    {
+      "type": "textarea",
+      "id": "custom_css",
+      "label": "Custom CSS",
+      "info": "Advanced: CSS added to this block. Use to override widget styles. Example:\n.printdock-upload { --pd-radius: 16px; }"
+    }
+  ]
+}
+{% endschema %}

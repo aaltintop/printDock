@@ -1,0 +1,251 @@
+/* PrintDock upload widget — all theming-relevant values are exposed as CSS
+   custom properties on `.printdock-upload` so merchants can override them
+   via theme-editor block settings, a Custom CSS textarea, or their own
+   theme CSS (e.g. `.printdock-upload { --pd-primary: #abc; }`). */
+
+.printdock-upload {
+  --pd-radius: 8px;
+  --pd-primary: #111111;
+  --pd-primary-on: #ffffff;
+  --pd-success: #22c55e;
+  --pd-success-strong: #16a34a;
+  --pd-danger: #d82c0d;
+  --pd-warning: #ffc453;
+  --pd-surface: #ffffff;
+  --pd-surface-subdued: #f4f6f8;
+  --pd-border: #e3e5e7;
+  --pd-border-strong: #c9cccf;
+  --pd-text: #202223;
+  --pd-text-subdued: #6d7175;
+  --pd-progress-track: #eef1f3;
+
+  --pd-gap: 1rem;
+  --pd-card-padding-y: 0.75rem;
+  --pd-card-padding-x: 0.75rem;
+  --pd-dropzone-padding: 2rem;
+
+  font-family: inherit;
+  font-size: 100%;
+  color: var(--pd-text);
+  margin: 1.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-gap);
+}
+
+#printdock-upload-root[data-density="compact"] .printdock-upload {
+  --pd-gap: 0.6rem;
+  --pd-card-padding-y: 0.5rem;
+  --pd-dropzone-padding: 1.25rem;
+}
+
+#printdock-upload-root[data-density="roomy"] .printdock-upload {
+  --pd-gap: 1.4rem;
+  --pd-card-padding-y: 1rem;
+  --pd-dropzone-padding: 2.75rem;
+}
+
+.printdock-dropzone {
+  border: 2px dashed var(--pd-border-strong);
+  border-radius: var(--pd-radius);
+  padding: var(--pd-dropzone-padding);
+  text-align: center;
+  background-color: var(--pd-surface-subdued);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.printdock-dropzone:hover,
+.printdock-dragover {
+  border-color: var(--pd-primary);
+  background-color: color-mix(in srgb, var(--pd-primary) 6%, var(--pd-surface-subdued));
+}
+
+.printdock-dropzone-disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.printdock-dropzone-disabled:hover {
+  border-color: var(--pd-border-strong);
+  background-color: var(--pd-surface-subdued);
+}
+
+.printdock-drop-title {
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+  color: var(--pd-text);
+}
+
+.printdock-drop-sub {
+  font-size: 0.875em;
+  color: var(--pd-text-subdued);
+  margin-bottom: 1rem;
+}
+
+.printdock-choose-btn {
+  background-color: var(--pd-primary);
+  color: var(--pd-primary-on);
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: calc(var(--pd-radius) / 2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.printdock-choose-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.printdock-file-card {
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius);
+  padding: var(--pd-card-padding-y) 2.5rem var(--pd-card-padding-y) var(--pd-card-padding-x);
+  background: var(--pd-surface);
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 0.75rem;
+  position: relative;
+}
+
+.printdock-file-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: calc(var(--pd-radius) * 0.75);
+  background: var(--pd-surface-subdued);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--pd-text-subdued);
+}
+
+.printdock-file-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.printdock-file-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.printdock-file-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--pd-text);
+}
+
+.printdock-file-props {
+  font-size: 0.95em;
+  color: var(--pd-text);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+}
+
+.printdock-file-props .sep {
+  color: var(--pd-text-subdued);
+}
+
+.printdock-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.printdock-progress-bar {
+  height: 12px;
+  --pd-progress: 0%;
+  background: linear-gradient(
+    90deg,
+    #22c55e 0 var(--pd-progress),
+    #dfe6eb var(--pd-progress) 100%
+  );
+  border-radius: 999px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.printdock-status {
+  font-size: 0.875em;
+  color: var(--pd-text-subdued);
+  font-weight: 500;
+}
+
+.printdock-status-ok {
+  color: var(--pd-success-strong);
+}
+
+.printdock-error {
+  color: var(--pd-danger);
+  font-size: 0.875em;
+  margin-top: 0.5rem;
+}
+
+.printdock-warning {
+  color: var(--pd-warning);
+  font-size: 0.875em;
+}
+
+.printdock-remove-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--pd-danger);
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.printdock-remove-btn:hover {
+  background: color-mix(in srgb, var(--pd-danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--pd-danger) 30%, transparent);
+}
+
+.printdock-remove-btn:focus-visible {
+  outline: 2px solid var(--pd-danger);
+  outline-offset: 2px;
+}
+
+.printdock-price-display {
+  background: var(--pd-surface-subdued);
+  padding: 1rem;
+  border-radius: var(--pd-radius);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.printdock-price-label {
+  font-size: 0.875em;
+  color: var(--pd-text-subdued);
+}
+
+.printdock-price-amount {
+  font-size: 1.25em;
+  font-weight: bold;
+  color: var(--pd-text);
+}
+
+.printdock-price-explanation {
+  font-size: 0.875em;
+  color: var(--pd-text-subdued);
+}
