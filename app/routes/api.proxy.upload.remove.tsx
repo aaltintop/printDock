@@ -12,6 +12,7 @@ import {
   updateUploadSession,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { internalError, publicError } from "../lib/api-error.server";
 
 const schema = z.object({
   sessionToken: z.string().min(1),
@@ -28,7 +29,7 @@ export async function action({ request }: ActionFunctionArgs) {
     try {
       const { session } = await authenticate.public.appProxy(request);
       if (!session) {
-        return data({ error: "Unauthorized" }, { status: 401 });
+        return publicError("unauthorized", { status: 401 });
       }
 
       const shopDomain = session.shop;
@@ -36,20 +37,17 @@ export async function action({ request }: ActionFunctionArgs) {
 
       const parsed = schema.safeParse(await request.json());
       if (!parsed.success) {
-        return data({ error: "Invalid input" }, { status: 400 });
+        return publicError("bad_request", { status: 400 });
       }
 
       const { sessionToken, storagePath } = parsed.data;
       if (!isSafeSessionStoragePath(storagePath, shopDomain, sessionToken)) {
-        return data({ error: "Invalid storage path" }, { status: 403 });
+        return publicError("forbidden", { status: 403 });
       }
 
       const sessionData = await getUploadSession(shopDomain, sessionToken);
       if (sessionData?.status === "converted") {
-        return data(
-          { error: "Upload already converted to order; file cannot be removed" },
-          { status: 409 },
-        );
+        return publicError("already_ordered", { status: 409 });
       }
 
       await deleteFile(storagePath);
@@ -122,8 +120,7 @@ export async function action({ request }: ActionFunctionArgs) {
       });
       return data({ deleted: true, sessionDeleted: false });
     } catch (err) {
-      log.error("upload_remove_failed", err, {});
-      return data({ error: "Upload removal failed" }, { status: 500 });
+      return internalError("upload_remove_failed", err);
     }
   });
 }

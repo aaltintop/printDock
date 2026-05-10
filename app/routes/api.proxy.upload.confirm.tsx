@@ -1,4 +1,3 @@
-import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { z } from "zod";
 import {
@@ -10,8 +9,10 @@ import {
 } from "../config/plans";
 import { createPrintReadyFileToken } from "../services/file-download-token.server";
 import { deleteFile, getFileBuffer } from "../services/storage.server";
-import { extractMetadata, runValidationRules, hasBlockingError } from "../services/validation.server";
+import { extractMetadata, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
+import { buildDimensionRuleMessages } from "../services/dimension-rule-message";
+import type { DimensionRuleInput } from "../services/dimension-rule-message";
 import { authenticate } from "../shopify.server";
 import {
   adjustShopStorageUsageBytes,
@@ -26,128 +27,14 @@ import {
   updateUploadSession,
 } from "../services/shop-data.server";
 import type { UploadAsset } from "../types/printdock";
-import type { ValidationResult, ValidationRule } from "../services/validation.server";
+import type { ValidationResult } from "../services/validation.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { internalError, publicError } from "../lib/api-error.server";
+import { data } from "react-router";
 
 function isSafeSessionStoragePath(path: string, shopDomain: string): boolean {
   const prefix = `uploads/${shopDomain}/`;
   return path.startsWith(prefix) && !path.includes("..");
-}
-
-type SupportedDimensionType = "widthInch" | "heightInch" | "dpi";
-type DimensionRuleMeta = {
-  groupId: string;
-  dimensionType: SupportedDimensionType;
-  operator: "gt" | "lt" | "eq" | "gte" | "lte";
-  value: number;
-};
-
-function isSupportedDimensionType(value: string): value is SupportedDimensionType {
-  return value === "widthInch" || value === "heightInch" || value === "dpi";
-}
-
-function formatDimensionValue(dimensionType: SupportedDimensionType, value: number): string {
-  if (dimensionType === "dpi") return String(Math.round(value));
-  return value.toFixed(2);
-}
-
-function dimensionDisplayName(dimensionType: SupportedDimensionType): string {
-  if (dimensionType === "widthInch") return "Width";
-  if (dimensionType === "heightInch") return "Height";
-  return "DPI";
-}
-
-function dimensionUnit(dimensionType: SupportedDimensionType): string {
-  return dimensionType === "dpi" ? "DPI" : "in";
-}
-
-function consolidateDimensionRuleResults(
-  results: ValidationResult[],
-  metaByRuleId: Map<string, DimensionRuleMeta>,
-): ValidationResult[] {
-  const passthrough: ValidationResult[] = [];
-  const grouped = new Map<string, ValidationResult[]>();
-
-  for (const result of results) {
-    const meta = metaByRuleId.get(result.ruleId);
-    if (!meta || result.severity !== "blocking") {
-      passthrough.push(result);
-      continue;
-    }
-
-    const key = `${meta.dimensionType}:${meta.groupId}`;
-    const existing = grouped.get(key) ?? [];
-    existing.push(result);
-    grouped.set(key, existing);
-  }
-
-  for (const [key, groupResults] of grouped) {
-    const firstMeta = metaByRuleId.get(groupResults[0]!.ruleId);
-    if (!firstMeta) {
-      passthrough.push(...groupResults);
-      continue;
-    }
-
-    const dimensionType = firstMeta.dimensionType;
-    const metas = groupResults
-      .map((result) => metaByRuleId.get(result.ruleId))
-      .filter((meta): meta is DimensionRuleMeta => Boolean(meta));
-
-    const lowerBoundCandidates = metas
-      .filter((meta) => meta.operator === "gte" || meta.operator === "gt")
-      .map((meta) => meta.value);
-    const upperBoundCandidates = metas
-      .filter((meta) => meta.operator === "lte" || meta.operator === "lt")
-      .map((meta) => meta.value);
-    const eqCandidate = metas.find((meta) => meta.operator === "eq")?.value ?? null;
-    const lowerBound = lowerBoundCandidates.length > 0 ? Math.max(...lowerBoundCandidates) : null;
-    const upperBound = upperBoundCandidates.length > 0 ? Math.min(...upperBoundCandidates) : null;
-    const actual =
-      groupResults.find((result) => typeof result.actual === "number")?.actual ?? groupResults[0]?.actual ?? null;
-
-    if (actual === null) {
-      passthrough.push(...groupResults);
-      continue;
-    }
-
-    const label = dimensionDisplayName(dimensionType);
-    const unit = dimensionUnit(dimensionType);
-    const actualValue = formatDimensionValue(dimensionType, actual);
-    let message = `${label} does not meet the configured rule.`;
-    let expected = groupResults[0]?.expected ?? 0;
-
-    if (eqCandidate !== null) {
-      message = `${label} must be exactly ${formatDimensionValue(dimensionType, eqCandidate)} ${unit}. Your file is ${actualValue} ${unit}.`;
-      expected = eqCandidate;
-    } else if (lowerBound !== null && upperBound !== null) {
-      if (lowerBound === upperBound) {
-        message = `${label} must be exactly ${formatDimensionValue(dimensionType, lowerBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
-        expected = lowerBound;
-      } else {
-        message = `${label} must be between ${formatDimensionValue(dimensionType, lowerBound)} ${unit} and ${formatDimensionValue(dimensionType, upperBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
-        expected = lowerBound;
-      }
-    } else if (lowerBound !== null) {
-      message = `${label} must be at least ${formatDimensionValue(dimensionType, lowerBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
-      expected = lowerBound;
-    } else if (upperBound !== null) {
-      message = `${label} must be at most ${formatDimensionValue(dimensionType, upperBound)} ${unit}. Your file is ${actualValue} ${unit}.`;
-      expected = upperBound;
-    } else {
-      passthrough.push(...groupResults);
-      continue;
-    }
-
-    passthrough.push({
-      ruleId: key,
-      severity: "blocking",
-      message,
-      actual,
-      expected,
-    });
-  }
-
-  return passthrough;
 }
 
 const schema = z.object({
@@ -164,7 +51,7 @@ export async function action({ request }: ActionFunctionArgs) {
     try {
       const { session } = await authenticate.public.appProxy(request);
       if (!session) {
-        return data({ error: "Unauthorized" }, { status: 401 });
+        return publicError("unauthorized", { status: 401 });
       }
 
       const shopDomain = session.shop;
@@ -172,7 +59,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
       const body = await request.json();
       const parsed = schema.safeParse(body);
-      if (!parsed.success) return data({ error: "Invalid input" }, { status: 400 });
+      if (!parsed.success) return publicError("bad_request", { status: 400 });
 
       const { sessionToken, storagePath, originalName, mimeType, sizeBytes, quantity } =
         parsed.data;
@@ -187,19 +74,19 @@ export async function action({ request }: ActionFunctionArgs) {
 
       // Verify S3 object key isolation to prevent arbitrary file access
       if (!storagePath.startsWith(`uploads/${shopDomain}/${sessionToken}/`)) {
-        return data({ error: "Invalid storage path" }, { status: 403 });
+        return publicError("forbidden", { status: 403 });
       }
 
       // Find session
       const sessionData = await getUploadSession(shopDomain, sessionToken);
-      if (!sessionData) return data({ error: "Session not found" }, { status: 404 });
+      if (!sessionData) return publicError("session_invalid", { status: 404 });
       const billingPlan = await getEffectiveBillingPlan(shopDomain);
 
       if (
         sessionData.status === "expired" ||
         new Date(sessionData.expiresAt).getTime() < Date.now()
       ) {
-        return data({ error: "Session expired" }, { status: 410 });
+        return publicError("session_expired", { status: 410 });
       }
 
       const bytesFreed = billableBytesForStoragePath(sessionData, storagePath);
@@ -216,30 +103,38 @@ export async function action({ request }: ActionFunctionArgs) {
           requestedBytes: sizeBytes,
           fieldId: sessionData.fieldId ?? "",
         });
-        return data(
-          {
-            error: "storage_cap_exceeded",
-            message: "Storage limit reached for this shop.",
+        return publicError("storage_cap_exceeded", {
+          status: 402,
+          extras: {
             currentBytes: adjustedBytes,
             maxBytes: planLimits.maxTotalStorageBytes,
             suggestedPlan: suggestUpgradeFor(reason),
           },
-          { status: 402 },
-        );
+        });
       }
 
       // Get file from Storage for server-side validation only
       const buffer = await getFileBuffer(storagePath);
 
-      // Extract metadata with sharp / pdf-lib
-      const { metadata, actualMimeType, error } = await extractMetadata(
+      // Extract metadata with sharp / pdf-lib. The raw underlying error
+      // (e.g. "VipsJpeg: premature end of JPEG image") is logged but never
+      // sent to the shopper — they get a friendly, actionable message.
+      const { metadata, actualMimeType, errorCode, rawError } = await extractMetadata(
         buffer,
         mimeType,
         sizeBytes,
       );
 
-      if (error) {
-        return data({ error }, { status: 400 });
+      if (errorCode === "file_too_large_global") {
+        return publicError("file_too_large_global", { status: 400 });
+      }
+      if (errorCode === "file_unreadable") {
+        log.warn("upload_confirm_file_unreadable", "File could not be parsed", {
+          storagePath,
+          mimeType,
+          rawError,
+        });
+        return publicError("file_unreadable", { status: 400 });
       }
 
       const field =
@@ -254,44 +149,37 @@ export async function action({ request }: ActionFunctionArgs) {
       const planMaxMB = Math.floor(planLimits.maxFileSizeBytes / (1024 * 1024));
       const allowedMaxFileMB = Math.min(field?.maxFileMB ?? Infinity, planMaxMB);
       if (Number.isFinite(allowedMaxFileMB) && sizeBytes > allowedMaxFileMB * 1024 * 1024) {
-        return data(
-          { error: `File exceeds plan limit of ${allowedMaxFileMB}MB` },
-          { status: 402 },
-        );
+        return publicError("file_too_large", {
+          status: 402,
+          message: `This file is too large. Maximum allowed: ${allowedMaxFileMB}MB.`,
+        });
       }
 
       if (field && field.maxFiles > 1 && sessionData.assets.length >= field.maxFiles) {
-        return data(
-          { error: `Maximum file count reached (${field.maxFiles})` },
-          { status: 400 },
-        );
+        return publicError("max_files", {
+          status: 400,
+          message: `You've reached the maximum of ${field.maxFiles} file(s) for this upload.`,
+        });
       }
 
-      const dimensionRuleMetaById = new Map<string, DimensionRuleMeta>();
-      const rules: ValidationRule[] = (field?.dimensionRules ?? [])
-        .filter(() => canUseFeature(billingPlan.planCode, "advancedValidation"))
-        .map((rule) => {
-          const normalizedId = rule.id || crypto.randomUUID();
-          if (isSupportedDimensionType(rule.dimensionType)) {
-            dimensionRuleMetaById.set(normalizedId, {
-              groupId: rule.groupId || normalizedId,
-              dimensionType: rule.dimensionType,
-              operator: rule.operator,
-              value: Number(rule.value),
-            });
-          }
-          return {
-            id: normalizedId,
-            type: rule.dimensionType,
+      const dimensionRules: DimensionRuleInput[] = canUseFeature(
+        billingPlan.planCode,
+        "advancedValidation",
+      )
+        ? (field?.dimensionRules ?? []).map((rule) => ({
+            id: rule.id || crypto.randomUUID(),
+            groupId: rule.groupId,
+            dimensionType: rule.dimensionType,
             operator: rule.operator,
-            value: rule.value,
-            action: rule.action === "prevent" ? "blocking" : "warning",
-            message: rule.warningMessage,
-          };
-        });
+            value: Number(rule.value),
+            action: rule.action,
+          }))
+        : [];
 
-      let validationResults = runValidationRules(metadata, rules);
-      validationResults = consolidateDimensionRuleResults(validationResults, dimensionRuleMetaById);
+      const validationResults: ValidationResult[] = buildDimensionRuleMessages(
+        dimensionRules,
+        metadata,
+      );
       const extension = originalName.split(".").pop()?.toLowerCase() ?? "";
 
       if (field?.allowedExtensions?.length && !field.allowedExtensions.includes(extension)) {
@@ -452,11 +340,7 @@ export async function action({ request }: ActionFunctionArgs) {
         printReadyFileUrl,
       });
     } catch (err) {
-      log.error("upload_confirm_failed", err, {});
-      return data(
-        { error: "Upload confirmation failed", detail: String(err) },
-        { status: 500 },
-      );
+      return internalError("upload_confirm_failed", err);
     }
   });
 }

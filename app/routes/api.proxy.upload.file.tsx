@@ -1,10 +1,11 @@
-import { data, redirect } from "react-router";
+import { redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { findJobByLegacySessionUploadPath } from "../services/shop-data.server";
 import { verifyPrintReadyFileToken } from "../services/file-download-token.server";
 import { fileExists, getSignedDownloadUrlAttachment } from "../services/storage.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { internalError, publicError } from "../lib/api-error.server";
 
 /**
  * App proxy GET: validates Shopify proxy + HMAC token, then redirects to a
@@ -14,7 +15,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return runWithRequestContext(request, async () => {
     const { session } = await authenticate.public.appProxy(request);
     if (!session) {
-      return data({ error: "Unauthorized" }, { status: 401 });
+      return publicError("unauthorized", { status: 401 });
     }
 
     setLogShopDomain(session.shop);
@@ -25,7 +26,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const verified = verifyPrintReadyFileToken(token, secret);
 
     if (!verified || verified.shop !== session.shop) {
-      return data({ error: "Invalid or expired link" }, { status: 403 });
+      return publicError("link_invalid", { status: 403 });
     }
 
     let storagePath = verified.storagePath;
@@ -40,7 +41,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     if (!(await fileExists(storagePath))) {
-      return data({ error: "File not found" }, { status: 404 });
+      return publicError("not_found", {
+        status: 404,
+        message: "This file is no longer available.",
+      });
     }
 
     try {
@@ -51,8 +55,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       );
       return redirect(signedUrl);
     } catch (err) {
-      log.error("upload_file_redirect_failed", err, { storagePath });
-      return data({ error: "Download unavailable" }, { status: 500 });
+      return internalError("upload_file_redirect_failed", err, {
+        logMeta: { storagePath },
+      });
     }
   });
 }

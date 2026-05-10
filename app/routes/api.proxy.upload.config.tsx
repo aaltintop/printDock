@@ -8,13 +8,14 @@ import {
   getEffectiveBillingPlan,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { internalError, publicError } from "../lib/api-error.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   return runWithRequestContext(request, async () => {
     try {
       const { session } = await authenticate.public.appProxy(request);
       if (!session) {
-        return data({ error: "Unauthorized" }, { status: 401 });
+        return publicError("unauthorized", { status: 401 });
       }
 
       const shopDomain = session.shop;
@@ -24,7 +25,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const productId = url.searchParams.get("productId") || "";
       const variantId = url.searchParams.get("variantId") || "";
       if (!productId) {
-        return data({ error: "Missing productId" }, { status: 400 });
+        return publicError("bad_request", { status: 400 });
       }
 
       log.event("upload_config_requested", { productId, variantId });
@@ -91,8 +92,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         planLimits: planLimitsResponse,
       });
     } catch (err) {
-      log.error("upload_config_failed", err, {});
-      throw err;
+      return internalError("upload_config_failed", err);
     }
   });
 }

@@ -185,11 +185,8 @@
   color: var(--pd-success-strong);
 }
 
-.printdock-error {
-  color: var(--pd-danger);
-  font-size: 0.875em;
-  margin-top: 0.5rem;
-}
+/* `.printdock-error` styling lives further down with the notification rules
+   so all shopper-facing alert visuals are co-located. */
 
 .printdock-warning {
   color: var(--pd-warning);
@@ -248,4 +245,173 @@
 .printdock-price-explanation {
   font-size: 0.875em;
   color: var(--pd-text-subdued);
+}
+
+/* ─── Inline shopper alerts (banner stack) ───────────────────────────────
+   All shopper-facing alerts render as banners inside the upload block,
+   between the dropzone and the file list. This guarantees the alert lands
+   in the shopper's gaze immediately after they interact with the form
+   (Stripe / Google Drive pattern). No fixed/floating toast, no theme
+   footer collisions, no off-screen alerts.
+
+   • Ordinary errors auto-dismiss after 7s with a countdown bar; hovering
+     or focusing pauses the countdown.
+   • Critical errors (`.printdock-banner` without `.printdock-banner-auto-
+     dismiss`) stay until the shopper clicks X — they need a deliberate
+     action (refresh, contact merchant, etc.). */
+
+.printdock-banner {
+  --pd-notify-accent: var(--pd-danger);
+}
+
+.printdock-banner-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.printdock-banner-stack:empty {
+  display: none;
+}
+
+.printdock-banner {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.75rem 0.875rem;
+  background: color-mix(in srgb, var(--pd-notify-accent) 8%, var(--pd-surface));
+  border: 1px solid color-mix(in srgb, var(--pd-notify-accent) 32%, var(--pd-border));
+  border-left: 3px solid var(--pd-notify-accent);
+  border-radius: var(--pd-radius);
+  color: var(--pd-text);
+  animation: printdock-banner-in 220ms ease-out;
+}
+
+/* The auto-dismissable variant carries a tiny bottom-edge countdown bar
+   so shoppers can see how long they have. Hover/focus pauses it. */
+.printdock-banner-auto-dismiss {
+  padding-bottom: 0.875rem;
+}
+
+.printdock-banner-auto-dismiss::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: color-mix(in srgb, var(--pd-notify-accent) 45%, transparent);
+  transform-origin: left;
+  animation: printdock-banner-countdown var(--pd-banner-duration, 7s) linear forwards;
+}
+
+.printdock-banner-auto-dismiss:hover::after,
+.printdock-banner-auto-dismiss:focus-within::after,
+.printdock-banner-auto-dismiss[data-paused="true"]::after {
+  animation-play-state: paused;
+}
+
+.printdock-banner-dismissed {
+  animation: printdock-banner-out 180ms ease-in forwards;
+}
+
+.printdock-banner-icon {
+  color: var(--pd-notify-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.printdock-banner-body {
+  min-width: 0;
+}
+
+.printdock-banner-title {
+  font-weight: 600;
+  font-size: 0.95em;
+  word-break: break-word;
+  /* Long file names: ellipsize after the first line */
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.printdock-banner-message {
+  font-size: 0.875em;
+  color: var(--pd-text-subdued);
+  margin-top: 0.125rem;
+  line-height: 1.4;
+}
+
+.printdock-banner-dismiss {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--pd-text-subdued);
+  padding: 0;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.printdock-banner-dismiss:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--pd-text);
+}
+
+.printdock-banner-dismiss:focus-visible {
+  outline: 2px solid var(--pd-primary);
+  outline-offset: 2px;
+}
+
+@keyframes printdock-banner-in {
+  from { opacity: 0; transform: translateY(-6px); max-height: 0; }
+  to   { opacity: 1; transform: translateY(0); max-height: 240px; }
+}
+
+@keyframes printdock-banner-out {
+  from { opacity: 1; max-height: 240px; }
+  to   { opacity: 0; max-height: 0; transform: translateY(-2px); }
+}
+
+@keyframes printdock-banner-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .printdock-banner,
+  .printdock-banner-dismissed {
+    animation: none;
+    transition: none;
+  }
+  .printdock-banner-auto-dismiss::after {
+    animation: none;
+    transform: scaleX(0);
+  }
+}
+
+/* In-card error block: keep the existing inline placement but give it a
+   little more presence (subtle background + spacing). The file card
+   already shows the file name, so we don't repeat it here. */
+.printdock-error {
+  color: var(--pd-danger);
+  font-size: 0.875em;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  background: color-mix(in srgb, var(--pd-danger) 8%, transparent);
+  border-radius: calc(var(--pd-radius) / 2);
+  line-height: 1.4;
 }

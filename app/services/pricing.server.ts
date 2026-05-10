@@ -32,10 +32,14 @@ export function calculatePrice(
   let explanation = "";
 
   if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+    // Merchant misconfiguration. Shoppers should not be blamed for this and
+    // should not see internal config jargon — surface a neutral message and
+    // let the merchant fix it. The error code makes it correlatable in logs.
     return {
       filePrice: 0,
       total: 0,
-      explanation: "Invalid unit price configuration",
+      explanation:
+        "Pricing is temporarily unavailable for this file. Please contact the merchant.",
       currency,
       error: "invalid_unit_price",
     };
@@ -51,8 +55,7 @@ export function calculatePrice(
         return {
           filePrice: 0,
           total: 0,
-          explanation:
-            "Price could not be calculated: file is missing measurable height in inches.",
+          explanation: missingDimensionMessage("heightInch"),
           currency,
           error: "missing_dimensions",
         };
@@ -75,8 +78,7 @@ export function calculatePrice(
           return {
             filePrice: 0,
             total: 0,
-            explanation:
-              "Price could not be calculated: file is missing measurable width and/or height in inches.",
+            explanation: missingDimensionMessage("widthAndHeightInch"),
             currency,
             error: "missing_dimensions",
           };
@@ -88,7 +90,13 @@ export function calculatePrice(
       explanation = `Flat rate: $${unitPrice}`;
       break;
     default:
-      return { filePrice: 0, total: 0, explanation: "No pricing configured", currency };
+      return {
+        filePrice: 0,
+        total: 0,
+        explanation:
+          "Pricing is temporarily unavailable for this file. Please contact the merchant.",
+        currency,
+      };
   }
 
   // Apply minimum price floor
@@ -108,4 +116,16 @@ export function calculatePrice(
     explanation: quantity > 1 ? `${explanation} × ${quantity}` : explanation,
     currency,
   };
+}
+
+/**
+ * Shopper-facing message for the "pricing needs dimensions but file has none"
+ * case. Mirrors the wording used by `buildDimensionRuleMessages` so that a
+ * single bad upload doesn't generate two inconsistent "missing DPI" messages.
+ */
+function missingDimensionMessage(
+  missing: "heightInch" | "widthAndHeightInch",
+): string {
+  const target = missing === "heightInch" ? "height" : "width and height";
+  return `We couldn't determine the ${target} of this file in inches. Please re-export the file with DPI embedded and try again.`;
 }

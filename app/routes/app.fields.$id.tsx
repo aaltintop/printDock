@@ -1329,7 +1329,8 @@ export default function FieldEditorPage() {
                 <TextField
                   name="maxFileMB"
                   label="Max file size"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   suffix="MB"
                   autoComplete="off"
                   value={maxFileMB}
@@ -1489,6 +1490,24 @@ export default function FieldEditorPage() {
 
               {planAllowsAdvancedValidation ? (
                 <BlockStack gap="300">
+                  <Banner tone="info" title="How file dimensions are measured">
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm">
+                        We read DPI directly from <Text as="span" fontWeight="semibold">PNG (pHYs chunk)</Text>
+                        {" "}and <Text as="span" fontWeight="semibold">JPEG (JFIF density tag)</Text>. PDFs
+                        report a fixed 72 DPI per spec.
+                      </Text>
+                      <Text as="p" variant="bodySm">
+                        Files that only carry DPI in JPEG EXIF (the default for many Photoshop /
+                        Lightroom / camera exports) are treated as <Text as="span" fontWeight="semibold">missing DPI</Text>
+                        {" "}— customers will see a clear message and can re-export with embedded DPI.
+                      </Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Reported densities below 30 DPI are also treated as missing, because most
+                        tools write that as a placeholder when no real DPI is set.
+                      </Text>
+                    </BlockStack>
+                  </Banner>
                   {dimensionRulesSimplified ? (
                     <Banner tone="info" title="Previous rules were simplified">
                       Existing operator-based rules were converted into the nearest fixed or range
@@ -1543,7 +1562,8 @@ export default function FieldEditorPage() {
                           {card.mode === "fixed" ? (
                             <TextField
                               label={`${dimensionLabel(dimensionType)} value`}
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               autoComplete="off"
                               value={card.fixedValue}
                               suffix={dimensionSuffix(dimensionType)}
@@ -1569,7 +1589,8 @@ export default function FieldEditorPage() {
                               <div style={{ minWidth: 180, width: "100%" }}>
                                 <TextField
                                   label="Min"
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   autoComplete="off"
                                   value={card.rangeMin}
                                   suffix={dimensionSuffix(dimensionType)}
@@ -1587,7 +1608,8 @@ export default function FieldEditorPage() {
                               <div style={{ minWidth: 180, width: "100%" }}>
                                 <TextField
                                   label="Max"
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   autoComplete="off"
                                   value={card.rangeMax}
                                   suffix={dimensionSuffix(dimensionType)}

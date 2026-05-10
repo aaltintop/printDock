@@ -18,7 +18,8 @@
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
     "migrate:firestore": "node scripts/migrate-firestore-hierarchy.mjs",
-    "gen:fixtures": "node scripts/generate-test-fixtures.mjs"
+    "gen:fixtures": "node scripts/generate-test-fixtures.mjs",
+    "test": "vitest run"
   },
   "type": "module",
   "engines": {

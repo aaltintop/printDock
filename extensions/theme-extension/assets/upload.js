@@ -86,13 +86,44 @@
     return { ok: res.ok, status: res.status, json, text };
   }
 
+  /**
+   * Public API error contract (see app/lib/api-error.server.ts):
+   *   { error: "snake_case_code", message: "...", reference?: "..." }
+   *
+   * The shopper-facing message ALWAYS comes from `message`. The `error`
+   * code is for client branching ONLY — never displayed.
+   */
+  function getFriendlyServerMessage(json, fallback) {
+    if (json && typeof json === "object" && typeof json.message === "string" && json.message.trim()) {
+      return json.message;
+    }
+    return fallback || "Upload failed. Please refresh the page and try again.";
+  }
+
+  /**
+   * Heuristic: catch internal/JS error strings before they reach the
+   * shopper. A message is considered safe to display if it has reasonable
+   * length, ends with punctuation, and does not look like a stack frame or
+   * built-in error class name.
+   */
+  function isLikelyFriendlyMessage(msg) {
+    if (typeof msg !== "string") return false;
+    const trimmed = msg.trim();
+    if (!trimmed || trimmed.length > 240) return false;
+    if (/^(TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|NetworkError|Error):/i.test(trimmed)) {
+      return false;
+    }
+    if (/\bat\s+\w+.*:\d+:\d+/.test(trimmed)) return false; // stack frame
+    if (/^[a-z_][a-z0-9_]*$/i.test(trimmed)) return false; // bare snake_case code
+    return /[.!?]$/.test(trimmed) || trimmed.length < 80;
+  }
+
   function isStaleSessionError(status, json) {
     if (status !== 400) return false;
-    const msg = String(json?.error || "").toLowerCase();
-    return (
-      msg.includes("maximum file count reached") ||
-      msg.includes("session product mismatch")
-    );
+    const code = String(json?.error || "");
+    // Codes that mean: the session is no longer aligned with the current
+    // product/cart state, retry with a fresh token.
+    return code === "session_invalid" || code === "max_files";
   }
 
   const Preflight = (() => {
@@ -326,38 +357,12 @@
       }
     }
 
-    function violatesRule(actual, operator, expected) {
-      switch (operator) {
-        case "gt":
-          return !(actual > expected);
-        case "lt":
-          return !(actual < expected);
-        case "eq":
-          return !(actual === expected);
-        case "gte":
-          return !(actual >= expected);
-        case "lte":
-          return !(actual <= expected);
-        default:
-          return false;
-      }
-    }
-
     function runRulesClient(metadata, rules) {
-      const results = [];
-      for (const rule of rules || []) {
-        const actual = metadata?.[rule.dimensionType] ?? null;
-        if (actual === null || actual === undefined) continue;
-        if (!violatesRule(actual, rule.operator, Number(rule.value))) continue;
-        results.push({
-          ruleId: rule.id || `${rule.dimensionType}_${rule.operator}_${rule.value}`,
-          severity: rule.action === "prevent" ? "blocking" : "warning",
-          message: rule.warningMessage || "File does not meet the configured rule.",
-          actual,
-          expected: Number(rule.value),
-        });
+      const helpers = (typeof window !== "undefined" && window.PrintDockMessages) || null;
+      if (helpers && typeof helpers.buildDimensionRuleMessages === "function") {
+        return helpers.buildDimensionRuleMessages(rules || [], metadata || {});
       }
-      return results;
+      return [];
     }
 
     async function extractImageMetadataClient(file, mime) {
@@ -487,28 +492,35 @@
     if (files.length === 0) return;
     const slotsLeft = Math.max(fieldConfig.maxFiles - uploadedFiles.length, 0);
     if (slotsLeft <= 0) {
-      showError(`Maximum file count reached (${fieldConfig.maxFiles}).`);
+      reportShopperError(
+        `You've reached the maximum of ${fieldConfig.maxFiles} file(s) for this upload.`,
+        { code: "max_files" },
+      );
       return;
     }
     const selectedFiles = files.slice(0, slotsLeft);
 
     if (isUploading) {
-      showError("Please wait until current upload finishes.");
+      reportShopperError("Please wait until the current upload finishes.");
       return;
     }
 
     isUploading = true;
     for (const selected of selectedFiles) {
       if (!isValidExtension(selected.name)) {
-        showError(
-          `File type not allowed. Supported: ${fieldConfig.allowedExtensions.join(", ").toUpperCase()}`,
+        reportShopperError(
+          `This file type is not allowed. Supported: ${fieldConfig.allowedExtensions.join(", ").toUpperCase()}.`,
+          { fileName: selected.name, code: "extension_not_allowed" },
         );
         continue;
       }
 
       const maxBytes = fieldConfig.maxFileMB * 1024 * 1024;
       if (selected.size > maxBytes) {
-        showError(`File is too large. Max size is ${fieldConfig.maxFileMB}MB.`);
+        reportShopperError(
+          `This file is too large. Maximum allowed: ${fieldConfig.maxFileMB}MB.`,
+          { fileName: selected.name, code: "file_too_large" },
+        );
         continue;
       }
       let preflight = null;
@@ -522,8 +534,10 @@
         const msg = preflight.blocking
           .map((result) => result.message)
           .filter(Boolean)
-          .join(" - ");
-        showError(msg || "File does not meet upload requirements.");
+          .join(" \u00b7 ");
+        reportShopperError(msg || "This file does not meet the upload requirements.", {
+          fileName: selected.name,
+        });
         continue;
       }
 
@@ -594,11 +608,15 @@
           sessionResult.json?.error === "storage_cap_exceeded"
         ) {
           console.warn("PrintDock storage cap hit", sessionResult.json);
-          showError(
-            "This shop has reached its upload storage limit. Please contact the merchant to free space or upgrade the plan.",
+          const storageMsg = getFriendlyServerMessage(
+            sessionResult.json,
+            "This shop has reached its upload storage limit. Please contact the merchant.",
           );
+          // Storage cap is shop-wide and won't change by retrying — surface
+          // it as a persistent banner so the shopper notices and stops.
+          reportShopperError(storageMsg, { code: "storage_cap_exceeded" });
           fileEntry.status = "error";
-          fileEntry.error = "Storage limit reached.";
+          fileEntry.error = storageMsg;
           if (isEntryActive()) {
             renderFileList();
             updateCartState();
@@ -606,11 +624,19 @@
           }
           return;
         }
-        const hint =
-          sessionResult.json?.detail ||
-          sessionResult.json?.error ||
-          sessionResult.text.slice(0, 200);
-        throw new Error(`Failed to get upload session (${sessionResult.status}): ${hint}`);
+        // Server logs the underlying cause (and on 5xx returns a short
+        // reference id); the shopper only sees the friendly `message`.
+        console.warn("PrintDock session error", {
+          status: sessionResult.status,
+          code: sessionResult.json?.error,
+          reference: sessionResult.json?.reference,
+        });
+        const friendlyMsg = getFriendlyServerMessage(sessionResult.json);
+        reportShopperError(friendlyMsg, {
+          fileName: file.name,
+          code: sessionResult.json?.error,
+        });
+        throw new Error(friendlyMsg);
       }
       const sessionData = sessionResult.json;
       sessionToken = sessionData.sessionToken;
@@ -666,18 +692,24 @@
         if (!isEntryActive()) return;
         if (confirmRes.status === 402 && confirmData?.error === "storage_cap_exceeded") {
           console.warn("PrintDock storage cap hit", confirmData);
-          showError(
-            "This shop has reached its upload storage limit. Please contact the merchant to free space or upgrade the plan.",
+          const storageMsg = getFriendlyServerMessage(
+            confirmData,
+            "This shop has reached its upload storage limit. Please contact the merchant.",
           );
-          throw new Error("Storage limit reached.");
+          reportShopperError(storageMsg, { code: "storage_cap_exceeded" });
+          throw new Error(storageMsg);
         }
-        const serverMsg =
-          confirmData?.error ||
-          confirmData?.message ||
-          confirmData?.detail ||
-          `Upload failed (${confirmRes.status}). Please try again.`;
-        showError(serverMsg);
-        throw new Error(serverMsg);
+        console.warn("PrintDock confirm error", {
+          status: confirmRes.status,
+          code: confirmData?.error,
+          reference: confirmData?.reference,
+        });
+        const friendlyMsg = getFriendlyServerMessage(confirmData);
+        reportShopperError(friendlyMsg, {
+          fileName: file.name,
+          code: confirmData?.error,
+        });
+        throw new Error(friendlyMsg);
       }
 
       if (!isEntryActive()) return;
@@ -695,9 +727,14 @@
     } catch (err) {
       if (!isEntryActive()) return;
       fileEntry.status = "error";
-      const msg = err instanceof Error ? err.message : String(err);
-      fileEntry.error =
-        msg.length > 180 ? `${msg.slice(0, 180)}…` : msg || "Upload failed. Please try again.";
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      // Errors thrown by our own code (session/confirm/XHR helpers) are
+      // already shopper-friendly. Anything else (`TypeError: …`, internal
+      // JS exceptions, etc.) gets replaced with a generic fallback so the
+      // shopper never sees a stack frame or technical jargon.
+      fileEntry.error = isLikelyFriendlyMessage(rawMsg)
+        ? rawMsg
+        : "Upload failed. Please refresh the page and try again.";
       console.error("PrintDock upload error:", err);
     }
 
@@ -721,9 +758,19 @@
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
 
-      xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error(`Storage upload failed: ${xhr.status}`));
-      xhr.onerror = () => reject(new Error("Storage upload network error"));
-      xhr.onabort = () => reject(new Error("Storage upload canceled"));
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          resolve();
+          return;
+        }
+        // The shopper does not care about the HTTP status; the dev console
+        // gets the detail so support can follow up if needed.
+        console.warn("PrintDock storage upload failed", { status: xhr.status });
+        reject(new Error("We couldn't upload your file. Please check your connection and try again."));
+      };
+      xhr.onerror = () =>
+        reject(new Error("We couldn't reach our storage service. Please check your connection and try again."));
+      xhr.onabort = () => reject(new Error("Upload canceled."));
       xhr.send(file);
     });
   }
@@ -1223,8 +1270,10 @@
       clearStoredSession();
       const fileInput = document.getElementById("printdock-file-input");
       if (fileInput) fileInput.value = "";
-      const msgs = document.getElementById("printdock-messages");
-      if (msgs) msgs.innerHTML = "";
+      // Reset all shopper notifications when the form is fully cleared
+      // (e.g. after the cart converts the session). Old banners about a
+      // previous attempt would otherwise stay around.
+      activeBanners.forEach((_, id) => dismissBanner(id));
     }
     renderFileList();
     updateCartState();
@@ -1256,8 +1305,13 @@
             <button type="button" class="printdock-choose-btn" id="printdock-choose-btn">${escapeHtml(LABELS.chooseLabel)}</button>
           </div>
         </div>
+        <!-- Inline alerts sit between the dropzone and the file list so they
+             land squarely in the shopper's gaze right after they drop a file
+             (Stripe / Google Drive pattern). Newest banner is appended last
+             so it appears at the bottom — closest to the dropzone the
+             shopper just interacted with. -->
+        <div class="printdock-banner-stack" id="printdock-banner-stack" aria-live="polite" aria-atomic="false"></div>
         <div class="printdock-file-list" id="printdock-file-list"></div>
-        <div class="printdock-messages" id="printdock-messages"></div>
       </div>
     `;
 
@@ -1432,10 +1486,209 @@
     if (disabled) dropzone.classList.remove("printdock-dragover");
   }
 
-  function showError(msg) {
-    const msgs = document.getElementById("printdock-messages");
-    if (msgs) msgs.innerHTML = `<div class="printdock-error">${escapeHtml(msg)}</div>`;
-    setTimeout(() => { if (msgs) msgs.innerHTML = ""; }, 4000);
+  // ─── SHOPPER NOTIFICATIONS ──────────────────────────────────────────
+  // Inline banner stack lives inside the upload block, between the
+  // dropzone and the file list. This is where the shopper's gaze lands
+  // right after they interact with the dropzone (Stripe / Google Drive
+  // pattern) so the alert is impossible to miss — no floating overlay,
+  // no theme-footer collisions, no off-screen toasts.
+  //
+  // Two behaviours sharing the same surface:
+  //   • Ordinary errors (wrong file type, too large, transient network
+  //     hiccup): auto-dismiss after 7s with a hover/focus-pausable
+  //     countdown bar and an always-available X button.
+  //   • Critical errors (storage cap, plan-required, expired/invalid
+  //     session, link invalid, global file size limit): NEVER auto-
+  //     dismiss — the shopper must read and act (refresh, contact
+  //     merchant, etc.). Manual X only.
+  //
+  // Per-file errors that should stick to the file card itself remain
+  // rendered inline by `renderFileList` via `fileEntry.error`.
+
+  const BANNER_AUTO_DISMISS_MS = 7000;
+  const BANNER_STACK_LIMIT = 5;
+
+  // Codes that the shopper cannot resolve by simply retrying — they need
+  // to read the message and take a concrete action. Auto-dismiss is
+  // suppressed for these, so they stay visible until the shopper clicks X.
+  const PERSISTENT_BANNER_CODES = new Set([
+    "storage_cap_exceeded",
+    "plan_required",
+    "session_expired",
+    "session_invalid",
+    "link_invalid",
+    "file_too_large_global",
+  ]);
+
+  const BANNER_TITLE_BY_CODE = {
+    storage_cap_exceeded: "Storage limit reached",
+    plan_required: "Uploads unavailable",
+    session_expired: "Session expired",
+    session_invalid: "Upload session is no longer valid",
+    link_invalid: "Download link is no longer valid",
+    file_too_large_global: "File is too large to upload",
+  };
+
+  let notifyIdCounter = 0;
+  const activeBanners = new Map();
+
+  const ICON_ALERT = `
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M10 6v4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="10" cy="13.5" r="0.9" fill="currentColor"/>
+    </svg>`;
+  const ICON_DISMISS = `
+    <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
+      <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+
+  function ensureBannerStack() {
+    return document.getElementById("printdock-banner-stack");
+  }
+
+  function dismissBanner(id) {
+    const state = activeBanners.get(id);
+    if (!state) return;
+    if (state.timerId) clearTimeout(state.timerId);
+    state.element.classList.add("printdock-banner-dismissed");
+    setTimeout(() => {
+      state.element.remove();
+      activeBanners.delete(id);
+    }, 180);
+  }
+
+  function enforceBannerLimit(stack) {
+    const visible = stack.querySelectorAll(".printdock-banner");
+    for (let i = 0; i < visible.length - BANNER_STACK_LIMIT; i++) {
+      const id = Number(visible[i].getAttribute("data-banner-id"));
+      if (id) dismissBanner(id);
+    }
+  }
+
+  function showBanner(message, opts = {}) {
+    const stack = ensureBannerStack();
+    if (!stack) {
+      // Block isn't rendered yet (very rare — upload.js runs after the
+      // template is injected). Surface the error in the console so it's
+      // recoverable from devtools at least.
+      console.warn("PrintDock alert (no banner stack):", { message, opts });
+      return null;
+    }
+
+    // De-dupe by code so a single condition (e.g. storage cap) doesn't
+    // pile up identical banners as the shopper retries uploads.
+    if (opts.code) {
+      activeBanners.forEach((state, existingId) => {
+        if (state.code === opts.code) dismissBanner(existingId);
+      });
+    }
+
+    const id = ++notifyIdCounter;
+    const code = opts.code || null;
+    const autoDismiss = !(code && PERSISTENT_BANNER_CODES.has(code));
+    const durationMs = Number.isFinite(opts.durationMs)
+      ? opts.durationMs
+      : BANNER_AUTO_DISMISS_MS;
+
+    const banner = document.createElement("div");
+    banner.className = "printdock-banner";
+    banner.setAttribute("role", "alert");
+    banner.setAttribute("data-banner-id", String(id));
+    if (code) banner.setAttribute("data-code", code);
+    if (autoDismiss) {
+      banner.classList.add("printdock-banner-auto-dismiss");
+      banner.style.setProperty("--pd-banner-duration", `${durationMs}ms`);
+    }
+
+    const heading =
+      opts.fileName ||
+      BANNER_TITLE_BY_CODE[code || ""] ||
+      "We need your attention";
+
+    banner.innerHTML = `
+      <span class="printdock-banner-icon">${ICON_ALERT}</span>
+      <div class="printdock-banner-body">
+        <div class="printdock-banner-title">${escapeHtml(heading)}</div>
+        <div class="printdock-banner-message">${escapeHtml(message)}</div>
+      </div>
+      <button type="button" class="printdock-banner-dismiss" aria-label="Dismiss notification">${ICON_DISMISS}</button>
+    `;
+
+    // Newest at the bottom: closest to the dropzone (where the shopper
+    // just clicked / dropped). Drop a file → error appears immediately
+    // below, in the natural reading flow.
+    stack.appendChild(banner);
+    enforceBannerLimit(stack);
+
+    const state = {
+      element: banner,
+      code,
+      remainingMs: durationMs,
+      startedAt: Date.now(),
+      paused: false,
+      timerId: null,
+      autoDismiss,
+    };
+    activeBanners.set(id, state);
+
+    if (autoDismiss) {
+      state.timerId = setTimeout(() => dismissBanner(id), durationMs);
+
+      // Hover / focus pauses both the JS timer and the CSS countdown
+      // bar — shoppers reading a long message shouldn't have it
+      // disappear out from under them.
+      const pause = () => {
+        if (state.paused) return;
+        state.paused = true;
+        banner.setAttribute("data-paused", "true");
+        const elapsed = Date.now() - state.startedAt;
+        state.remainingMs = Math.max(0, state.remainingMs - elapsed);
+        if (state.timerId) clearTimeout(state.timerId);
+      };
+      const resume = () => {
+        if (!state.paused) return;
+        state.paused = false;
+        banner.removeAttribute("data-paused");
+        state.startedAt = Date.now();
+        state.timerId = setTimeout(() => dismissBanner(id), state.remainingMs);
+      };
+      banner.addEventListener("mouseenter", pause);
+      banner.addEventListener("mouseleave", resume);
+      banner.addEventListener("focusin", pause);
+      banner.addEventListener("focusout", resume);
+    }
+
+    banner
+      .querySelector(".printdock-banner-dismiss")
+      ?.addEventListener("click", () => dismissBanner(id));
+
+    return id;
+  }
+
+  /**
+   * Single entry point for shopper-facing feedback. Everything goes
+   * through the inline banner stack (no floating toasts). Critical codes
+   * stay until manually dismissed; everything else auto-dismisses after
+   * 7s with a hover-pausable countdown.
+   *
+   *   reportShopperError("This file is too large…", {
+   *     fileName: "design.psd",
+   *     code: "file_too_large",     // optional, routes critical codes
+   *     durationMs: 10000,          // optional, override auto-dismiss
+   *   })
+   */
+  function reportShopperError(message, opts = {}) {
+    return { kind: "banner", id: showBanner(message, opts) };
+  }
+
+  /**
+   * Backwards-compatible wrapper. Older call sites pass a single string;
+   * newer ones pass `{ fileName, code }` so the shopper sees the file
+   * context and critical codes stay persistent.
+   */
+  function showError(msg, opts) {
+    return reportShopperError(msg, opts || {});
   }
 
   // ─── UTILS ───────────────────────────────────────────────────────────

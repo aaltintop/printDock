@@ -22,6 +22,7 @@ import {
 } from "../services/shop-data.server";
 import type { UploadSession } from "../types/printdock";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { internalError, publicError } from "../lib/api-error.server";
 
 const schema = z.object({
   productId: z.string(),
@@ -45,16 +46,7 @@ export async function action({ request }: ActionFunctionArgs) {
     try {
       return await handleUploadSessionAction(request);
     } catch (err) {
-      log.error("upload_session_failed", err, {});
-      const message =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "Unknown error";
-      return data(
-        {
-          error: "Upload session failed",
-          detail: message,
-        },
-        { status: 500 },
-      );
+      return internalError("upload_session_failed", err);
     }
   });
 }
@@ -62,7 +54,7 @@ export async function action({ request }: ActionFunctionArgs) {
 async function handleUploadSessionAction(request: Request) {
   const { session } = await authenticate.public.appProxy(request);
   if (!session) {
-    return data({ error: "Unauthorized" }, { status: 401 });
+    return publicError("unauthorized", { status: 401 });
   }
 
   const shopDomain = session.shop;
@@ -70,7 +62,7 @@ async function handleUploadSessionAction(request: Request) {
 
   const body = await request.json();
   const parsed = schema.safeParse(body);
-  if (!parsed.success) return data({ error: "Invalid input" }, { status: 400 });
+  if (!parsed.success) return publicError("bad_request", { status: 400 });
 
   const {
     productId,
@@ -99,7 +91,7 @@ async function handleUploadSessionAction(request: Request) {
     : null;
 
   if (existingSession && existingSession.productId !== productId) {
-    return data({ error: "Session product mismatch" }, { status: 400 });
+    return publicError("session_invalid", { status: 400 });
   }
 
   const sessionToken = existingSession?.id ?? crypto.randomUUID();
@@ -128,26 +120,25 @@ async function handleUploadSessionAction(request: Request) {
       requestedBytes: incomingBytes,
       fieldId: fieldId ?? "",
     });
-    return data(
-      {
-        error: "storage_cap_exceeded",
-        message: "Storage limit reached for this shop.",
+    return publicError("storage_cap_exceeded", {
+      status: 402,
+      extras: {
         currentBytes: currentStorageBytes,
         maxBytes: planLimits.maxTotalStorageBytes,
         suggestedPlan: suggestUpgradeFor(reason),
       },
-      { status: 402 },
-    );
+    });
   }
 
   if (selectedField) {
     const requiredRank = PLAN_RANK[selectedField.planRequirement] ?? 0;
     const currentRank = PLAN_RANK[planCode] ?? 0;
     if (currentRank < requiredRank) {
-      return data(
-        { error: `This field requires the ${selectedField.planRequirement} plan` },
-        { status: 402 },
-      );
+      log.warn("upload_session_plan_required", "Field requires higher merchant plan", {
+        requiredPlan: selectedField.planRequirement,
+        currentPlan: planCode,
+      });
+      return publicError("plan_required", { status: 402 });
     }
 
     if (selectedField.maxFileMB) {
@@ -174,10 +165,10 @@ async function handleUploadSessionAction(request: Request) {
     await createUploadSession(shopDomain, sessionDoc);
   } else {
     if (selectedField && existingSession.assets.length >= selectedField.maxFiles) {
-      return data(
-        { error: `Maximum file count reached (${selectedField.maxFiles})` },
-        { status: 400 },
-      );
+      return publicError("max_files", {
+        status: 400,
+        message: `You've reached the maximum of ${selectedField.maxFiles} file(s) for this upload.`,
+      });
     }
 
     await updateUploadSession(shopDomain, sessionToken, {
