@@ -11,6 +11,7 @@ import { createPrintReadyFileToken } from "../services/file-download-token.serve
 import { deleteFile, getFileBuffer } from "../services/storage.server";
 import { extractMetadata, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
+import { ensureFeeProductForShop, inferCurrencyDecimals } from "../services/fee-product.server";
 import { buildDimensionRuleMessages } from "../services/dimension-rule-message";
 import type { DimensionRuleInput } from "../services/dimension-rule-message";
 import { authenticate } from "../shopify.server";
@@ -209,6 +210,10 @@ export async function action({ request }: ActionFunctionArgs) {
       // Calculate price
       let pricing = null;
       if (planAllowsDynamicPricing && field?.pricing?.enabled && !blocked) {
+        const feeConfig = await ensureFeeProductForShop(shopDomain).catch(() => null);
+        const currencyCode = feeConfig?.currencyCode ?? "USD";
+        const currencyDecimals =
+          feeConfig?.currencyDecimals ?? inferCurrencyDecimals(currencyCode);
         const priceResult = calculatePrice(
           metadata,
           {
@@ -218,6 +223,8 @@ export async function action({ request }: ActionFunctionArgs) {
             roundingEnabled: field.pricing.roundingEnabled,
           },
           quantity,
+          currencyCode,
+          currencyDecimals,
         );
         if (priceResult.error) {
           // Pricing needs dimensions that the file does not carry, or the merchant has

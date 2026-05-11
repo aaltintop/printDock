@@ -18,6 +18,19 @@
     checkingLabel: root.dataset.checkingLabel || "Checking file...",
     priceLabel: root.dataset.priceLabel || "Calculated upload price:",
   };
+  const DEBUG_PRINTDOCK =
+    root.dataset.debug === "true" ||
+    new URLSearchParams(window.location.search).has("printdock_debug") ||
+    localStorage.getItem("printdock_debug") === "1";
+
+  function debugLog(event, payload) {
+    if (!DEBUG_PRINTDOCK) return;
+    if (payload === undefined) {
+      console.info("[PrintDock][debug]", event);
+      return;
+    }
+    console.info("[PrintDock][debug]", event, payload);
+  }
 
   const DEFAULT_CONFIG = {
     id: null,
@@ -36,6 +49,10 @@
 
   let fieldConfig = { ...DEFAULT_CONFIG };
   let isRequired = BLOCK_REQUIRED;
+  let configLoadFailed = false;
+  let feeConfig = null;
+  let currencyCode = "USD";
+  let currencyDecimals = 2;
   let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || null;
   let sessionExpiresAt = localStorage.getItem(SESSION_EXPIRES_STORAGE_KEY) || null;
   if (sessionExpiresAt) {
@@ -50,6 +67,19 @@
   const boundForms = new WeakSet();
   let formObserver = null;
   let pagehideCleanupBound = false;
+  let isFeeSyncInFlight = false;
+
+  function moneyScale() {
+    return Math.pow(10, Number.isFinite(currencyDecimals) ? currencyDecimals : 2);
+  }
+
+  function toMinorUnits(amount) {
+    return Math.round(Number(amount || 0) * moneyScale());
+  }
+
+  function fromMinorUnits(minorUnits) {
+    return Number(minorUnits || 0) / moneyScale();
+  }
 
   function clearStoredSession() {
     sessionToken = null;
@@ -430,13 +460,46 @@
   })();
 
   // ─── INIT ────────────────────────────────────────────────────────────
+  // Arm cart-add gates SYNCHRONOUSLY (no awaits) so a shopper who clicks
+  // "Add to cart" while `/api/proxy/upload/config` is still in flight — or
+  // a theme that auto-adds during initial paint (quick-shop, "buy again",
+  // BIS recovery, etc.) — cannot slip past the upload requirement.
+  //
+  // Initial `isRequired` value comes from the merchant's "Require upload
+  // before add to cart" block setting (`BLOCK_REQUIRED`), so the gate is
+  // live the instant the script runs. Once the config resolves we refine
+  // it with the field-level value (`fieldConfig.isRequired`) and release
+  // the gate if no field actually targets this product/collection.
+  function armCartGuardsEarly() {
+    setupCartAddFetchInterceptor();
+    setupCartChangeFetchInterceptor();
+    setupCartAddXHRInterceptor();
+    setupAddToCartGuard();
+    updateCartState();
+  }
+
   async function init() {
     await loadFieldConfig();
-    // No field targets this product (or collection) — hide the block entirely.
+    // Config request hit a network/server error. Keep the widget visible
+    // (so a determined shopper can still upload) and keep `isRequired` at
+    // BLOCK_REQUIRED so the cart-add gate stays armed. Tell the shopper
+    // what went wrong; they can refresh to retry.
+    if (configLoadFailed) {
+      root.innerHTML = `<div class="printdock-loading">${escapeHtml(
+        "Upload form unavailable. Please refresh the page to try again.",
+      )}</div>`;
+      updateCartState();
+      return;
+    }
+    // No field targets this product (or collection) — hide the block and
+    // release the gate so the customer can add to cart normally.
     if (!fieldConfig.id) {
       root.innerHTML = "";
       root.style.display = "none";
       root.setAttribute("aria-hidden", "true");
+      isRequired = false;
+      isBlocked = false;
+      updateCartState();
       return;
     }
     // Cart/uploads state is not rehydrated from the server on reload, so any stored
@@ -447,6 +510,7 @@
     renderUI();
     setupAddToCartGuard();
     setupCartAddFetchInterceptor();
+    setupCartChangeFetchInterceptor();
     setupCartAddXHRInterceptor();
     setupProductQuantityListener();
     setupPagehideCleanup();
@@ -478,9 +542,21 @@
       if (payload.field) {
         fieldConfig = Object.assign({}, DEFAULT_CONFIG, payload.field);
       }
+      feeConfig = payload.feeConfig || null;
+      currencyCode = feeConfig?.currencyCode || "USD";
+      currencyDecimals = Number.isFinite(feeConfig?.currencyDecimals)
+        ? Number(feeConfig.currencyDecimals)
+        : 2;
+      configLoadFailed = false;
     } catch (error) {
       console.error("PrintDock config fetch error:", error);
       fieldConfig = { ...DEFAULT_CONFIG };
+      // Fail-safe: if our server is unreachable we cannot confirm whether
+      // upload is required, so respect the merchant's block-level intent
+      // (BLOCK_REQUIRED) instead of silently letting cart-adds through.
+      configLoadFailed = true;
+      isRequired = BLOCK_REQUIRED;
+      return;
     }
 
     // If no field is configured, don't block checkout by default.
@@ -790,7 +866,34 @@
             showError(validationError);
             return;
           }
-          injectCartProperties(form);
+          const formData = new FormData(form);
+          const artworkPayload = {
+            id: String(formData.get("id") || root.dataset.variantId || ""),
+            quantity: Math.max(1, Number(formData.get("quantity") || 1)),
+          };
+          const multiItemPayload = buildMultiItemCartAddPayload(artworkPayload);
+          if (!multiItemPayload) {
+            injectCartProperties(form);
+            return;
+          }
+          e.preventDefault();
+          fetch("/cart/add.js", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(multiItemPayload),
+            credentials: "same-origin",
+          })
+            .then(async (response) => {
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `Cart add failed (${response.status})`);
+              }
+              window.location.assign("/cart");
+            })
+            .catch((error) => {
+              showError("Could not add this upload to cart. Please try again.");
+              console.error("PrintDock cart add failed", error);
+            });
         });
       });
     };
@@ -831,6 +934,65 @@
     return `/apps/${appHandle}/app/uploads?session=${encodedSession}`;
   }
 
+  function getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles) {
+    return successfulFiles.reduce((sum, entry) => {
+      if (!entry.pricing) return sum;
+      const candidateMinor =
+        entry.pricing.filePriceMinorUnits != null
+          ? Number(entry.pricing.filePriceMinorUnits)
+          : null;
+      if (Number.isFinite(candidateMinor) && candidateMinor > 0) {
+        return sum + Math.round(candidateMinor);
+      }
+      const fileUnitPrice =
+        entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
+      if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
+      return sum + toMinorUnits(fileUnitPrice);
+    }, 0);
+  }
+
+  function decomposeFeeMinorUnits(totalMinorUnits) {
+    if (!feeConfig || !Array.isArray(feeConfig.variants) || totalMinorUnits <= 0) return [];
+    const variants = feeConfig.variants
+      .map((variant) => ({
+        variantId: String(variant.variantId || ""),
+        amountMinorUnits: Number(variant.amountMinorUnits || 0),
+      }))
+      .filter((variant) => variant.variantId && Number.isFinite(variant.amountMinorUnits) && variant.amountMinorUnits > 0)
+      .sort((a, b) => b.amountMinorUnits - a.amountMinorUnits);
+    if (variants.length === 0) return [];
+
+    let remaining = Math.round(totalMinorUnits);
+    const items = [];
+    for (const variant of variants) {
+      const qty = Math.floor(remaining / variant.amountMinorUnits);
+      if (qty > 0) {
+        items.push({
+          id: variant.variantId,
+          quantity: qty,
+          amountMinorUnits: variant.amountMinorUnits,
+        });
+        remaining -= qty * variant.amountMinorUnits;
+      }
+    }
+    if (remaining !== 0) return null;
+    return items;
+  }
+
+  function buildFeeItems(artworkQuantity, unitFeeMinorUnits) {
+    const totalMinorUnits = Math.max(0, Math.round(unitFeeMinorUnits * artworkQuantity));
+    if (totalMinorUnits <= 0) return [];
+    const decomposed = decomposeFeeMinorUnits(totalMinorUnits);
+    if (decomposed === null) return null;
+    return decomposed.map((entry) => ({
+      id: entry.id,
+      quantity: entry.quantity,
+      properties: {
+        _pd_fee_for: sessionToken,
+      },
+    }));
+  }
+
   function getCartProperties() {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     if (!sessionToken || successfulFiles.length === 0) return {};
@@ -844,27 +1006,10 @@
     if (printUrl) {
       properties["_Print Ready File"] = printUrl;
     }
-
-    // `_pd_calculated_price` carries only the PER-UNIT dynamic upload fee.
-    // The Cart Transform adds this fee on top of the variant base price and
-    // applies the resulting per-unit total with `fixedPricePerUnit`.
-    //
-    // Each file contributes its per-unit `filePrice`; line quantity scales naturally.
-    const unitPriceForLine = successfulFiles.reduce((sum, entry) => {
-      if (!entry.pricing) return sum;
-      const fileUnitPrice =
-        entry.pricing.filePrice != null ? Number(entry.pricing.filePrice) : Number(entry.pricing.total);
-      if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
-      return sum + fileUnitPrice;
-    }, 0);
-    if (Number.isFinite(unitPriceForLine) && unitPriceForLine > 0) {
-      properties._pd_calculated_price = unitPriceForLine.toFixed(2);
-      const baseUnitPrice = Number.isFinite(BASE_VARIANT_PRICE) && BASE_VARIANT_PRICE > 0
-        ? BASE_VARIANT_PRICE
-        : 0;
-      const finalUnitPrice = baseUnitPrice + unitPriceForLine;
-      properties["Upload pricing"] =
-        `$${baseUnitPrice.toFixed(2)} base + $${unitPriceForLine.toFixed(2)} upload fee = $${finalUnitPrice.toFixed(2)} per unit`;
+    const unitFeeMinorUnits = getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles);
+    if (unitFeeMinorUnits > 0) {
+      properties._pd_unit_fee_minor = String(unitFeeMinorUnits);
+      properties._pd_currency = currencyCode;
     }
 
     return properties;
@@ -898,6 +1043,47 @@
     return clonedPayload;
   }
 
+  function extractArtworkItemFromPayload(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    if (Array.isArray(payload.items) && payload.items.length > 0) {
+      const first = payload.items[0];
+      return {
+        id: String(first?.id || first?.variant_id || root.dataset.variantId || ""),
+        quantity: Math.max(1, Number(first?.quantity || 1)),
+      };
+    }
+    return {
+      id: String(payload.id || payload.variant_id || root.dataset.variantId || ""),
+      quantity: Math.max(1, Number(payload.quantity || getProductQuantity())),
+    };
+  }
+
+  function buildMultiItemCartAddPayload(payload) {
+    const properties = getCartProperties();
+    if (Object.keys(properties).length === 0) return null;
+
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    const unitFeeMinorUnits = getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles);
+    const artwork = extractArtworkItemFromPayload(payload);
+    if (!artwork || !artwork.id) return null;
+
+    const feeItems = buildFeeItems(artwork.quantity, unitFeeMinorUnits);
+    if (feeItems === null) {
+      showError("Upload pricing is temporarily unavailable. Please refresh and try again.");
+      return null;
+    }
+
+    const items = [
+      {
+        id: artwork.id,
+        quantity: artwork.quantity,
+        properties,
+      },
+      ...feeItems,
+    ];
+    return { items };
+  }
+
   /** Themes often POST JSON to /cart/add.js without Content-Type: application/json. */
   function tryParseCartJsonBodyString(str) {
     if (typeof str !== "string") return null;
@@ -918,6 +1104,200 @@
     } catch (_error) {
       return false;
     }
+  }
+
+  function isCartChangeRequest(url, method) {
+    if ((method || "GET").toUpperCase() !== "POST") return false;
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return (
+        parsed.pathname === "/cart/change" ||
+        parsed.pathname === "/cart/change.js" ||
+        parsed.pathname === "/cart/update" ||
+        parsed.pathname === "/cart/update.js"
+      );
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async function syncFeeLinesForSession(session, nextQty) {
+    if (!session || !Number.isFinite(nextQty) || nextQty < 1) return;
+    if (!feeConfig || !Array.isArray(feeConfig.variants)) return;
+    const cartRes = await fetch("/cart.js", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!cartRes.ok) return;
+    const cart = await cartRes.json();
+    const items = Array.isArray(cart?.items) ? cart.items : [];
+    const artworkLine = items.find((item) => String(item?.properties?._uc_session || "") === session);
+    if (!artworkLine) return;
+    const unitFeeMinor = Number(artworkLine?.properties?._pd_unit_fee_minor || 0);
+    if (!Number.isFinite(unitFeeMinor) || unitFeeMinor <= 0) return;
+    const desiredFeeItems = buildFeeItems(nextQty, unitFeeMinor);
+    if (!desiredFeeItems) return;
+    debugLog("fee_sync_start", {
+      session,
+      nextQty,
+      unitFeeMinor,
+      desiredFeeItemCount: desiredFeeItems.length,
+    });
+
+    const updates = {};
+    const currentFeeLines = items.filter(
+      (item) => String(item?.properties?._pd_fee_for || "") === session,
+    );
+    const desiredByVariant = new Map();
+    desiredFeeItems.forEach((entry) => {
+      desiredByVariant.set(String(entry.id), Number(entry.quantity || 0));
+    });
+
+    currentFeeLines.forEach((line) => {
+      const variantId = String(line.variant_id || "");
+      const desiredQty = desiredByVariant.has(variantId) ? desiredByVariant.get(variantId) : 0;
+      updates[line.key] = Number(desiredQty || 0);
+      desiredByVariant.delete(variantId);
+    });
+
+    const missingFeeItems = Array.from(desiredByVariant.entries())
+      .filter(([, qty]) => Number(qty) > 0)
+      .map(([variantId, qty]) => ({
+        id: variantId,
+        quantity: qty,
+        properties: { _pd_fee_for: session },
+      }));
+
+    isFeeSyncInFlight = true;
+    try {
+      if (Object.keys(updates).length > 0) {
+        debugLog("fee_sync_updates", { session, updates });
+        await fetch("/cart/update.js", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ updates }),
+        });
+      }
+      if (missingFeeItems.length > 0) {
+        debugLog("fee_sync_missing_fee_lines_add", {
+          session,
+          missingCount: missingFeeItems.length,
+          items: missingFeeItems,
+        });
+        await fetch("/cart/add.js", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ items: missingFeeItems }),
+        });
+      }
+    } finally {
+      isFeeSyncInFlight = false;
+      debugLog("fee_sync_done", { session });
+    }
+  }
+
+  function parseCartMutationBodyObject(rawBody) {
+    if (!rawBody) return null;
+    if (rawBody instanceof URLSearchParams) {
+      const out = {};
+      rawBody.forEach((value, key) => {
+        out[key] = value;
+      });
+      if (out.updates) {
+        try {
+          out.updates = JSON.parse(String(out.updates));
+        } catch (_error) {
+          // keep raw updates string
+        }
+      }
+      return out;
+    }
+    if (rawBody instanceof FormData) {
+      const out = {};
+      rawBody.forEach((value, key) => {
+        out[key] = typeof value === "string" ? value : String(value);
+      });
+      return out;
+    }
+    if (typeof rawBody === "string") {
+      const jsonParsed = tryParseCartJsonBodyString(rawBody);
+      if (jsonParsed && typeof jsonParsed === "object") return jsonParsed;
+      try {
+        return Object.fromEntries(new URLSearchParams(rawBody).entries());
+      } catch (_error) {
+        return null;
+      }
+    }
+    if (typeof rawBody === "object") return rawBody;
+    return null;
+  }
+
+  async function parseCartMutationBodyFromFetch(input, init) {
+    if (init?.body) {
+      return parseCartMutationBodyObject(init.body);
+    }
+    if (!(input instanceof Request)) return null;
+
+    const contentType = input.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return input.clone().json().catch(() => null);
+    }
+    if (
+      contentType.includes("application/x-www-form-urlencoded") ||
+      contentType.includes("multipart/form-data")
+    ) {
+      const formData = await input.clone().formData().catch(() => null);
+      return parseCartMutationBodyObject(formData);
+    }
+    const text = await input.clone().text().catch(() => "");
+    return parseCartMutationBodyObject(text);
+  }
+
+  function getArtworkLineByChangeIdentifier(items, identifier, lineIndexRaw) {
+    if (!Array.isArray(items)) return null;
+    const lineIndex = Number(lineIndexRaw);
+    if (Number.isFinite(lineIndex) && lineIndex > 0 && items[lineIndex - 1]) {
+      return items[lineIndex - 1];
+    }
+    const id = String(identifier || "");
+    if (!id) return null;
+    const byKey = items.find((item) => String(item.key || "") === id);
+    if (byKey) return byKey;
+    return items.find((item) => String(item.variant_id || "") === id) || null;
+  }
+
+  function collectSessionQuantityChangesFromMutation(items, bodyObj) {
+    const changes = new Map();
+    if (!bodyObj || typeof bodyObj !== "object") return changes;
+
+    const singleTarget = getArtworkLineByChangeIdentifier(items, bodyObj.id, bodyObj.line);
+    if (singleTarget) {
+      const session = String(singleTarget?.properties?._uc_session || "");
+      const feeFor = String(singleTarget?.properties?._pd_fee_for || "");
+      const nextQty = Number(bodyObj.quantity || 0);
+      if (session && !feeFor && Number.isFinite(nextQty) && nextQty > 0) {
+        changes.set(session, nextQty);
+      }
+    }
+
+    if (bodyObj.updates && typeof bodyObj.updates === "object") {
+      Object.entries(bodyObj.updates).forEach(([identifier, qtyRaw]) => {
+        const line = getArtworkLineByChangeIdentifier(items, identifier, null);
+        if (!line) return;
+        const session = String(line?.properties?._uc_session || "");
+        const feeFor = String(line?.properties?._pd_fee_for || "");
+        const nextQty = Number(qtyRaw || 0);
+        if (session && !feeFor && Number.isFinite(nextQty) && nextQty > 0) {
+          changes.set(session, nextQty);
+        }
+      });
+    }
+    return changes;
+  }
+    });
   }
 
   function setupCartAddFetchInterceptor() {
@@ -943,15 +1323,30 @@
         throw new Error(validationError);
       }
 
-      const properties = getCartProperties();
-      if (Object.keys(properties).length === 0) {
-        return originalFetch(input, init);
-      }
+      let payloadForMultiItem = null;
 
       if (!init && input instanceof Request) {
         try {
           const parsed = await input.clone().json();
           if (parsed && typeof parsed === "object") {
+            payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+            if (payloadForMultiItem) {
+              return originalFetch(input.url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify(payloadForMultiItem),
+                credentials: input.credentials,
+                mode: input.mode,
+                redirect: input.redirect,
+                referrer: input.referrer,
+                referrerPolicy: input.referrerPolicy,
+                integrity: input.integrity,
+                keepalive: input.keepalive,
+                signal: input.signal,
+              });
+            }
+            const properties = getCartProperties();
+            if (Object.keys(properties).length === 0) return originalFetch(input, init);
             const nextPayload = mergePropertiesIntoJsonPayload(parsed, properties);
             const headers = new Headers(input.headers);
             headers.set("content-type", "application/json");
@@ -979,6 +1374,28 @@
         ) {
           try {
             const formData = await input.clone().formData();
+            const parsed = {
+              id: String(formData.get("id") || root.dataset.variantId || ""),
+              quantity: Math.max(1, Number(formData.get("quantity") || 1)),
+            };
+            payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+            if (payloadForMultiItem) {
+              return originalFetch(input.url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify(payloadForMultiItem),
+                credentials: input.credentials,
+                mode: input.mode,
+                redirect: input.redirect,
+                referrer: input.referrer,
+                referrerPolicy: input.referrerPolicy,
+                integrity: input.integrity,
+                keepalive: input.keepalive,
+                signal: input.signal,
+              });
+            }
+            const properties = getCartProperties();
+            if (Object.keys(properties).length === 0) return originalFetch(input, init);
             const nextBody = new FormData();
             formData.forEach((value, key) => nextBody.append(key, value));
             applyPropertiesToFormData(nextBody, properties);
@@ -1002,6 +1419,21 @@
       }
 
       if (init && init.body instanceof FormData) {
+        const parsed = {
+          id: String(init.body.get("id") || root.dataset.variantId || ""),
+          quantity: Math.max(1, Number(init.body.get("quantity") || 1)),
+        };
+        payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+        if (payloadForMultiItem) {
+          return originalFetch(input, {
+            ...init,
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(payloadForMultiItem),
+          });
+        }
+        const properties = getCartProperties();
+        if (Object.keys(properties).length === 0) return originalFetch(input, init);
         const nextBody = new FormData();
         init.body.forEach((value, key) => nextBody.append(key, value));
         applyPropertiesToFormData(nextBody, properties);
@@ -1023,6 +1455,13 @@
           parsed = tryParseCartJsonBodyString(init.body);
         }
         if (parsed && typeof parsed === "object") {
+          payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+          if (payloadForMultiItem) {
+            headers.set("content-type", "application/json");
+            return originalFetch(input, { ...init, headers, body: JSON.stringify(payloadForMultiItem) });
+          }
+          const properties = getCartProperties();
+          if (Object.keys(properties).length === 0) return originalFetch(input, init);
           const nextPayload = mergePropertiesIntoJsonPayload(parsed, properties);
           headers.set("content-type", "application/json");
           return originalFetch(input, { ...init, headers, body: JSON.stringify(nextPayload) });
@@ -1030,6 +1469,76 @@
       }
 
       return originalFetch(input, init);
+    };
+  }
+
+  function setupCartChangeFetchInterceptor() {
+    if (window.__printdockCartChangePatched) return;
+    window.__printdockCartChangePatched = true;
+    const originalFetch = window.fetch.bind(window);
+
+    window.fetch = async (input, init) => {
+      const requestUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input?.url || "";
+      const method = (init && init.method) || (input instanceof Request ? input.method : "GET");
+      if (!isCartChangeRequest(requestUrl, method)) {
+        return originalFetch(input, init);
+      }
+      if (isFeeSyncInFlight) {
+        debugLog("cart_change_skip_reentrant", { requestUrl });
+        return originalFetch(input, init);
+      }
+
+      let sessionsToSync = new Map();
+      try {
+        const [preCartRes, parsedBody] = await Promise.all([
+          originalFetch("/cart.js", {
+            method: "GET",
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+          }),
+          parseCartMutationBodyFromFetch(input, init),
+        ]);
+        if (preCartRes.ok) {
+          const preCart = await preCartRes.json().catch(() => null);
+          const preItems = Array.isArray(preCart?.items) ? preCart.items : [];
+          sessionsToSync = collectSessionQuantityChangesFromMutation(preItems, parsedBody);
+          debugLog("cart_change_sessions_collected", {
+            requestUrl,
+            body: parsedBody,
+            sessionCount: sessionsToSync.size,
+            sessions: Array.from(sessionsToSync.entries()),
+          });
+        }
+      } catch (_error) {
+        sessionsToSync = new Map();
+        debugLog("cart_change_preparse_failed", { requestUrl });
+      }
+
+      const response = await originalFetch(input, init);
+      if (!response.ok || sessionsToSync.size === 0) {
+        debugLog("cart_change_no_sync_needed", {
+          requestUrl,
+          responseOk: response.ok,
+          sessionCount: sessionsToSync.size,
+        });
+        return response;
+      }
+
+      try {
+        for (const [session, nextQty] of sessionsToSync.entries()) {
+          await syncFeeLinesForSession(session, nextQty);
+        }
+      } catch (_error) {
+        // Best-effort sync only.
+        debugLog("cart_change_sync_failed", { requestUrl });
+      }
+      debugLog("cart_change_sync_complete", { requestUrl });
+      return response;
     };
   }
 
@@ -1060,17 +1569,44 @@
         return;
       }
 
-      const properties = getCartProperties();
-      if (Object.keys(properties).length === 0) {
-        return originalSend.call(this, body);
-      }
-
       if (body instanceof FormData) {
+        const parsed = {
+          id: String(body.get("id") || root.dataset.variantId || ""),
+          quantity: Math.max(1, Number(body.get("quantity") || 1)),
+        };
+        const payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+        if (payloadForMultiItem) {
+          try {
+            this.setRequestHeader("Content-Type", "application/json");
+          } catch (_error) {
+            // Ignore if theme/adapter prevents header mutation after open().
+          }
+          return originalSend.call(this, JSON.stringify(payloadForMultiItem));
+        }
+        const properties = getCartProperties();
+        if (Object.keys(properties).length === 0) {
+          return originalSend.call(this, body);
+        }
         applyPropertiesToFormData(body, properties);
         return originalSend.call(this, body);
       }
 
       if (body instanceof URLSearchParams) {
+        const parsed = {
+          id: String(body.get("id") || root.dataset.variantId || ""),
+          quantity: Math.max(1, Number(body.get("quantity") || 1)),
+        };
+        const payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+        if (payloadForMultiItem) {
+          try {
+            this.setRequestHeader("Content-Type", "application/json");
+          } catch (_error) {}
+          return originalSend.call(this, JSON.stringify(payloadForMultiItem));
+        }
+        const properties = getCartProperties();
+        if (Object.keys(properties).length === 0) {
+          return originalSend.call(this, body);
+        }
         applyPropertiesToSearchParams(body, properties);
         return originalSend.call(this, body);
       }
@@ -1078,12 +1614,38 @@
       if (typeof body === "string") {
         const jsonParsed = tryParseCartJsonBodyString(body);
         if (jsonParsed && typeof jsonParsed === "object") {
+          const payloadForMultiItem = buildMultiItemCartAddPayload(jsonParsed);
+          if (payloadForMultiItem) {
+            try {
+              this.setRequestHeader("Content-Type", "application/json");
+            } catch (_error) {}
+            return originalSend.call(this, JSON.stringify(payloadForMultiItem));
+          }
+          const properties = getCartProperties();
+          if (Object.keys(properties).length === 0) {
+            return originalSend.call(this, body);
+          }
           const nextPayload = mergePropertiesIntoJsonPayload(jsonParsed, properties);
           return originalSend.call(this, JSON.stringify(nextPayload));
         }
         try {
           const params = new URLSearchParams(body);
           if (params.has("id") || params.has("items")) {
+            const parsed = {
+              id: String(params.get("id") || root.dataset.variantId || ""),
+              quantity: Math.max(1, Number(params.get("quantity") || 1)),
+            };
+            const payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+            if (payloadForMultiItem) {
+              try {
+                this.setRequestHeader("Content-Type", "application/json");
+              } catch (_error) {}
+              return originalSend.call(this, JSON.stringify(payloadForMultiItem));
+            }
+            const properties = getCartProperties();
+            if (Object.keys(properties).length === 0) {
+              return originalSend.call(this, body);
+            }
             applyPropertiesToSearchParams(params, properties);
             return originalSend.call(this, params.toString());
           }
@@ -1705,9 +2267,18 @@
   }
 
   // ─── BOOTSTRAP ───────────────────────────────────────────────────────
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
+  function boot() {
+    // Install cart-add gates first so they're live before any await in
+    // init() — this closes the race window where a shopper could click
+    // "Add to cart" (or a theme could auto-add) while loadFieldConfig is
+    // still in flight.
+    armCartGuardsEarly();
     init();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
   }
 })();

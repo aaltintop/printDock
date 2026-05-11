@@ -10,14 +10,14 @@
             "quantity": 1,
             "cost": {
               "amountPerQuantity": {
-                "amount": "14.00"
+                "amount": "10.00"
               }
             },
             "priceAttribute": {
-              "value": "not-a-number"
+              "value": "2.42"
             },
             "sessionAttribute": {
-              "value": "session_123"
+              "value": "legacy_session"
             },
             "feeForAttribute": null,
             "sellingPlanAllocation": null,
@@ -29,7 +29,20 @@
       }
     },
     "output": {
-      "operations": []
+      "operations": [
+        {
+          "lineUpdate": {
+            "cartLineId": "gid://shopify/CartLine/1",
+            "price": {
+              "adjustment": {
+                "fixedPricePerUnit": {
+                  "amount": "12.42"
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

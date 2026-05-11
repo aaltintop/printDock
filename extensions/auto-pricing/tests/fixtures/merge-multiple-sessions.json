@@ -1,0 +1,123 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "10.00"
+              }
+            },
+            "priceAttribute": null,
+            "sessionAttribute": {
+              "value": "session_a"
+            },
+            "feeForAttribute": null,
+            "sellingPlanAllocation": null,
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/111"
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/2",
+            "quantity": 4,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "0.50"
+              }
+            },
+            "priceAttribute": null,
+            "sessionAttribute": {
+              "value": "session_a"
+            },
+            "feeForAttribute": {
+              "value": "session_a"
+            },
+            "sellingPlanAllocation": null,
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/222"
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/3",
+            "quantity": 1,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "10.00"
+              }
+            },
+            "priceAttribute": null,
+            "sessionAttribute": {
+              "value": "session_b"
+            },
+            "feeForAttribute": null,
+            "sellingPlanAllocation": null,
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/111"
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/4",
+            "quantity": 2,
+            "cost": {
+              "amountPerQuantity": {
+                "amount": "1.00"
+              }
+            },
+            "priceAttribute": null,
+            "sessionAttribute": {
+              "value": "session_b"
+            },
+            "feeForAttribute": {
+              "value": "session_b"
+            },
+            "sellingPlanAllocation": null,
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/333"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "linesMerge": {
+            "parentVariantId": "gid://shopify/ProductVariant/111",
+            "cartLines": [
+              {
+                "cartLineId": "gid://shopify/CartLine/1",
+                "quantity": 1
+              },
+              {
+                "cartLineId": "gid://shopify/CartLine/2",
+                "quantity": 4
+              }
+            ]
+          }
+        },
+        {
+          "linesMerge": {
+            "parentVariantId": "gid://shopify/ProductVariant/111",
+            "cartLines": [
+              {
+                "cartLineId": "gid://shopify/CartLine/3",
+                "quantity": 1
+              },
+              {
+                "cartLineId": "gid://shopify/CartLine/4",
+                "quantity": 2
+              }
+            ],
+            "title": "Artwork - design 2"
+          }
+        }
+      ]
+    }
+  }
+}

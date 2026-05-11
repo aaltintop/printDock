@@ -1,6 +1,7 @@
 import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
 import { listUploadFields } from "./shop-data.server";
+import { getStoredFeeProductConfig } from "./fee-product.server";
 import {
   detectPrintDockCartTransform,
   type CartTransformStatus,
@@ -115,8 +116,7 @@ function isUnavailableStatus(code: CartTransformStatus["code"]): boolean {
   return (
     code === "verification_unavailable" ||
     code === "permission_denied" ||
-    code === "missing_scope" ||
-    code === "not_supported"
+    code === "missing_scope"
   );
 }
 
@@ -133,6 +133,7 @@ export async function isAppSetupComplete(
   const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
   const shopSettings = shopSettingsDoc.data() ?? {};
   const fields = await listUploadFields(shopDomain);
+  const feeProduct = await getStoredFeeProductConfig(shopDomain);
 
   const { enabled: themeBlockEnabled, verificationUnavailable } = await detectThemeBlockEnabled(admin);
   const cartTransformStatus = await detectPrintDockCartTransform(admin);
@@ -153,7 +154,8 @@ export async function isAppSetupComplete(
     themeStepVerified &&
       fieldsConfigured &&
       cartValidationVerified &&
-      cartTransformReady,
+      cartTransformReady &&
+      Boolean(feeProduct),
   );
 }
 

@@ -49,17 +49,20 @@ This step is auto-verified when PrintDock finds at least one upload field that e
 
 If you use a custom storefront flow, you can still click **Mark as Verified** manually.
 
-### Step 3: Cart Transform (Dynamic Pricing)
+### Step 3: Upload Pricing Setup
 
-If you plan to use upload-based dynamic pricing, the PrintDock **Cart Transform** function must be registered with your shop. The Cart Transform is what tells Shopify to apply PrintDock's calculated upload fee on top of the variant base price during checkout.
+If you plan to use upload-based dynamic pricing, click **Set up upload pricing** in onboarding. PrintDock does two things in one action:
+
+1. Creates a hidden system product named **PrintDock Upload Fee** with fixed fee-denomination variants.
+2. Registers the PrintDock **Cart Transform** function for merge-based cart presentation.
 
 PrintDock auto-checks the registration status and explains the next step right on the Setup page:
 
-- **Not registered:** Click **Enable dynamic pricing**. PrintDock calls `cartTransformCreate` for the `auto-pricing` function and links it to your store.
+- **Not registered:** Click **Set up upload pricing**. PrintDock calls `cartTransformCreate` for the `auto-pricing` function and links it to your store.
 - **Missing permissions:** PrintDock needs the `read_cart_transforms` and `write_cart_transforms` scopes. Click **Reauthorize PrintDock** to grant them.
 - **Function not deployed:** The PrintDock function package has not been deployed to your shop yet. Run `shopify app deploy` and reinstall the app.
-- **Not supported / Shopify Plus required:** Some Cart Transform operations (line price overrides) require Shopify Plus. Static fees still work, but dynamic per-line pricing is unavailable on this plan.
 - **Verification unavailable:** Shopify did not respond with cart transform data for this shop. PrintDock surfaces a fallback message so you can check Shopify settings manually; setup is not blocked in this case.
+- **Cart Transform conflict:** Shopify allows only one Cart Transform owner at a time. If another app already manages Cart Transform, disable it before enabling PrintDock upload pricing.
 
 You no longer need to mark this step as verified manually — registration status is the source of truth.
 
@@ -142,14 +145,38 @@ When a customer visits a product page that has PrintDock configured:
 6. If the file passes all rules, the **Add to Cart** button is unblocked.
 7. When added to cart, line item properties are injected (all visible on the order in Admin):
    - `_uc_session` — links the cart line to the upload session and powers webhooks and Cart Transform.
-   - `_pd_calculated_price` — when positive, the server-calculated per-unit upload fee (the Cart Transform function applies it as `fixedPricePerUnit`, so it scales with the cart line quantity).
+   - `_pd_unit_fee_minor` — per-unit upload fee in minor units (for quantity sync and diagnostics).
+   - `_pd_fee_for` — on PrintDock fee lines, links each denomination line back to the upload session.
    - `_Artwork` — uploaded file name(s), `_View uploads` — link into the app, and optionally `_Print Ready File` for download; see `docs/MERCHANT_FIELDS.md`.
 
 If a customer uploads files but never adds the item to cart, PrintDock removes those non-converted uploads after about 2 hours.
 
 ### Dynamic Pricing at Checkout
 
-If dynamic pricing is enabled and the Cart Transform function is active, the checkout line price is automatically adjusted to match the calculated upload price. This uses Shopify Functions (Cart Transform) and does not require manual price changes.
+If dynamic pricing is enabled and setup is complete, checkout total is built from the artwork line plus PrintDock fee-denomination lines. PrintDock merges these lines for storefront display where supported.
+
+### Fee Product Visibility and Cleanup
+
+- The **PrintDock Upload Fee** product is a system product used for upload pricing.
+- It is intentionally not shown as a normal shopper PDP flow, but because it must remain sellable for cart APIs, it can still appear in raw storefront product feeds such as `/products.json`.
+- On app uninstall, PrintDock archives this product automatically. If you prefer full cleanup, you can delete it manually in Shopify Admin.
+
+### Discounts and Taxes on Fee Lines
+
+PrintDock fee-denomination variants are real product variants. Shopify discounts and taxes can apply to them unless you explicitly exclude them.
+
+- **Discounts:** If you run global discount codes, they may reduce upload fee revenue. Recommended: exclude variants tagged `printdock-fee` in your discount logic (for custom discount functions).
+- **Taxes:** Fee lines use your shop's product tax rules. Verify tax handling if upload fees should be taxed differently from artwork products.
+
+Example discount-function filter rule (conceptual):
+
+```graphql
+NOT product.tags CONTAINS "printdock-fee"
+```
+
+### Selling Plan Limitation
+
+Shopify can reject cart-transform merge/update operations when selling plans are attached. PrintDock skips merge operations for lines with selling plans to prevent broken checkout behavior.
 
 ---
 

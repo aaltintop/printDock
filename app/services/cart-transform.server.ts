@@ -17,7 +17,6 @@ export type CartTransformStatusCode =
   | "missing_scope"
   | "function_not_deployed"
   | "permission_denied"
-  | "not_supported"
   | "verification_unavailable"
   | "unknown_error";
 
@@ -30,6 +29,12 @@ export interface CartTransformStatus {
 
 export interface RegisterCartTransformResult extends CartTransformStatus {
   created: boolean;
+}
+
+export interface CartTransformConflictStatus {
+  hasConflict: boolean;
+  existingCartTransformId: string | null;
+  message: string | null;
 }
 
 interface GraphQLError {
@@ -68,9 +73,9 @@ function classifyMessage(rawMessage: string): {
   }
   if (message.includes("checkout extensibility")) {
     return {
-      code: "not_supported",
+      code: "verification_unavailable",
       message:
-        "Dynamic pricing requires Checkout Extensibility (and Shopify Plus for line price overrides). This store is not eligible for the Cart Transform.",
+        "This store does not expose Cart Transform APIs to PrintDock right now. Verify settings in Shopify admin and try again.",
     };
   }
   if (
@@ -321,6 +326,47 @@ export async function registerPrintDockCartTransform(
       message:
         "Could not register the Cart Transform right now. Check the app logs and try again.",
       created: false,
+    };
+  }
+}
+
+export async function detectCartTransformConflict(
+  admin: AdminLike,
+): Promise<CartTransformConflictStatus> {
+  try {
+    const response = await admin.graphql(`
+      #graphql
+      query PrintDockCartTransformConflict {
+        cartTransforms(first: 25) {
+          nodes {
+            id
+            functionId
+          }
+        }
+      }
+    `);
+    const json = await response.json();
+    const nodes = Array.isArray(json?.data?.cartTransforms?.nodes)
+      ? (json.data.cartTransforms.nodes as Array<{ id?: string; functionId?: string }>)
+      : [];
+    if (nodes.length === 0) {
+      return { hasConflict: false, existingCartTransformId: null, message: null };
+    }
+    if (nodes.length === 1) {
+      return { hasConflict: false, existingCartTransformId: String(nodes[0]?.id || ""), message: null };
+    }
+    return {
+      hasConflict: true,
+      existingCartTransformId: String(nodes[0]?.id || ""),
+      message:
+        "Another app already manages Cart Transform operations on this store. Disable the other Cart Transform app before enabling PrintDock upload pricing.",
+    };
+  } catch (error) {
+    log.error("cart_transform_conflict_check_failed", error, {});
+    return {
+      hasConflict: false,
+      existingCartTransformId: null,
+      message: null,
     };
   }
 }

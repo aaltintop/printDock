@@ -84,7 +84,13 @@ function normalizeAsset(id: string, raw: unknown): UploadAsset {
     pricing: isRecord(asset.pricing)
       ? {
           filePrice: Number(asset.pricing.filePrice ?? 0),
+          filePriceMinorUnits: Number(
+            asset.pricing.filePriceMinorUnits ?? Math.round(Number(asset.pricing.filePrice ?? 0) * 100),
+          ),
           total: Number(asset.pricing.total ?? 0),
+          totalMinorUnits: Number(
+            asset.pricing.totalMinorUnits ?? Math.round(Number(asset.pricing.total ?? 0) * 100),
+          ),
           explanation: String(asset.pricing.explanation ?? ""),
           currency: String(asset.pricing.currency ?? "USD"),
         }

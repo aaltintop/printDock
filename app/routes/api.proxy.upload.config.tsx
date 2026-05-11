@@ -2,6 +2,7 @@ import { data } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { canUseFeature, getPlan } from "../config/plans";
+import { ensureFeeProductForShop } from "../services/fee-product.server";
 import {
   createCollectionIdResolver,
   getActiveFieldForProduct,
@@ -40,6 +41,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const billingPlan = await getEffectiveBillingPlan(shopDomain);
       const planLimits = getPlan(billingPlan.planCode);
       const planAllowsDynamicPricing = canUseFeature(billingPlan.planCode, "dynamicPricing");
+      const feeProduct = planAllowsDynamicPricing
+        ? await ensureFeeProductForShop(shopDomain).catch((error) => {
+            log.warn("fee_product_config_unavailable", String(error), {});
+            return null;
+          })
+        : null;
 
       const planLimitsResponse = {
         maxFileSizeBytes: planLimits.maxFileSizeBytes,
@@ -61,6 +68,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
             planCode: billingPlan.planCode,
           },
           planLimits: planLimitsResponse,
+          feeConfig: feeProduct
+            ? {
+                productId: feeProduct.productId,
+                currencyCode: feeProduct.currencyCode,
+                currencyDecimals: feeProduct.currencyDecimals,
+                variants: feeProduct.variants.map((variant) => ({
+                  variantId: variant.variantId,
+                  amountMinorUnits: variant.amountMinorUnits,
+                })),
+              }
+            : null,
         });
       }
 
@@ -90,6 +108,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
           planCode: billingPlan.planCode,
         },
         planLimits: planLimitsResponse,
+        feeConfig: feeProduct
+          ? {
+              productId: feeProduct.productId,
+              currencyCode: feeProduct.currencyCode,
+              currencyDecimals: feeProduct.currencyDecimals,
+              variants: feeProduct.variants.map((variant) => ({
+                variantId: variant.variantId,
+                amountMinorUnits: variant.amountMinorUnits,
+              })),
+            }
+          : null,
       });
     } catch (err) {
       return internalError("upload_config_failed", err);

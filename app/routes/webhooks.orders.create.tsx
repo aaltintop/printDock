@@ -116,6 +116,8 @@ export async function action({ request }: ActionFunctionArgs) {
           "_View uploads",
           "_pd_file_quantities",
           "_pd_calculated_price",
+          "_pd_unit_fee_minor",
+          "_pd_fee_for",
         ].includes(String(p?.name || "")),
       );
       if (hasPrintDockHints) {

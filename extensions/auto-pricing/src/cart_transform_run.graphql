@@ -8,10 +8,23 @@ query CartTransformRunInput {
           amount
         }
       }
-      priceAttribute: attribute(key: "_pd_calculated_price") {
-        value
+      merchandise {
+        ... on ProductVariant {
+          id
+        }
       }
       sessionAttribute: attribute(key: "_uc_session") {
+        value
+      }
+      feeForAttribute: attribute(key: "_pd_fee_for") {
+        value
+      }
+      sellingPlanAllocation {
+        sellingPlan {
+          id
+        }
+      }
+      priceAttribute: attribute(key: "_pd_calculated_price") {
         value
       }
     }

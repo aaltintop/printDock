@@ -96,7 +96,9 @@ export interface UploadAsset {
   }>;
   pricing: {
     filePrice: number;
+    filePriceMinorUnits: number;
     total: number;
+    totalMinorUnits: number;
     explanation: string;
     currency: string;
   } | null;

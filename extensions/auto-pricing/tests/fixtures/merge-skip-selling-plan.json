@@ -7,27 +7,29 @@
         "lines": [
           {
             "id": "gid://shopify/CartLine/1",
-            "quantity": 2,
+            "quantity": 1,
             "cost": {
               "amountPerQuantity": {
-                "amount": "9.99"
+                "amount": "10.00"
               }
             },
-            "priceAttribute": {
-              "value": "12.00"
-            },
+            "priceAttribute": null,
             "sessionAttribute": {
               "value": "session_123"
             },
             "feeForAttribute": null,
-            "sellingPlanAllocation": null,
+            "sellingPlanAllocation": {
+              "sellingPlan": {
+                "id": "gid://shopify/SellingPlan/1"
+              }
+            },
             "merchandise": {
               "id": "gid://shopify/ProductVariant/111"
             }
           },
           {
             "id": "gid://shopify/CartLine/2",
-            "quantity": 6,
+            "quantity": 1,
             "cost": {
               "amountPerQuantity": {
                 "amount": "1.00"
@@ -49,23 +51,7 @@
       }
     },
     "output": {
-      "operations": [
-        {
-          "linesMerge": {
-            "parentVariantId": "gid://shopify/ProductVariant/111",
-            "cartLines": [
-              {
-                "cartLineId": "gid://shopify/CartLine/1",
-                "quantity": 2
-              },
-              {
-                "cartLineId": "gid://shopify/CartLine/2",
-                "quantity": 6
-              }
-            ]
-          }
-        }
-      ]
+      "operations": []
     }
   }
 }

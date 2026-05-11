@@ -11,7 +11,9 @@ export interface PricingConfig {
 
 export interface PricingResult {
   filePrice: number;
+  filePriceMinorUnits: number;
   total: number;
+  totalMinorUnits: number;
   explanation: string;
   currency: string;
   /**
@@ -25,7 +27,8 @@ export function calculatePrice(
   metadata: FileMetadata,
   config: PricingConfig,
   quantity = 1,
-  currency = "USD"
+  currency = "USD",
+  currencyDecimals = 2,
 ): PricingResult {
   const { mode, unitPrice, minPrice } = config;
   let rawPrice = 0;
@@ -37,7 +40,9 @@ export function calculatePrice(
     // let the merchant fix it. The error code makes it correlatable in logs.
     return {
       filePrice: 0,
+      filePriceMinorUnits: 0,
       total: 0,
+      totalMinorUnits: 0,
       explanation:
         "Pricing is temporarily unavailable for this file. Please contact the merchant.",
       currency,
@@ -54,7 +59,9 @@ export function calculatePrice(
       } else {
         return {
           filePrice: 0,
+          filePriceMinorUnits: 0,
           total: 0,
+          totalMinorUnits: 0,
           explanation: missingDimensionMessage("heightInch"),
           currency,
           error: "missing_dimensions",
@@ -77,7 +84,9 @@ export function calculatePrice(
         } else {
           return {
             filePrice: 0,
+            filePriceMinorUnits: 0,
             total: 0,
+            totalMinorUnits: 0,
             explanation: missingDimensionMessage("widthAndHeightInch"),
             currency,
             error: "missing_dimensions",
@@ -92,7 +101,9 @@ export function calculatePrice(
     default:
       return {
         filePrice: 0,
+        filePriceMinorUnits: 0,
         total: 0,
+        totalMinorUnits: 0,
         explanation:
           "Pricing is temporarily unavailable for this file. Please contact the merchant.",
         currency,
@@ -107,12 +118,18 @@ export function calculatePrice(
       : `Minimum $${minPrice} applied`;
   }
 
-  const roundCurrency = (value: number) => Math.round(value * 100) / 100;
-  const total = roundCurrency(filePrice * quantity);
+  const scale = Math.pow(10, currencyDecimals);
+  const toMinorUnits = (value: number) => Math.round(value * scale);
+  const fromMinorUnits = (minor: number) => minor / scale;
+  const filePriceMinorUnits = toMinorUnits(filePrice);
+  const totalMinorUnits = toMinorUnits(filePrice * quantity);
+  const total = fromMinorUnits(totalMinorUnits);
 
   return {
-    filePrice: roundCurrency(filePrice),
+    filePrice: fromMinorUnits(filePriceMinorUnits),
+    filePriceMinorUnits,
     total,
+    totalMinorUnits,
     explanation: quantity > 1 ? `${explanation} × ${quantity}` : explanation,
     currency,
   };

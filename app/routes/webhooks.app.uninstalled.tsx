@@ -2,6 +2,10 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { rethrowIfShopifyWebhookResponse } from "../lib/webhook-action.server";
 import { purgeShopStorageFirestoreAndSessions } from "../services/storage-retention.server";
+import {
+  archiveFeeProductForShop,
+  clearStoredFeeProductConfig,
+} from "../services/fee-product.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -19,6 +23,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
       } catch (err) {
         log.error("webhook_app_uninstalled_purge_failed", err, { shopDomain: shop });
+      }
+
+      try {
+        await archiveFeeProductForShop(shop);
+        await clearStoredFeeProductConfig(shop);
+        log.event("webhook_app_uninstalled_fee_product_archived", {
+          shopDomain: shop,
+        });
+      } catch (err) {
+        log.error("webhook_app_uninstalled_fee_product_archive_failed", err, {
+          shopDomain: shop,
+        });
       }
 
       log.event("webhook_processed", { topic, shopDomain: shop });

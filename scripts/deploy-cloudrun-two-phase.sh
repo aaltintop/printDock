@@ -13,6 +13,9 @@ set -euo pipefail
 #   FIREBASE_PROJECT_ID
 #   FIREBASE_STORAGE_BUCKET
 #   SCOPES
+#   RUNTIME_SERVICE_ACCOUNT  (optional; defaults to printdock-run@<project>.iam.gserviceaccount.com.
+#                             Must exist with Firestore + Storage + Secret + signBlob roles —
+#                             see docs/DEPLOY_CLOUD_RUN.md Step 3a.)
 #
 # Secret behavior:
 # - Uses Secret Manager secrets `shopify-api-key` and `shopify-api-secret`
@@ -67,6 +70,116 @@ require_env() {
 secret_exists() {
   local secret_name="$1"
   gcloud secrets describe "$secret_name" >/dev/null 2>&1
+}
+
+active_gcloud_account() {
+  gcloud config get-value account 2>/dev/null || true
+}
+
+service_account_exists() {
+  local sa_email="$1"
+  gcloud iam service-accounts describe "$sa_email" --project "$PROJECT_ID" >/dev/null 2>&1
+}
+
+# Returns 0 if `member` (e.g. "user:foo@bar.com" or "serviceAccount:x@y") has
+# `role` bound on the runtime service account itself.
+sa_has_role_on_self() {
+  local sa_email="$1" member="$2" role="$3"
+  gcloud iam service-accounts get-iam-policy "$sa_email" \
+    --project "$PROJECT_ID" \
+    --flatten="bindings[].members" \
+    --filter="bindings.role=$role AND bindings.members=$member" \
+    --format="value(bindings.role)" 2>/dev/null | grep -q "$role"
+}
+
+# Returns 0 if `member` has `role` at the project level.
+project_has_role() {
+  local member="$1" role="$2"
+  gcloud projects get-iam-policy "$PROJECT_ID" \
+    --flatten="bindings[].members" \
+    --filter="bindings.role=$role AND bindings.members=$member" \
+    --format="value(bindings.role)" 2>/dev/null | grep -q "$role"
+}
+
+# Returns 0 if `member` can read `secret_name` either via project-level or
+# secret-level binding.
+member_can_access_secret() {
+  local member="$1" secret_name="$2"
+  if project_has_role "$member" "roles/secretmanager.secretAccessor"; then
+    return 0
+  fi
+  gcloud secrets get-iam-policy "$secret_name" \
+    --project "$PROJECT_ID" \
+    --flatten="bindings[].members" \
+    --filter="bindings.role=roles/secretmanager.secretAccessor AND bindings.members=$member" \
+    --format="value(bindings.role)" 2>/dev/null | grep -q "roles/secretmanager.secretAccessor"
+}
+
+# Preflight: verify the runtime SA exists, the active user can actAs it, and
+# the runtime SA can read the Shopify secrets. Surface fix-it commands instead
+# of letting `gcloud run deploy` fail mid-flight.
+preflight_runtime_service_account() {
+  local sa_email="$1"
+  local active_account
+  active_account="$(active_gcloud_account)"
+
+  if ! service_account_exists "$sa_email"; then
+    echo "ERROR: Runtime service account does not exist: $sa_email" >&2
+    echo "Create it with:" >&2
+    echo "  gcloud iam service-accounts create ${sa_email%@*} \\" >&2
+    echo "    --display-name=\"PrintDock Cloud Run runtime\" \\" >&2
+    echo "    --project=\"$PROJECT_ID\"" >&2
+    echo "" >&2
+    echo "Then follow docs/DEPLOY_CLOUD_RUN.md Step 3a to grant the required roles." >&2
+    exit 1
+  fi
+
+  if [[ -n "$active_account" ]]; then
+    if ! sa_has_role_on_self "$sa_email" "user:$active_account" "roles/iam.serviceAccountUser" \
+      && ! project_has_role "user:$active_account" "roles/iam.serviceAccountUser"; then
+      echo "ERROR: Active account '$active_account' is missing 'roles/iam.serviceAccountUser' on '$sa_email'." >&2
+      echo "Cloud Run needs this so you can deploy revisions that run as the SA." >&2
+      echo "Grant it with:" >&2
+      echo "  gcloud iam service-accounts add-iam-policy-binding \"$sa_email\" \\" >&2
+      echo "    --member=\"user:$active_account\" \\" >&2
+      echo "    --role=\"roles/iam.serviceAccountUser\" \\" >&2
+      echo "    --project=\"$PROJECT_ID\"" >&2
+      exit 1
+    fi
+  else
+    echo "WARNING: Could not resolve active gcloud account; skipping actAs check." >&2
+  fi
+}
+
+# Preflight: verify the runtime SA can read each Shopify secret. Mirrors the
+# Cloud Run revision-startup error and prints the exact remediation command.
+preflight_runtime_secret_access() {
+  local sa_email="$1"
+  shift
+  local secret member missing=0
+  member="serviceAccount:$sa_email"
+  for secret in "$@"; do
+    if ! secret_exists "$secret"; then
+      continue
+    fi
+    if ! member_can_access_secret "$member" "$secret"; then
+      echo "ERROR: Runtime SA '$sa_email' is missing 'roles/secretmanager.secretAccessor' on secret '$secret'." >&2
+      echo "Grant it with:" >&2
+      echo "  gcloud secrets add-iam-policy-binding \"$secret\" \\" >&2
+      echo "    --member=\"$member\" \\" >&2
+      echo "    --role=\"roles/secretmanager.secretAccessor\" \\" >&2
+      echo "    --project=\"$PROJECT_ID\"" >&2
+      missing=1
+    fi
+  done
+  if [[ "$missing" -eq 1 ]]; then
+    echo "" >&2
+    echo "Or grant project-wide once (matches docs/DEPLOY_CLOUD_RUN.md Step 3a):" >&2
+    echo "  gcloud projects add-iam-policy-binding \"$PROJECT_ID\" \\" >&2
+    echo "    --member=\"$member\" \\" >&2
+    echo "    --role=\"roles/secretmanager.secretAccessor\"" >&2
+    exit 1
+  fi
 }
 
 create_or_rotate_secret() {
@@ -159,6 +272,7 @@ deploy_base() {
     --env-vars-file "$env_file"
     --port "$PORT"
     --min-instances "$MIN_INSTANCES"
+    --service-account "$RUNTIME_SERVICE_ACCOUNT"
   )
 
   if [[ "$ALLOW_UNAUTH" == "1" ]]; then
@@ -180,8 +294,19 @@ cd "$REPO_ROOT"
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 
+# Default the runtime SA so the script works even if .cloudrun.env predates the
+# dedicated-SA convention. The SA must exist with Firestore + Storage + Secret
+# + signBlob roles before this script runs — see docs/DEPLOY_CLOUD_RUN.md Step 3a.
+RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-printdock-run@${PROJECT_ID}.iam.gserviceaccount.com}"
+echo "Runtime service account: $RUNTIME_SERVICE_ACCOUNT"
+
+preflight_runtime_service_account "$RUNTIME_SERVICE_ACCOUNT"
+
 create_or_rotate_secret "$SECRET_API_KEY_NAME" "${SHOPIFY_API_KEY:-}"
 create_or_rotate_secret "$SECRET_API_SECRET_NAME" "${SHOPIFY_API_SECRET:-}"
+
+preflight_runtime_secret_access "$RUNTIME_SERVICE_ACCOUNT" \
+  "$SECRET_API_KEY_NAME" "$SECRET_API_SECRET_NAME"
 
 echo "Phase 1/2: deploy without SHOPIFY_APP_URL"
 deploy_base 0

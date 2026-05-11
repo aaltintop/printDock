@@ -14,10 +14,12 @@ import {
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 import { detectThemeBlockEnabled } from "../services/app-setup-status.server";
 import {
+  detectCartTransformConflict,
   detectPrintDockCartTransform,
   registerPrintDockCartTransform,
   type CartTransformStatusCode,
 } from "../services/cart-transform.server";
+import { ensureFeeProductForShop, getStoredFeeProductConfig } from "../services/fee-product.server";
 
 type SetupState = {
   themeBlockEnabled: boolean;
@@ -29,7 +31,9 @@ type SetupState = {
   cartTransformStatusCode: CartTransformStatusCode;
   cartTransformVerificationUnavailable: boolean;
   cartTransformVerificationMessage: string | null;
+  cartTransformConflictMessage: string | null;
   fieldsConfigured: boolean;
+  feeProductConfigured: boolean;
   themeEditorUrl: string;
   reauthUrl: string;
 };
@@ -38,7 +42,6 @@ const CART_TRANSFORM_UNAVAILABLE_CODES = new Set<CartTransformStatusCode>([
   "verification_unavailable",
   "permission_denied",
   "missing_scope",
-  "not_supported",
 ]);
 
 function normalizeRequestedPath(input: string | null): string | null {
@@ -63,19 +66,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const [
         themeStatus,
         cartTransformStatus,
+        cartTransformConflict,
         fields,
         uploads,
         jobs,
         billingPlan,
         stats,
+        feeProduct,
       ] = await Promise.all([
         detectThemeBlockEnabled(admin),
         detectPrintDockCartTransform(admin),
+        detectCartTransformConflict(admin),
         listUploadFields(shopDomain),
         listUploadSessions(shopDomain),
         listOrderJobs(shopDomain),
         getEffectiveBillingPlan(shopDomain),
         computeDashboardStats(shopDomain),
+        getStoredFeeProductConfig(shopDomain),
       ]);
 
       const fieldsConfigured = fields.length > 0;
@@ -102,8 +109,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         cartTransformStatusCode: cartTransformStatus.code,
         cartTransformVerificationUnavailable,
         cartTransformVerificationMessage: cartTransformStatus.message,
+        cartTransformConflictMessage: cartTransformConflict.message,
         themeEditorUrl,
         reauthUrl,
+        feeProductConfigured: Boolean(feeProduct),
       };
 
       const themeStepVerified =
@@ -114,13 +123,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       // as soft passes so merchants on plans without Cart Transform are not
       // blocked from finishing onboarding.
       const cartTransformStepReady =
-        setup.cartTransformEnabled || cartTransformVerificationUnavailable;
+        (setup.cartTransformEnabled || cartTransformVerificationUnavailable) &&
+        !setup.cartTransformConflictMessage;
 
       const setupComplete =
         themeStepVerified &&
         setup.fieldsConfigured &&
         setup.cartValidationVerified &&
-        cartTransformStepReady;
+        cartTransformStepReady &&
+        setup.feeProductConfigured;
 
       const checks = [
         {
@@ -133,7 +144,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           id: "onboarding",
           label: "Setup wizard completed",
           help: "Cart validation and dynamic pricing have both been verified.",
-          pass: Boolean(setup.cartValidationVerified && cartTransformStepReady),
+          pass: Boolean(
+            setup.cartValidationVerified && cartTransformStepReady && setup.feeProductConfigured,
+          ),
         },
         {
           id: "fields",
@@ -225,11 +238,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (intent === "register_cart_transform") {
         log.event("onboarding_register_cart_transform", {});
+        const conflict = await detectCartTransformConflict(admin);
+        if (conflict.hasConflict) {
+          return data({
+            ok: false,
+            intent: "register_cart_transform",
+            cartTransform: {
+              code: "unknown_error" as CartTransformStatusCode,
+              enabled: false,
+              created: false,
+              cartTransformId: null,
+              message: conflict.message,
+            },
+          });
+        }
+        const feeProduct = await ensureFeeProductForShop(session.shop);
         const result = await registerPrintDockCartTransform(admin);
         const okStatuses: CartTransformStatusCode[] = ["active"];
         return data({
           ok: okStatuses.includes(result.code),
           intent: "register_cart_transform",
+          feeProductConfigured: Boolean(feeProduct),
           cartTransform: {
             code: result.code,
             enabled: result.enabled,
@@ -294,7 +323,7 @@ function CartTransformExplanation({
       return (
         <Text as="p" tone="subdued">
           Cart properties are reaching Shopify, but the Cart Transform is not registered yet.
-          Click &ldquo;Enable dynamic pricing&rdquo; to register it for this store.
+          Click &ldquo;Set up upload pricing&rdquo; to register it for this store.
         </Text>
       );
     case "missing_scope":
@@ -316,13 +345,6 @@ function CartTransformExplanation({
         <Text as="p" tone="critical">
           {message ??
             "Shopify denied access to Cart Transform APIs for this store. Confirm the installer has the right permissions."}
-        </Text>
-      );
-    case "not_supported":
-      return (
-        <Text as="p" tone="caution">
-          {message ??
-            "Dynamic price overrides require Shopify Plus on this Cart Transform operation. Static fees still work."}
         </Text>
       );
     case "verification_unavailable":
@@ -375,10 +397,12 @@ export default function OnboardingPage() {
       ? CART_TRANSFORM_UNAVAILABLE_CODES.has(cartTransformResult.cartTransform.code)
       : setup.cartTransformVerificationUnavailable;
   const showRegisterButton =
-    !liveCartTransformEnabled &&
+    !setup.cartTransformConflictMessage &&
+    (!liveCartTransformEnabled || !setup.feeProductConfigured) &&
     (liveCartTransformCode === "missing" ||
       liveCartTransformCode === "function_not_deployed" ||
-      liveCartTransformCode === "unknown_error");
+      liveCartTransformCode === "unknown_error" ||
+      liveCartTransformCode === "active");
 
   return (
     <Page title="PrintDock Setup">
@@ -489,9 +513,14 @@ export default function OnboardingPage() {
               />
             </InlineStack>
             <Text as="p" tone="subdued">
-              If you plan to charge customers based on file size or dimensions, register the
-              PrintDock Cart Transform so Shopify applies the calculated price to the cart line.
+              Set up PrintDock upload pricing. This creates the hidden fee product and registers
+              Cart Transform for bundled fee handling on every Shopify plan.
             </Text>
+            {setup.cartTransformConflictMessage ? (
+              <Text as="p" tone="critical">
+                {setup.cartTransformConflictMessage}
+              </Text>
+            ) : null}
             <CartTransformExplanation
               code={liveCartTransformCode}
               message={liveCartTransformMessage}
@@ -506,7 +535,7 @@ export default function OnboardingPage() {
               <fetcher.Form method="post">
                 <input type="hidden" name="intent" value="register_cart_transform" />
                 <Button submit loading={fetcher.state === "submitting"} variant="primary">
-                  Enable dynamic pricing
+                  Set up upload pricing
                 </Button>
               </fetcher.Form>
             ) : null}

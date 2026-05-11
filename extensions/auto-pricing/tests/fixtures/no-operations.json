@@ -14,7 +14,12 @@
               }
             },
             "priceAttribute": null,
-            "sessionAttribute": null
+            "sessionAttribute": null,
+            "feeForAttribute": null,
+            "sellingPlanAllocation": null,
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/111"
+            }
           }
         ]
       }
