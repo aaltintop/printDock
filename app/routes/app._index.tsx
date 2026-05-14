@@ -18,22 +18,35 @@ import {
   computeDashboardStats,
   getEffectiveBillingPlan,
   listOrderJobs,
-  listUploadSessions,
 } from "../services/shop-data.server";
+import {
+  ensurePrintDockCartTransformReady,
+  syncPrintDockCartTransformHmacMirror,
+} from "../services/cart-transform.server";
 import { authenticate } from "../shopify.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     try {
-      const { session } = await authenticate.admin(request);
+      const { session, admin } = await authenticate.admin(request);
       const shopDomain = session.shop;
       setLogShopDomain(shopDomain);
       log.event("admin_page_view", { path: "/app" });
 
-      const [stats, sessions, jobs, billingPlan] = await Promise.all([
+      try {
+        await ensurePrintDockCartTransformReady(admin, shopDomain);
+        await syncPrintDockCartTransformHmacMirror(admin, shopDomain);
+      } catch (syncErr) {
+        log.warn(
+          "cart_transform_hmac_app_home_sync_failed",
+          syncErr instanceof Error ? syncErr.message : String(syncErr),
+          { shopDomain },
+        );
+      }
+
+      const [stats, jobs, billingPlan] = await Promise.all([
         computeDashboardStats(shopDomain),
-        listUploadSessions(shopDomain),
         listOrderJobs(shopDomain),
         getEffectiveBillingPlan(shopDomain),
       ]);

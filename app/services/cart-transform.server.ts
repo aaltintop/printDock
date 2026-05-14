@@ -1,4 +1,9 @@
 import { log } from "../lib/logger.server";
+import {
+  ensureHmacSecret,
+  getHmacSecretFromFirestore,
+  mirrorHmacSecretToCartTransformOwner,
+} from "./shop-secret.server";
 
 /**
  * Function handle of the PrintDock Cart Transform extension.
@@ -130,9 +135,9 @@ function classifyGraphQLErrors(errors: GraphQLError[]): {
   }
   return errors.length > 0
     ? {
-        code: "unknown_error",
-        message: String(errors[0]?.message ?? "Unexpected Cart Transform error."),
-      }
+      code: "unknown_error",
+      message: String(errors[0]?.message ?? "Unexpected Cart Transform error."),
+    }
     : null;
 }
 
@@ -207,11 +212,79 @@ export async function detectPrintDockCartTransform(
   }
 }
 
+async function mirrorHmacToActiveCartTransformIfPossible(
+  admin: AdminLike,
+  shopDomain: string | undefined,
+  cartTransformId: string | null,
+): Promise<void> {
+  if (!shopDomain || !cartTransformId) return;
+  const key = await getHmacSecretFromFirestore(shopDomain);
+  if (!key) return;
+  const result = await mirrorHmacSecretToCartTransformOwner(admin, cartTransformId, key);
+  if (!result.ok) {
+    log.warn(
+      "printdock_cart_transform_hmac_mirror_failed",
+      String(result.message || "unknown"),
+      { cartTransformId },
+    );
+  }
+}
+
+/**
+ * Ensures the Cart Transform function input can read the HMAC on the transform owner
+ * (`cartTransform.pricingHmac`). Idempotent; safe to call from app loaders.
+ */
+export async function syncPrintDockCartTransformHmacMirror(
+  admin: AdminLike,
+  shopDomain: string,
+): Promise<void> {
+  const status = await detectPrintDockCartTransform(admin);
+  if (!status.enabled || !status.cartTransformId) return;
+  await mirrorHmacToActiveCartTransformIfPossible(admin, shopDomain, status.cartTransformId);
+}
+
+/**
+ * Self-heal helper for stores where onboarding never completed:
+ * ensure the HMAC key exists and register/mirror the PrintDock cart transform.
+ */
+export async function ensurePrintDockCartTransformReady(
+  admin: AdminLike,
+  shopDomain: string,
+): Promise<RegisterCartTransformResult | null> {
+  try {
+    await ensureHmacSecret(admin, shopDomain);
+  } catch (error) {
+    log.warn(
+      "cart_transform_autoheal_hmac_failed",
+      error instanceof Error ? error.message : String(error),
+      { shopDomain },
+    );
+    return null;
+  }
+
+  const conflict = await detectCartTransformConflict(admin);
+  if (conflict.hasConflict) {
+    log.warn("cart_transform_autoheal_conflict", String(conflict.message || "conflict"), { shopDomain });
+    return null;
+  }
+
+  const result = await registerPrintDockCartTransform(admin, shopDomain);
+  if (!result.enabled) {
+    log.warn("cart_transform_autoheal_register_failed", String(result.message || result.code), {
+      shopDomain,
+      code: result.code,
+    });
+  }
+  return result;
+}
+
 export async function registerPrintDockCartTransform(
   admin: AdminLike,
+  shopDomain?: string,
 ): Promise<RegisterCartTransformResult> {
   const existing = await detectPrintDockCartTransform(admin);
   if (existing.enabled) {
+    await mirrorHmacToActiveCartTransformIfPossible(admin, shopDomain, existing.cartTransformId);
     return { ...existing, created: false };
   }
   if (
@@ -289,6 +362,7 @@ export async function registerPrintDockCartTransform(
       log.event("cart_transform_registered", {
         cartTransformId: String(created.id),
       });
+      await mirrorHmacToActiveCartTransformIfPossible(admin, shopDomain, String(created.id));
       return {
         code: "active",
         enabled: true,
