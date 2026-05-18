@@ -4,27 +4,27 @@
 # Cached independently of source changes — invalidated only when package*.json
 # changes. With Kaniko / BuildKit caching this becomes a cache hit on most
 # deploys.
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN echo ">>> PrintDock Docker deps: npm ci..." && npm ci
 
 # ---- 2) Build the React Router server bundle ----
 FROM deps AS builder
 WORKDIR /app
 COPY . .
-RUN npm run build
+RUN echo ">>> PrintDock Docker builder: npm run build (can take several minutes; quiet is normal)" && npm run build
 
 # ---- 3) Production-only dependencies (no devDependencies) ----
 # Independent stage so the runner can copy a slim node_modules. Cache key is
 # also package*.json, so cache hits whenever lockfile is unchanged.
-FROM node:20-alpine AS prod_deps
+FROM node:22-alpine AS prod_deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN echo ">>> PrintDock Docker prod_deps: npm ci --omit=dev..." && npm ci --omit=dev && npm cache clean --force
 
 # ---- 4) Tiny runtime image ----
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 # Injected by CI (e.g. Kaniko `--build-arg`). Shown on Admin → Release notes.

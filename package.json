@@ -1,6 +1,6 @@
 {
   "name": "printdock",
-  "version": "1.0.3",
+  "version": "1.0.6",
   "private": true,
   "scripts": {
     "build": "react-router build",
@@ -26,7 +26,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=20.19 <22 || >=22.12"
+    "node": ">=22.18.0"
   },
   "dependencies": {
     "@react-router/dev": "^7.12.0",

@@ -1,0 +1,11 @@
+api_version = "2025-10"
+
+[[extensions]]
+name = "t:name"
+handle = "printdock-order-files"
+type = "ui_extension"
+uid = "a3d8cd22-38a4-2fac-c9ae-5064833911f6c4911137"
+
+[[extensions.targeting]]
+module = "./src/ActionExtension.jsx"
+target = "admin.order-details.action.render"

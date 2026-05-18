@@ -1193,11 +1193,85 @@
   // Sentinel for cart-add paths when signing fails (dynamic pricing on, fee > 0).
   let lastCartAddBlockReason = null;
 
+  function parsePriceMapJson(raw) {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((entry) => ({
+          sid: String(entry && entry.sid ? entry.sid : "").trim(),
+          token: String(entry && entry.token ? entry.token : "").trim(),
+        }))
+        .filter((entry) => entry.sid && entry.token);
+    } catch (_err) {
+      return [];
+    }
+  }
+
+  function readJwtExp(token) {
+    const parts = String(token || "").split(".");
+    if (parts.length !== 3) return null;
+    try {
+      const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+      const payloadJson = JSON.parse(window.atob(padded));
+      const exp = Number(payloadJson && payloadJson.exp);
+      return Number.isFinite(exp) ? exp : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function upsertPriceMapEntry(priceMap, sid, token) {
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const cleaned = priceMap
+      .filter((entry) => entry.sid !== sid)
+      .filter((entry) => {
+        const exp = readJwtExp(entry.token);
+        return !exp || exp > nowUnix;
+      });
+    cleaned.push({ sid, token });
+    return cleaned.slice(-10);
+  }
+
+  async function upsertCartPriceMapForSessionAsync(sid, token) {
+    if (!sid || !token) {
+      throw new Error("price_map_invalid_input");
+    }
+    const cartRes = await nativeFetch("/cart.js", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!cartRes.ok) {
+      throw new Error(`cart_read_failed_${cartRes.status}`);
+    }
+
+    const cartJson = await cartRes.json();
+    const currentMap = parsePriceMapJson(
+      cartJson && cartJson.attributes ? cartJson.attributes._pd_price_map : "",
+    );
+    const nextMap = upsertPriceMapEntry(currentMap, sid, token);
+    const updateRes = await nativeFetch("/cart/update.js", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        attributes: {
+          _pd_price_map: JSON.stringify(nextMap),
+        },
+      }),
+    });
+    if (!updateRes.ok) {
+      throw new Error(`cart_update_failed_${updateRes.status}`);
+    }
+  }
+
   /**
-   * When dynamic pricing + a positive upload fee apply, POST /sign and set `__pd_price_token`.
-   * Merge fallbacks and native form submit only used to call `getCartProperties()` — they never
-   * attached the token, so checkout stayed at variant list price. This helper is shared by
-   * `buildMultiItemCartAddPayloadAsync` and every merge / XHR fallback path.
+   * When dynamic pricing + a positive upload fee apply, POST /sign and persist the
+   * signed token in cart attribute `_pd_price_map` keyed by `_uc_session`.
+   * The line-item properties remain merchant-friendly (no per-line token noise).
    */
   async function appendSignedPriceTokenToLinePropertiesAsync(lineProps) {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
@@ -1238,12 +1312,11 @@
         debugLog("price_sign_failed", { httpStatus: signRes.status, signOk: signRes.ok });
         return null;
       }
-      const unix = String(Math.floor(Date.now() / 1000));
-      lineProps.__pd_price_token = signJson.token;
+      await upsertCartPriceMapForSessionAsync(String(sessionToken || ""), String(signJson.token || "").trim());
       debugLog("price_sign_ok", {
         priceMinorPerUnit,
-        unix,
         tokenChars: signJson.token.length,
+        mapTargetSession: String(sessionToken || ""),
       });
       return lineProps;
     } catch (_err) {

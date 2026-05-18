@@ -1,0 +1,9 @@
+{
+  "name": "PrintDock files",
+  "heading": "PrintDock files",
+  "download": "Download",
+  "done": "Done",
+  "loading": "Loading PrintDock uploads",
+  "errorHeading": "Could not load PrintDock uploads",
+  "noFiles": "No PrintDock uploads on this order."
+}

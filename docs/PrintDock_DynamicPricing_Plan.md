@@ -43,6 +43,8 @@ Snapshot of how the on-disk code compares to this plan. Update on each ship.
 
 **Shipped in v1.0.3 (2026-05-18)** — streamlined cart line properties (`Artwork`, no `_View uploads` / `_pd_file_quantities`).
 
+**Shipped in v1.0.4 (2026-05-18)** — moved signed pricing proof to cart attribute `__pd_price_map` (no per-line token in order details).
+
 **Shipped in v1.0.2 (2026-05-18)** — signed-token dynamic pricing; merchant-facing notes in `app/data/release-notes.ts` and `CHANGELOG.md`.
 
 **Built and live**
@@ -50,14 +52,14 @@ Snapshot of how the on-disk code compares to this plan. Update on each ship.
 - HMAC secret service (`app/services/shop-secret.server.ts`), Firestore + app-owned shop metafield (`shopify.app.toml` → `[shop.metafields.app.hmac_secret]`).
 - Token sign/verify (`app/services/price-token.server.ts`) + unit tests (`tests/price-token.test.ts`).
 - App-proxy sign endpoint (`app/routes/api.proxy.upload.sign.tsx`).
-- Cart Transform function (Rust) at `extensions/auto-pricing-rs/` with handle `auto-pricing`, reads `__pd_price_token`, verifies HMAC, emits `lineExpand` with `fixedPricePerUnit`. TypeScript twin at `extensions/auto-pricing/` is parked behind `shopify.extension.disabled.toml`.
-- Theme `upload.js` signs the token via `/apps/printdock/api/proxy/upload/sign` and attaches `__pd_price_token` as a line property; single `/cart/add.js` call; legacy `_pd_calculated_price` removed.
-- Order webhook (`app/routes/webhooks.orders.create.tsx`) re-verifies the token and writes `pricingEvidence.{hadPriceToken, tokenValid, signedMinorPerUnit, anomalyReason}` on the `OrderUploadJob`. Anomaly surfaces in `app/routes/app.orders.$id.tsx`.
+- Cart Transform function (Rust) at `extensions/auto-pricing-rs/` with handle `auto-pricing`, reads cart attribute `__pd_price_map` + line `_uc_session`, verifies HMAC, emits `lineExpand` with `fixedPricePerUnit`. TypeScript twin at `extensions/auto-pricing/` is parked behind `shopify.extension.disabled.toml`.
+- Theme `upload.js` signs the token via `/apps/printdock/api/proxy/upload/sign` and persists it in cart attribute `__pd_price_map` keyed by session; no per-line `__pd_price_token`; legacy `_pd_calculated_price` removed.
+- Order webhook (`app/routes/webhooks.orders.create.tsx`) re-verifies the token from `order.note_attributes.__pd_price_map` and writes `pricingEvidence.{hadPriceToken, tokenValid, signedMinorPerUnit, anomalyReason}` on the `OrderUploadJob`. Anomaly surfaces in `app/routes/app.orders.$id.tsx`.
 - Onboarding "Set up upload pricing" step + Cart Transform conflict detection (`app/services/cart-transform.server.ts`).
 - `app/services/app-setup-status.server.ts` requires HMAC secret + Cart Transform registration.
 - `app/services/fee-product.server.ts` deleted; no fee variant lookups in the app or theme.
 - `docs/MERCHANT_GUIDE.md` no longer claims Plus is required and documents selling-plan + Cart Transform conflict caveats.
-- `docs/MERCHANT_FIELDS.md` documents `__pd_price_token` (v1.0.2+) and `Artwork` (v1.0.3+); legacy properties under **Legacy**.
+- `docs/MERCHANT_FIELDS.md` documents `__pd_price_map` as internal cart-level pricing proof and `Artwork` (v1.0.3+); legacy per-line `__pd_price_token` remains under **Legacy**.
 
 **Gaps vs. plan**
 

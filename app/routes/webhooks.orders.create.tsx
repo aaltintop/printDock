@@ -37,7 +37,39 @@ type OrdersCreatePayload = {
   id?: string | number;
   name?: string;
   line_items?: OrdersCreateLine[];
+  note_attributes?: OrderLineProperty[];
 };
+
+type PriceMapEntry = {
+  sid?: string;
+  token?: string;
+};
+
+function priceMapFromCartAttributeJson(raw: string | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(String(raw)) as PriceMapEntry[];
+    if (!Array.isArray(parsed)) return {};
+    return parsed.reduce(
+      (acc: Record<string, string>, entry) => {
+        const sid = String(entry?.sid || "").trim();
+        const token = String(entry?.token || "").trim();
+        if (!sid || !token) return acc;
+        acc[sid] = token;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+  } catch {
+    return {};
+  }
+}
+
+function parseSignedPriceMap(noteAttributes: OrderLineProperty[] | undefined): Record<string, string> {
+  const legacy = priceMapFromCartAttributeJson(noteAttributes?.find((attr) => attr.name === "__pd_price_map")?.value);
+  const primary = priceMapFromCartAttributeJson(noteAttributes?.find((attr) => attr.name === "_pd_price_map")?.value);
+  return { ...legacy, ...primary };
+}
 
 async function buildRenamedAsset({
   shopDomain,
@@ -104,6 +136,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
       const hmacKey = await getHmacSecretFromFirestore(shopDomain);
       const nowUnix = Math.floor(Date.now() / 1000);
+      const signedPriceMapBySession = parseSignedPriceMap(order.note_attributes);
 
       // Process each line item
       for (const line of order.line_items ?? []) {
@@ -117,7 +150,6 @@ export async function action({ request }: ActionFunctionArgs) {
               "_Artwork",
               "Artwork",
               "Print Ready File",
-              "__pd_price_token",
             ].includes(String(p?.name || "")),
           );
           if (hasPrintDockHints) {
@@ -147,7 +179,7 @@ export async function action({ request }: ActionFunctionArgs) {
         const field = sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null;
         const renamePattern = field?.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
 
-        const priceTokenRaw = props.find((p) => p.name === "__pd_price_token")?.value;
+        const priceTokenRaw = signedPriceMapBySession[String(sessionToken)];
         let pricingEvidence: OrderJob["pricingEvidence"] | undefined;
         if (field?.pricing?.enabled || priceTokenRaw) {
           const verified =

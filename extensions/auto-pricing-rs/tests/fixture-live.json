@@ -10,6 +10,9 @@
     }
   },
   "cart": {
+    "priceMap": {
+      "value": "[{\"sid\":\"7d50187c-a933-4630-b468-3935c4041b37\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoibGV2eWFwcHMubXlzaG9waWZ5LmNvbSIsInNpZCI6IjdkNTAxODdjLWE5MzMtNDYzMC1iNDY4LTM5MzVjNDA0MWIzNyIsInAiOjgwNjMwLCJjIjoiVVNEIiwiZXhwIjoxNzc4ODQ1NDcwLCJpYXQiOjE3Nzg3NTkwNzB9.hQ5cVramOuNtuQj0OPTKkEcz4p3-nc6aYthsxh9tli8\"}]"
+    },
     "lines": [
       {
         "id": "gid://shopify/CartLine/5379da2f-2a31-4cf3-b33e-8fd592b66c2b",
@@ -19,8 +22,8 @@
           "id": "gid://shopify/ProductVariant/43869309993057"
         },
         "sellingPlanAllocation": null,
-        "priceToken": {
-          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoibGV2eWFwcHMubXlzaG9waWZ5LmNvbSIsInNpZCI6IjdkNTAxODdjLWE5MzMtNDYzMC1iNDY4LTM5MzVjNDA0MWIzNyIsInAiOjgwNjMwLCJjIjoiVVNEIiwiZXhwIjoxNzc4ODQ1NDcwLCJpYXQiOjE3Nzg3NTkwNzB9.hQ5cVramOuNtuQj0OPTKkEcz4p3-nc6aYthsxh9tli8"
+        "sessionToken": {
+          "value": "7d50187c-a933-4630-b468-3935c4041b37"
         }
       }
     ]

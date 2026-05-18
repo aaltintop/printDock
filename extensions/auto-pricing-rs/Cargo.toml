@@ -1,6 +1,6 @@
 [package]
 name = "auto_pricing"
-version = "1.0.3"
+version = "1.0.6"
 edition = "2021"
 license = "UNLICENSED"
 publish = false

@@ -1,4 +1,5 @@
 use std::process;
+use std::collections::HashMap;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL;
 use base64::Engine as _;
@@ -34,6 +35,12 @@ struct TokenPayload {
     iat: i64,
 }
 
+#[derive(Deserialize)]
+struct PriceMapEntry {
+    sid: String,
+    token: String,
+}
+
 #[shopify_function]
 fn cart_transform_run(
     input: schema::cart_transform_run::Input,
@@ -59,6 +66,20 @@ fn cart_transform_run(
         return Ok(no_changes);
     };
     let hmac_key_bytes = hmac_key.as_bytes();
+    let price_map = merge_price_maps(
+        input
+            .cart()
+            .price_map_legacy()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|s| s.as_str()),
+        input
+            .cart()
+            .price_map()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|s| s.as_str()),
+    );
 
     let mut operations: Vec<schema::Operation> = Vec::new();
 
@@ -67,18 +88,28 @@ fn cart_transform_run(
             continue;
         }
 
-        let Some(token_attr) = line.price_token() else {
+        let Some(session_attr) = line.session_token() else {
             continue;
         };
-        let Some(token_str) = token_attr.value() else {
+        let Some(session_str) = session_attr.value() else {
             continue;
         };
-        let token_raw = token_str.trim();
+        let session_id = session_str.trim();
+        if session_id.is_empty() {
+            continue;
+        }
+
+        let Some(token_raw) = price_map.get(session_id) else {
+            continue;
+        };
         if token_raw.is_empty() {
             continue;
         }
 
         let Some(payload) = verify_price_token(token_raw, hmac_key_bytes) else {
+            continue;
+        };
+        if payload.sid != session_id {
             continue;
         };
 
@@ -117,6 +148,33 @@ fn cart_transform_run(
         return Ok(no_changes);
     }
     Ok(schema::CartTransformRunResult { operations })
+}
+
+fn merge_price_maps(legacy: Option<&str>, primary: Option<&str>) -> HashMap<String, String> {
+    let mut out = parse_price_map(legacy);
+    for (k, v) in parse_price_map(primary) {
+        out.insert(k, v);
+    }
+    out
+}
+
+fn parse_price_map(raw: Option<&str>) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(raw_json) = raw else {
+        return out;
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<PriceMapEntry>>(raw_json) else {
+        return out;
+    };
+    for entry in entries {
+        let sid = entry.sid.trim();
+        let token = entry.token.trim();
+        if sid.is_empty() || token.is_empty() {
+            continue;
+        }
+        out.insert(sid.to_string(), token.to_string());
+    }
+    out
 }
 
 /// Returns the decoded payload iff the JWT's HMAC-SHA256 signature is valid.

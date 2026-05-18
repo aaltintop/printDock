@@ -11,6 +11,32 @@ export type ReleaseNoteEntry = {
 
 export const RELEASE_NOTES: ReleaseNoteEntry[] = [
   {
+    version: "1.0.6",
+    date: "2026-05-18",
+    highlights: [
+      "Print Ready File is now a short, clickable link directly inside the order's line item card — no copy/paste, no block to pin.",
+      "Each click resolves to a freshly signed download URL, so links stay permanent in the order but the underlying storage URL never goes stale.",
+      "More actions → PrintDock files opens a panel listing every upload on the order with a Download button per file.",
+    ],
+  },
+  {
+    version: "1.0.5",
+    date: "2026-05-18",
+    highlights: [
+      "New PrintDock block on the order page in Shopify Admin shows uploaded files with a one-tap Download button.",
+      "No more copying long links from order properties — open or save artwork directly from the order.",
+    ],
+  },
+  {
+    version: "1.0.4",
+    date: "2026-05-18",
+    highlights: [
+      "Order line items are cleaner: internal dynamic-pricing tokens are no longer shown per uploaded item.",
+      "Print Ready File remains visible so merchants and customers can open and download artwork directly.",
+      "Dynamic upload pricing still works by using secure cart-level pricing proof in the background.",
+    ],
+  },
+  {
     version: "1.0.3",
     date: "2026-05-18",
     highlights: [

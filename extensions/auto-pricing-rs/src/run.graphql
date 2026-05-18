@@ -10,6 +10,12 @@ query Input {
     }
   }
   cart {
+    priceMap: attribute(key: "_pd_price_map") {
+      value
+    }
+    priceMapLegacy: attribute(key: "__pd_price_map") {
+      value
+    }
     lines {
       id
       quantity
@@ -24,7 +30,7 @@ query Input {
           id
         }
       }
-      priceToken: attribute(key: "__pd_price_token") {
+      sessionToken: attribute(key: "_uc_session") {
         value
       }
     }

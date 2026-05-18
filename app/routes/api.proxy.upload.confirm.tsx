@@ -7,7 +7,10 @@ import {
   storageOverageUpgradeReason,
   suggestUpgradeFor,
 } from "../config/plans";
-import { createPrintReadyFileToken } from "../services/file-download-token.server";
+import {
+  buildShortLinkPublicUrl,
+  createShortLink,
+} from "../services/short-link.server";
 import { deleteFile, getFileBuffer } from "../services/storage.server";
 import { extractMetadata, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
@@ -316,17 +319,19 @@ export async function action({ request }: ActionFunctionArgs) {
         await adjustShopStorageUsageBytes(shopDomain, counterDelta);
       }
 
-      const downloadSecret = process.env.SHOPIFY_API_SECRET || "";
-      const printReadyToken = createPrintReadyFileToken(
-        shopDomain,
-        storagePath,
-        originalName,
-        downloadSecret,
-      );
-      const printReadyFileUrl =
-        !finalBlocked && printReadyToken
-          ? `https://${shopDomain}/apps/printdock/api/proxy/upload/file?token=${encodeURIComponent(printReadyToken)}`
-          : null;
+      let printReadyFileUrl: string | null = null;
+      if (!finalBlocked) {
+        try {
+          const shortId = await createShortLink(shopDomain, storagePath, originalName);
+          printReadyFileUrl = buildShortLinkPublicUrl(shopDomain, shortId);
+        } catch (shortLinkErr) {
+          log.error(
+            "upload_confirm_short_link_failed",
+            shortLinkErr,
+            { storagePath, originalName },
+          );
+        }
+      }
 
       if (finalBlocked || sessionBlocked) {
         log.event("upload_blocked", {

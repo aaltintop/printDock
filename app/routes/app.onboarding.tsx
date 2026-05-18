@@ -1,8 +1,9 @@
 import { data, useLoaderData, useFetcher } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Badge, BlockStack, Button, Card, InlineStack, Page, Text, Divider } from "@shopify/polaris";
+import { Badge, Banner, BlockStack, Button, Card, InlineStack, List, Page, Text, Divider } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { getPlan } from "../config/plans";
+import { getDynamicPricingPlanMismatch } from "../utils/dynamic-pricing-plan";
 import { db } from "../firebase.server";
 import {
   computeDashboardStats,
@@ -181,16 +182,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
       ];
 
-      const passedCount = checks.filter((check) => check.pass).length;
+      const dynamicPricingPlanMismatch = getDynamicPricingPlanMismatch(
+        fields,
+        billingPlan.planCode,
+      );
+
+      const checksWithPlanGates = [
+        ...checks,
+        {
+          id: "dynamic_pricing_plan",
+          label: "Dynamic pricing matches your plan",
+          help: "No upload field has dynamic pricing enabled while your plan does not support it.",
+          pass: !dynamicPricingPlanMismatch,
+        },
+      ];
+      const passedCountWithPlanGates = checksWithPlanGates.filter((check) => check.pass).length;
 
       return data({
         setup,
         themeStepVerified,
         setupComplete,
         returnTo,
-        checks,
-        passedCount,
-        totalChecks: checks.length,
+        dynamicPricingPlanMismatch,
+        checks: checksWithPlanGates,
+        passedCount: passedCountWithPlanGates,
+        totalChecks: checksWithPlanGates.length,
         metrics: {
           fields: fields.length,
           uploads: uploads.length,
@@ -384,8 +400,16 @@ function CartTransformExplanation({
 }
 
 export default function OnboardingPage() {
-  const { setup, themeStepVerified, setupComplete, checks, passedCount, totalChecks, metrics } =
-    useLoaderData<typeof loader>();
+  const {
+    setup,
+    themeStepVerified,
+    setupComplete,
+    checks,
+    passedCount,
+    totalChecks,
+    metrics,
+    dynamicPricingPlanMismatch,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const ready = passedCount === totalChecks;
 
@@ -442,9 +466,54 @@ export default function OnboardingPage() {
       liveCartTransformCode === "unknown_error" ||
       liveCartTransformCode === "active");
 
+  const mismatchFieldPreview = dynamicPricingPlanMismatch?.fields.slice(0, 5) ?? [];
+  const mismatchFieldOverflow =
+    (dynamicPricingPlanMismatch?.fields.length ?? 0) - mismatchFieldPreview.length;
+
   return (
     <Page title="PrintDock Setup">
       <BlockStack gap="400">
+        {dynamicPricingPlanMismatch ? (
+          <Banner
+            tone="warning"
+            title="Dynamic pricing is on for at least one field, but your plan does not include it"
+          >
+            <BlockStack gap="300">
+              <Text as="p">
+                Your current plan ({getPlan(dynamicPricingPlanMismatch.planCode).displayName}) does
+                not apply upload fees at checkout. Customers may only pay the base product price
+                even though dynamic pricing is still enabled on{" "}
+                {dynamicPricingPlanMismatch.fields.length === 1
+                  ? "one field"
+                  : `${dynamicPricingPlanMismatch.fields.length} fields`}
+                . This often happens after a plan downgrade or when a field was copied from another
+                store.
+              </Text>
+              <List type="bullet">
+                {mismatchFieldPreview.map((field) => (
+                  <List.Item key={field.id}>{field.adminTitle}</List.Item>
+                ))}
+              </List>
+              {mismatchFieldOverflow > 0 ? (
+                <Text as="p" tone="subdued">
+                  And {mismatchFieldOverflow} more field
+                  {mismatchFieldOverflow === 1 ? "" : "s"}.
+                </Text>
+              ) : null}
+              <Text as="p" tone="subdued">
+                Fix: upgrade to {dynamicPricingPlanMismatch.upgradePlanName}, or open each field,
+                turn off &ldquo;Charge using dynamic pricing&rdquo;, and save.
+              </Text>
+              <InlineStack gap="200">
+                <Button url="/app/plans" variant="primary">
+                  View plans
+                </Button>
+                <Button url="/app/fields">Manage fields</Button>
+              </InlineStack>
+            </BlockStack>
+          </Banner>
+        ) : null}
+
         <Card>
           <BlockStack gap="300">
             <InlineStack align="space-between">

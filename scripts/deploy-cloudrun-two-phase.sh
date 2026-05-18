@@ -434,7 +434,9 @@ build_image_with_cache() {
     exit 1
   fi
 
-  echo "==> Building image with Cloud Build + Kaniko cache" >&2
+  echo '==> Building image with Cloud Build + Kaniko cache' >&2
+  echo '    Note: After npm deprecation warnings, logs may pause; Kaniko/Docker RUN steps resume next.' >&2
+  echo '    npm run build can sit quiet for several minutes; that is normal, not frozen.' >&2
   echo "    Repo:  $AR_REPO ($SERVICE_REGION)" >&2
   echo "    Tag:   $tag" >&2
   echo "    Cache: ${SERVICE_REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}/cache" >&2
@@ -871,13 +873,16 @@ else
 fi
 
 case "$MODE" in
-  ext)        do_extensions_only ;;
-  backend)    do_backend_only ;;
-  full)       do_full ;;
+  ext) do_extensions_only ;;
+  backend) do_backend_only ;;
+  full) do_full ;;
   first-time) do_first_time ;;
   patch-toml) do_patch_toml_only ;;
-  status)     do_status ;;
-  *) echo "ERROR: Unknown resolved mode '$MODE'." >&2; exit 1 ;;
+  status) do_status ;;
+  *)
+    echo "ERROR: Unknown resolved mode '$MODE'." >&2
+    exit 1
+    ;;
 esac
 
 echo ""

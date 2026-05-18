@@ -145,14 +145,14 @@ When a customer visits a product page that has PrintDock configured:
 6. If the file passes all rules, the **Add to Cart** button is unblocked.
 7. When added to cart, line item properties are injected (all visible on the order in Admin):
    - `_uc_session` — links the cart line to the upload session and powers webhooks.
-   - `__pd_price_token` — when dynamic pricing applies, a short-lived signed token so Cart Transform can set the final per-unit price at checkout.
    - `Artwork` — uploaded file name(s), and optionally `Print Ready File` for direct download; see `docs/MERCHANT_FIELDS.md`.
+   - Dynamic pricing proof is stored in cart attribute `__pd_price_map` (not shown per line item).
 
 If a customer uploads files but never adds the item to cart, PrintDock removes those non-converted uploads after about 2 hours.
 
 ### Dynamic Pricing at Checkout
 
-If dynamic pricing is enabled and setup is complete, the storefront adds a single product line with a signed `__pd_price_token` line property. At checkout, PrintDock Cart Transform verifies that token and sets the line’s **fixed price per unit** to match your calculated base product price plus upload fee. Quantity changes stay on one line; PrintDock does not create hidden fee products in your catalog.
+If dynamic pricing is enabled and setup is complete, the storefront adds a single product line and writes signed pricing proof into cart attribute `__pd_price_map`. At checkout, PrintDock Cart Transform verifies the matching token for that line’s `_uc_session` and sets the line’s **fixed price per unit** to match your calculated base product price plus upload fee. Quantity changes stay on one line; PrintDock does not create hidden fee products in your catalog.
 
 ### Discounts and Taxes
 
@@ -171,10 +171,16 @@ When a customer completes checkout, the `orders/create` webhook fires and PrintD
 1. Finds line items with upload session data.
 2. Creates an **Order Job** for each uploaded file.
 3. Renames and copies the file in storage using the field's renaming pattern.
-4. Records the calculated price, quantity, and customer details. When dynamic pricing was enabled, re-verifies the signed `__pd_price_token` and flags **pricing anomalies** on the order job if the token was missing or invalid.
+4. Records the calculated price, quantity, and customer details. When dynamic pricing was enabled, re-verifies signed pricing proof from `__pd_price_map` and flags **pricing anomalies** on the order job if the token was missing or invalid.
 5. Optionally auto-assigns the job to a team member (based on Settings).
 
 For the full order-line metadata contract (merchant-facing and internal fields), see `docs/MERCHANT_FIELDS.md`.
+
+### Downloading artwork from the Shopify order page
+
+PrintDock writes the `Print Ready File` line item property as a short, clickable URL on the order's line item card. The merchant clicks the link directly inside the line item — Shopify Admin auto-linkifies it — and the browser downloads the original artwork.
+
+If you prefer a dedicated multi-file experience, open **More actions → PrintDock files** at the top of the order page. It opens a panel listing every upload on the order with a tappable **Download** button per file. This entry point requires no merchant setup and is available on every order.
 
 ### Order Jobs Page
 
