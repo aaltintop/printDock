@@ -7,9 +7,17 @@
   const PRODUCT_ID = root.dataset.productId;
   const BASE_VARIANT_PRICE = Number(root.dataset.variantPrice || "0");
   const BLOCK_REQUIRED = root.dataset.required === "true";
+  // Mutable mirror of `BASE_VARIANT_PRICE` so the calculated upload price stays
+  // in sync when the shopper switches variants (data-variant-* attributes are
+  // stamped once at Liquid render time and never auto-update).
+  let currentBaseVariantPrice = BASE_VARIANT_PRICE;
   const SESSION_STORAGE_KEY = `printdock_session_${PRODUCT_ID}`;
   const SESSION_EXPIRES_STORAGE_KEY = `${SESSION_STORAGE_KEY}_expires`;
   const PROXY_URL = "/apps/printdock"; // Configured in shopify.app.toml
+  const nativeFetch =
+    typeof window.fetch === "function"
+      ? window.fetch.bind(window)
+      : () => Promise.reject(new Error("Fetch API unavailable in this context"));
 
   // Merchant-configurable copy (theme block settings → data-* attributes on root).
   const LABELS = {
@@ -23,13 +31,76 @@
     new URLSearchParams(window.location.search).has("printdock_debug") ||
     localStorage.getItem("printdock_debug") === "1";
 
+  function debugTruncateUrl(url, maxLen) {
+    const max = maxLen ?? 160;
+    const s = String(url ?? "");
+    if (s.length <= max) return s;
+    return `${s.slice(0, max)}…`;
+  }
+
+  /** Snapshot for console debugging — avoids secrets where possible (no raw tokens). */
+  function debugStateSnapshot() {
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    const props = getCartProperties();
+    return {
+      productId: PRODUCT_ID,
+      variantId: root.dataset.variantId || "",
+      isRequired,
+      fieldId: fieldConfig.id || null,
+      fieldIsRequiredFromApi: Boolean(fieldConfig.isRequired),
+      configLoadFailed,
+      blockRequiredThemeSetting: BLOCK_REQUIRED,
+      successfulUploadCount: successfulFiles.length,
+      minFilesEffective: Math.max(1, fieldConfig.minFiles),
+      fileRows: uploadedFiles.map((entry) => ({
+        status: entry.status,
+        blocked: Boolean(entry.blocked),
+        name: entry.name || "",
+      })),
+      hasSessionToken: Boolean(sessionToken),
+      cartPropertyKeys: Object.keys(props),
+      cartPropertyCount: Object.keys(props).length,
+      dynamicPricingEnabled: Boolean(fieldConfig.pricing && fieldConfig.pricing.enabled),
+      lastCartAddBlockReason: lastCartAddBlockReason || null,
+      unitFeeMinorUnits: getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles),
+    };
+  }
+
   function debugLog(event, payload) {
     if (!DEBUG_PRINTDOCK) return;
-    if (payload === undefined) {
-      console.info("[PrintDock][debug]", event);
-      return;
+    if (payload !== undefined) {
+      console.info("[PrintDock]", event, payload);
+    } else {
+      console.info("[PrintDock]", event);
     }
-    console.info("[PrintDock][debug]", event, payload);
+  }
+
+  /**
+   * Logs POSTs under `/cart/*` that reached the cart-add fetch layer so we can
+   * see locale paths, cross-origin posts, and whether our matcher fires.
+   */
+  function debugProbeCartFetch(requestUrl, method, phase, extra) {
+    if (!DEBUG_PRINTDOCK) return;
+    const m = (method || "GET").toUpperCase();
+    if (m !== "POST") return;
+    const path = getSameOriginStorePathname(requestUrl);
+    if (!path || !/\/cart\b/i.test(path)) return;
+    let reqOrigin = null;
+    try {
+      reqOrigin = new URL(requestUrl, window.location.href).origin;
+    } catch (_e) {
+      reqOrigin = null;
+    }
+    debugLog(`fetch_cart_probe:${phase}`, {
+      truncatedUrl: debugTruncateUrl(requestUrl),
+      resolvedPath: path,
+      pageOrigin: window.location.origin,
+      requestOrigin: reqOrigin,
+      sameOrigin: reqOrigin === window.location.origin,
+      matchesCartAdd: isCartAddRequest(requestUrl, method),
+      matchesCartChange: isCartChangeRequest(requestUrl, method),
+      ...(extra || {}),
+    });
   }
 
   const DEFAULT_CONFIG = {
@@ -50,8 +121,7 @@
   let fieldConfig = { ...DEFAULT_CONFIG };
   let isRequired = BLOCK_REQUIRED;
   let configLoadFailed = false;
-  let feeConfig = null;
-  let currencyCode = "USD";
+  let shopCurrencyCode = "USD";
   let currencyDecimals = 2;
   let sessionToken = localStorage.getItem(SESSION_STORAGE_KEY) || null;
   let sessionExpiresAt = localStorage.getItem(SESSION_EXPIRES_STORAGE_KEY) || null;
@@ -67,7 +137,6 @@
   const boundForms = new WeakSet();
   let formObserver = null;
   let pagehideCleanupBound = false;
-  let isFeeSyncInFlight = false;
 
   function moneyScale() {
     return Math.pow(10, Number.isFinite(currencyDecimals) ? currencyDecimals : 2);
@@ -75,10 +144,6 @@
 
   function toMinorUnits(amount) {
     return Math.round(Number(amount || 0) * moneyScale());
-  }
-
-  function fromMinorUnits(minorUnits) {
-    return Number(minorUnits || 0) / moneyScale();
   }
 
   function clearStoredSession() {
@@ -476,6 +541,14 @@
     setupCartAddXHRInterceptor();
     setupAddToCartGuard();
     updateCartState();
+    if (DEBUG_PRINTDOCK) {
+      debugLog("guards_armed_early", {
+        productId: PRODUCT_ID,
+        variantId: root.dataset.variantId || "",
+        blockRequiredThemeSetting: BLOCK_REQUIRED,
+        formsMatchingCartAdd: document.querySelectorAll('form[action*="/cart/add"]').length,
+      });
+    }
   }
 
   async function init() {
@@ -485,6 +558,7 @@
     // BLOCK_REQUIRED so the cart-add gate stays armed. Tell the shopper
     // what went wrong; they can refresh to retry.
     if (configLoadFailed) {
+      debugLog("init_abort_config_failed", debugStateSnapshot());
       root.innerHTML = `<div class="printdock-loading">${escapeHtml(
         "Upload form unavailable. Please refresh the page to try again.",
       )}</div>`;
@@ -494,6 +568,7 @@
     // No field targets this product (or collection) — hide the block and
     // release the gate so the customer can add to cart normally.
     if (!fieldConfig.id) {
+      debugLog("init_release_gate_no_field", debugStateSnapshot());
       root.innerHTML = "";
       root.style.display = "none";
       root.setAttribute("aria-hidden", "true");
@@ -513,8 +588,10 @@
     setupCartChangeFetchInterceptor();
     setupCartAddXHRInterceptor();
     setupProductQuantityListener();
+    setupVariantChangeListener();
     setupPagehideCleanup();
     updateCartState();
+    debugLog("init_render_complete", debugStateSnapshot());
   }
 
   // Keep the calculated-price display in sync when the shopper changes the
@@ -527,6 +604,82 @@
     const handler = () => updatePriceDisplay();
     quantityInput.addEventListener("input", handler);
     quantityInput.addEventListener("change", handler);
+  }
+
+  // Resolve the product handle from the page URL so we can look up live
+  // variant prices via `/products/<handle>.js` after a variant change.
+  function getProductHandleFromUrl() {
+    const match = window.location.pathname.match(/\/products\/([^/?#]+)/);
+    return match ? match[1] : null;
+  }
+
+  async function fetchVariantBasePrice(variantId) {
+    if (!variantId) return null;
+    const handle = getProductHandleFromUrl();
+    if (!handle) return null;
+    try {
+      const res = await fetch(`/products/${handle}.js`, {
+        method: "GET",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) return null;
+      const product = await res.json();
+      const variants = Array.isArray(product?.variants) ? product.variants : [];
+      const match = variants.find((variant) => String(variant?.id) === String(variantId));
+      if (!match) return null;
+      const cents = Number(match.price);
+      return Number.isFinite(cents) ? cents / 100 : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  let variantChangeInFlight = false;
+  async function handleVariantChange(newVariantId) {
+    if (!newVariantId) return;
+    const normalized = String(newVariantId);
+    if (normalized === String(root.dataset.variantId || "")) return;
+    if (variantChangeInFlight) return;
+    variantChangeInFlight = true;
+    try {
+      root.dataset.variantId = normalized;
+      // Refresh upload field config so per-variant pricing rules apply.
+      await loadFieldConfig();
+      // Refresh base variant price for accurate per-unit display.
+      const newBase = await fetchVariantBasePrice(normalized);
+      if (newBase !== null) currentBaseVariantPrice = newBase;
+      updatePriceDisplay();
+      updateCartState();
+    } finally {
+      variantChangeInFlight = false;
+    }
+  }
+
+  function setupVariantChangeListener() {
+    // 1) Standard variant selector: <input|select name="id">
+    document.body.addEventListener("change", (event) => {
+      const target = event.target;
+      if (!target || !(target instanceof HTMLElement)) return;
+      const name = target.getAttribute && target.getAttribute("name");
+      if (name !== "id") return;
+      const value = target.value;
+      if (value) handleVariantChange(value);
+    });
+
+    // 2) Theme URL changes (Dawn updates ?variant=… in history).
+    window.addEventListener("popstate", () => {
+      const params = new URLSearchParams(window.location.search);
+      const variantId = params.get("variant");
+      if (variantId) handleVariantChange(variantId);
+    });
+
+    // 3) Dawn dispatches `variant:change` on the form with full variant payload.
+    document.body.addEventListener("variant:change", (event) => {
+      const detail = event && event.detail;
+      const variantId = detail?.variant?.id || detail?.id;
+      if (variantId) handleVariantChange(variantId);
+    });
   }
 
   async function loadFieldConfig() {
@@ -542,12 +695,18 @@
       if (payload.field) {
         fieldConfig = Object.assign({}, DEFAULT_CONFIG, payload.field);
       }
-      feeConfig = payload.feeConfig || null;
-      currencyCode = feeConfig?.currencyCode || "USD";
-      currencyDecimals = Number.isFinite(feeConfig?.currencyDecimals)
-        ? Number(feeConfig.currencyDecimals)
-        : 2;
+      const sc = payload.shopCurrency;
+      shopCurrencyCode =
+        sc && typeof sc.code === "string" && sc.code.trim() ? String(sc.code).toUpperCase() : "USD";
+      currencyDecimals =
+        sc && Number.isFinite(Number(sc.decimals)) ? Number(sc.decimals) : shopCurrencyCode === "JPY" ? 0 : 2;
       configLoadFailed = false;
+      debugLog("config_loaded_ok", {
+        fieldId: fieldConfig.id || null,
+        isRequiredAfterMerge: Boolean(fieldConfig.id) && Boolean(fieldConfig.isRequired),
+        currency: shopCurrencyCode,
+        decimals: currencyDecimals,
+      });
     } catch (error) {
       console.error("PrintDock config fetch error:", error);
       fieldConfig = { ...DEFAULT_CONFIG };
@@ -556,11 +715,17 @@
       // (BLOCK_REQUIRED) instead of silently letting cart-adds through.
       configLoadFailed = true;
       isRequired = BLOCK_REQUIRED;
+      debugLog("config_load_failed", { error: String(error && error.message ? error.message : error) });
       return;
     }
 
     // If no field is configured, don't block checkout by default.
     isRequired = Boolean(fieldConfig.id) && Boolean(fieldConfig.isRequired);
+    debugLog("config_gate_updated", {
+      fieldId: fieldConfig.id || null,
+      fieldIsRequiredFromApi: Boolean(fieldConfig.isRequired),
+      isRequiredEffective: isRequired,
+    });
   }
 
   // ─── FILE UPLOAD ──────────────────────────────────────────────────────
@@ -866,34 +1031,85 @@
             showError(validationError);
             return;
           }
-          const formData = new FormData(form);
-          const artworkPayload = {
-            id: String(formData.get("id") || root.dataset.variantId || ""),
-            quantity: Math.max(1, Number(formData.get("quantity") || 1)),
-          };
-          const multiItemPayload = buildMultiItemCartAddPayload(artworkPayload);
-          if (!multiItemPayload) {
+          debugLog("form_submit_after_validation", {
+            defaultPreventedByTheme: e.defaultPrevented,
+            formAction: form.getAttribute("action") || "",
+            cartPropertyKeyCount: Object.keys(getCartProperties()).length,
+            state: debugStateSnapshot(),
+          });
+          // If the theme already prevented default (Dawn's <product-form>,
+          // cart drawers, custom AJAX add-to-cart, etc.) it is doing its own
+          // request to /cart/add.js. Our fetch/XHR interceptors will rewrite
+          // that request into a multi-item payload — so do NOT also fire
+          // another fetch here, otherwise the artwork variant gets added
+          // twice (qty = 2) and only one of the requests carries fee items.
+          if (e.defaultPrevented) {
+            debugLog("form_submit_delegated_to_theme_ajax", {
+              note: "Fetch/XHR interceptors should handle /cart/add",
+            });
+            return;
+          }
+          if (Object.keys(getCartProperties()).length === 0) {
+            debugLog("form_submit_inject_only_no_session_props", {});
             injectCartProperties(form);
             return;
           }
           e.preventDefault();
-          fetch("/cart/add.js", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify(multiItemPayload),
-            credentials: "same-origin",
-          })
-            .then(async (response) => {
+          const formData = new FormData(form);
+          const artworkPayload = {
+            id: normalizeVariantIdForCart(formData.get("id") || root.dataset.variantId || ""),
+            quantity: Math.max(1, Number(formData.get("quantity") || 1)),
+          };
+          debugLog("form_submit_multipart_path", { variantId: artworkPayload.id, quantity: artworkPayload.quantity });
+          void (async () => {
+            const multiItemPayload = await buildMultiItemCartAddPayloadAsync(artworkPayload);
+            if (!multiItemPayload) {
+              if (lastCartAddBlockReason) {
+                debugLog("form_submit_multi_item_failed_last_reason", { lastCartAddBlockReason });
+                showError(lastCartAddBlockReason);
+                return;
+              }
+              const base = getCartProperties();
+              if (Object.keys(base).length === 0) {
+                debugLog("form_submit_native_submit_fallback_empty_props", {});
+                injectCartProperties(form);
+                HTMLFormElement.prototype.submit.call(form);
+                return;
+              }
+              const enriched = await appendSignedPriceTokenToLinePropertiesAsync({ ...base });
+              if (enriched === null) {
+                debugLog("form_submit_enrich_failed", {});
+                showError(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+                return;
+              }
+              debugLog("form_submit_native_submit_with_enriched_props", {
+                propKeys: Object.keys(enriched),
+              });
+              injectCartProperties(form, enriched);
+              HTMLFormElement.prototype.submit.call(form);
+              return;
+            }
+            debugLog("form_submit_native_fetch_multi_item", {
+              itemCount: multiItemPayload.items?.length ?? 0,
+            });
+            try {
+              const response = await nativeFetch("/cart/add.js", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify(multiItemPayload),
+                credentials: "same-origin",
+              });
               if (!response.ok) {
                 const text = await response.text();
                 throw new Error(text || `Cart add failed (${response.status})`);
               }
+              resetProductPageUploadSession("form_native_fetch_redirect");
               window.location.assign("/cart");
-            })
-            .catch((error) => {
+            } catch (error) {
               showError("Could not add this upload to cart. Please try again.");
               console.error("PrintDock cart add failed", error);
-            });
+            }
+          })();
         });
       });
     };
@@ -904,9 +1120,9 @@
     formObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  function injectCartProperties(form) {
+  function injectCartProperties(form, prebuiltProperties) {
     clearPrintdockHiddenInputs(form);
-    const properties = getCartProperties();
+    const properties = prebuiltProperties || getCartProperties();
     Object.entries(properties).forEach(([key, value]) => {
       setHiddenInput(form, `properties[${key}]`, value);
     });
@@ -915,10 +1131,14 @@
   function getAddToCartValidationError() {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     if (isRequired && successfulFiles.length < Math.max(1, fieldConfig.minFiles)) {
-      return `Please upload at least ${Math.max(1, fieldConfig.minFiles)} file(s) before adding to cart.`;
+      const msg = `Please upload at least ${Math.max(1, fieldConfig.minFiles)} file(s) before adding to cart.`;
+      debugLog("validation_fail_min_files", { message: msg, state: debugStateSnapshot() });
+      return msg;
     }
     if (isBlocked) {
-      return "Please fix the file issues before adding to cart.";
+      const msg = "Please fix the file issues before adding to cart.";
+      debugLog("validation_fail_blocked", { message: msg, state: debugStateSnapshot() });
+      return msg;
     }
     return null;
   }
@@ -951,48 +1171,6 @@
     }, 0);
   }
 
-  function decomposeFeeMinorUnits(totalMinorUnits) {
-    if (!feeConfig || !Array.isArray(feeConfig.variants) || totalMinorUnits <= 0) return [];
-    const variants = feeConfig.variants
-      .map((variant) => ({
-        variantId: String(variant.variantId || ""),
-        amountMinorUnits: Number(variant.amountMinorUnits || 0),
-      }))
-      .filter((variant) => variant.variantId && Number.isFinite(variant.amountMinorUnits) && variant.amountMinorUnits > 0)
-      .sort((a, b) => b.amountMinorUnits - a.amountMinorUnits);
-    if (variants.length === 0) return [];
-
-    let remaining = Math.round(totalMinorUnits);
-    const items = [];
-    for (const variant of variants) {
-      const qty = Math.floor(remaining / variant.amountMinorUnits);
-      if (qty > 0) {
-        items.push({
-          id: variant.variantId,
-          quantity: qty,
-          amountMinorUnits: variant.amountMinorUnits,
-        });
-        remaining -= qty * variant.amountMinorUnits;
-      }
-    }
-    if (remaining !== 0) return null;
-    return items;
-  }
-
-  function buildFeeItems(artworkQuantity, unitFeeMinorUnits) {
-    const totalMinorUnits = Math.max(0, Math.round(unitFeeMinorUnits * artworkQuantity));
-    if (totalMinorUnits <= 0) return [];
-    const decomposed = decomposeFeeMinorUnits(totalMinorUnits);
-    if (decomposed === null) return null;
-    return decomposed.map((entry) => ({
-      id: entry.id,
-      quantity: entry.quantity,
-      properties: {
-        _pd_fee_for: sessionToken,
-      },
-    }));
-  }
-
   function getCartProperties() {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     if (!sessionToken || successfulFiles.length === 0) return {};
@@ -1000,19 +1178,134 @@
     const properties = {
       _uc_session: sessionToken,
       "_View uploads": getMerchantUploadsLink(sessionToken),
-      _Artwork: successfulFiles.map((entry) => entry.name).join(", "),
+      Artwork: successfulFiles.map((entry) => entry.name).join(", "),
     };
     const printUrl = successfulFiles[0]?.printReadyFileUrl;
     if (printUrl) {
       properties["_Print Ready File"] = printUrl;
     }
-    const unitFeeMinorUnits = getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles);
-    if (unitFeeMinorUnits > 0) {
-      properties._pd_unit_fee_minor = String(unitFeeMinorUnits);
-      properties._pd_currency = currencyCode;
-    }
 
     return properties;
+  }
+
+  const PRICING_SIGN_FAILED_MESSAGE =
+    "Upload pricing could not be secured for checkout. Please refresh the page and try again, or contact the store.";
+
+  // Sentinel for cart-add paths when signing fails (dynamic pricing on, fee > 0).
+  let lastCartAddBlockReason = null;
+
+  /**
+   * When dynamic pricing + a positive upload fee apply, POST /sign and set `_pd_price_token`.
+   * Merge fallbacks and native form submit only used to call `getCartProperties()` — they never
+   * attached the token, so checkout stayed at variant list price. This helper is shared by
+   * `buildMultiItemCartAddPayloadAsync` and every merge / XHR fallback path.
+   */
+  async function appendSignedPriceTokenToLinePropertiesAsync(lineProps) {
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    const unitUploadMinor = getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles);
+    const dynamicPricing = Boolean(fieldConfig.pricing && fieldConfig.pricing.enabled);
+    debugLog("price_sign_enter", {
+      dynamicPricing,
+      unitUploadMinor,
+      baseVariantMajor: currentBaseVariantPrice,
+      propKeysIncoming: Object.keys(lineProps || {}),
+    });
+    if (!dynamicPricing || unitUploadMinor <= 0) {
+      debugLog("price_sign_skip", { reason: !dynamicPricing ? "pricing_disabled" : "zero_fee" });
+      return lineProps;
+    }
+    const baseMinor = toMinorUnits(currentBaseVariantPrice);
+    const priceMinorPerUnit = Math.max(0, Math.round(baseMinor + unitUploadMinor));
+    try {
+      const signRes = await nativeFetch(`${PROXY_URL}/api/proxy/upload/sign`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          sessionToken,
+          priceMinorUnits: priceMinorPerUnit,
+        }),
+      });
+      const signText = await signRes.text();
+      let signJson;
+      try {
+        signJson = JSON.parse(signText);
+      } catch (_e) {
+        signJson = null;
+      }
+      if (!signRes.ok || !signJson || typeof signJson.token !== "string" || !signJson.token.trim()) {
+        lastCartAddBlockReason = PRICING_SIGN_FAILED_MESSAGE;
+        showError(getFriendlyServerMessage(signJson, PRICING_SIGN_FAILED_MESSAGE));
+        debugLog("price_sign_failed", { httpStatus: signRes.status, signOk: signRes.ok });
+        return null;
+      }
+      const unix = String(Math.floor(Date.now() / 1000));
+      lineProps._pd_price_token = signJson.token;
+      debugLog("price_sign_ok", {
+        priceMinorPerUnit,
+        unix,
+        tokenChars: signJson.token.length,
+      });
+      return lineProps;
+    } catch (_err) {
+      lastCartAddBlockReason = PRICING_SIGN_FAILED_MESSAGE;
+      showError(PRICING_SIGN_FAILED_MESSAGE);
+      debugLog("price_sign_exception", { error: String(_err && _err.message ? _err.message : _err) });
+      return null;
+    }
+  }
+
+  function forwardSectionHints(out, payload) {
+    if (payload && typeof payload === "object") {
+      if (payload.sections != null && payload.sections !== "") {
+        out.sections = payload.sections;
+      }
+      if (payload.sections_url != null && payload.sections_url !== "") {
+        out.sections_url = payload.sections_url;
+      }
+    }
+  }
+
+  async function buildMultiItemCartAddPayloadAsync(payload) {
+    lastCartAddBlockReason = null;
+    const properties = getCartProperties();
+    if (Object.keys(properties).length === 0) {
+      debugLog("build_multi_item_abort_empty_cart_props", {
+        hint: "No session token or no successful uploads — merge/fallback paths may still run.",
+      });
+      return null;
+    }
+
+    const artwork = extractArtworkItemFromPayload(payload);
+    if (!artwork || !artwork.id) {
+      debugLog("build_multi_item_abort_no_variant", { payloadSummary: payload && typeof payload === "object" ? Object.keys(payload) : [] });
+      return null;
+    }
+
+    const lineProps = { ...properties };
+    const signedLineProps = await appendSignedPriceTokenToLinePropertiesAsync(lineProps);
+    if (signedLineProps === null) {
+      debugLog("build_multi_item_abort_sign_failed", {});
+      return null;
+    }
+
+    const items = [
+      {
+        id: artwork.id,
+        quantity: artwork.quantity,
+        properties: signedLineProps,
+      },
+    ];
+    const out = { items };
+    forwardSectionHints(out, payload);
+    debugLog("build_multi_item_ok", {
+      cartAddItemCount: items.length,
+      variantId: artwork.id,
+      quantity: artwork.quantity,
+      linePropKeys: Object.keys(signedLineProps || {}),
+      hasSectionsHint: Boolean(out.sections || out.sections_url),
+    });
+    return out;
   }
 
   function applyPropertiesToFormData(formData, properties) {
@@ -1043,45 +1336,44 @@
     return clonedPayload;
   }
 
+  function normalizeVariantIdForCart(raw) {
+    const s = String(raw ?? "").trim();
+    if (!s) return "";
+    const m = s.match(/ProductVariant\/(\d+)\s*$/i);
+    if (m) return m[1];
+    return s;
+  }
+
   function extractArtworkItemFromPayload(payload) {
     if (!payload || typeof payload !== "object") return null;
     if (Array.isArray(payload.items) && payload.items.length > 0) {
       const first = payload.items[0];
+      const idRaw = first?.id ?? first?.variant_id ?? first?.variantId;
       return {
-        id: String(first?.id || first?.variant_id || root.dataset.variantId || ""),
+        id: normalizeVariantIdForCart(idRaw || root.dataset.variantId || ""),
         quantity: Math.max(1, Number(first?.quantity || 1)),
       };
     }
+    const idRaw = payload.id ?? payload.variant_id ?? payload.variantId;
     return {
-      id: String(payload.id || payload.variant_id || root.dataset.variantId || ""),
+      id: normalizeVariantIdForCart(idRaw || root.dataset.variantId || ""),
       quantity: Math.max(1, Number(payload.quantity || getProductQuantity())),
     };
   }
 
-  function buildMultiItemCartAddPayload(payload) {
-    const properties = getCartProperties();
-    if (Object.keys(properties).length === 0) return null;
-
-    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
-    const unitFeeMinorUnits = getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles);
-    const artwork = extractArtworkItemFromPayload(payload);
-    if (!artwork || !artwork.id) return null;
-
-    const feeItems = buildFeeItems(artwork.quantity, unitFeeMinorUnits);
-    if (feeItems === null) {
-      showError("Upload pricing is temporarily unavailable. Please refresh and try again.");
-      return null;
-    }
-
-    const items = [
-      {
-        id: artwork.id,
-        quantity: artwork.quantity,
-        properties,
-      },
-      ...feeItems,
-    ];
-    return { items };
+  /**
+   * Pull the theme's `sections` / `sections_url` hints out of a FormData or
+   * URLSearchParams body so they can be merged into the multi-item JSON
+   * payload we build for /cart/add.js.
+   */
+  function extractSectionHintsFromKV(kv) {
+    if (!kv || typeof kv.get !== "function") return {};
+    const out = {};
+    const sections = kv.get("sections");
+    if (sections != null && String(sections) !== "") out.sections = String(sections);
+    const sectionsUrl = kv.get("sections_url");
+    if (sectionsUrl != null && String(sectionsUrl) !== "") out.sections_url = String(sectionsUrl);
+    return out;
   }
 
   /** Themes often POST JSON to /cart/add.js without Content-Type: application/json. */
@@ -1096,214 +1388,93 @@
     }
   }
 
+  /**
+   * Resolve `url` against the active page and return the pathname when it is
+   * same-origin. Uses `window.location.href` (not only `origin`) so relative
+   * URLs like `cart/add.js` resolve the same way the browser does from nested
+   * paths (e.g. product pages).
+   *
+   * Shopify Markets often posts to locale-prefixed routes (`/fr/cart/add.js`,
+   * `/en-ca/cart/add.js`). Matching only `/cart/add.js` misses those entirely,
+   * so every fetch/XHR guard sees a non-cart URL and the shopper adds without
+   * passing our upload validation.
+   */
+  function getSameOriginStorePathname(url) {
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (parsed.origin !== window.location.origin) return null;
+      const path = parsed.pathname.replace(/\/+$/, "") || "";
+      return path;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   function isCartAddRequest(url, method) {
     if ((method || "GET").toUpperCase() !== "POST") return false;
-    try {
-      const parsed = new URL(url, window.location.origin);
-      return parsed.pathname === "/cart/add" || parsed.pathname === "/cart/add.js";
-    } catch (_error) {
-      return false;
-    }
+    const path = getSameOriginStorePathname(url);
+    if (!path) return false;
+    return path.endsWith("/cart/add") || path.endsWith("/cart/add.js");
   }
 
   function isCartChangeRequest(url, method) {
     if ((method || "GET").toUpperCase() !== "POST") return false;
-    try {
-      const parsed = new URL(url, window.location.origin);
-      return (
-        parsed.pathname === "/cart/change" ||
-        parsed.pathname === "/cart/change.js" ||
-        parsed.pathname === "/cart/update" ||
-        parsed.pathname === "/cart/update.js"
-      );
-    } catch (_error) {
-      return false;
-    }
-  }
-
-  async function syncFeeLinesForSession(session, nextQty) {
-    if (!session || !Number.isFinite(nextQty) || nextQty < 1) return;
-    if (!feeConfig || !Array.isArray(feeConfig.variants)) return;
-    const cartRes = await fetch("/cart.js", {
-      method: "GET",
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    });
-    if (!cartRes.ok) return;
-    const cart = await cartRes.json();
-    const items = Array.isArray(cart?.items) ? cart.items : [];
-    const artworkLine = items.find((item) => String(item?.properties?._uc_session || "") === session);
-    if (!artworkLine) return;
-    const unitFeeMinor = Number(artworkLine?.properties?._pd_unit_fee_minor || 0);
-    if (!Number.isFinite(unitFeeMinor) || unitFeeMinor <= 0) return;
-    const desiredFeeItems = buildFeeItems(nextQty, unitFeeMinor);
-    if (!desiredFeeItems) return;
-    debugLog("fee_sync_start", {
-      session,
-      nextQty,
-      unitFeeMinor,
-      desiredFeeItemCount: desiredFeeItems.length,
-    });
-
-    const updates = {};
-    const currentFeeLines = items.filter(
-      (item) => String(item?.properties?._pd_fee_for || "") === session,
+    const path = getSameOriginStorePathname(url);
+    if (!path) return false;
+    return (
+      path.endsWith("/cart/change") ||
+      path.endsWith("/cart/change.js") ||
+      path.endsWith("/cart/update") ||
+      path.endsWith("/cart/update.js")
     );
-    const desiredByVariant = new Map();
-    desiredFeeItems.forEach((entry) => {
-      desiredByVariant.set(String(entry.id), Number(entry.quantity || 0));
-    });
+  }
 
-    currentFeeLines.forEach((line) => {
-      const variantId = String(line.variant_id || "");
-      const desiredQty = desiredByVariant.has(variantId) ? desiredByVariant.get(variantId) : 0;
-      updates[line.key] = Number(desiredQty || 0);
-      desiredByVariant.delete(variantId);
-    });
-
-    const missingFeeItems = Array.from(desiredByVariant.entries())
-      .filter(([, qty]) => Number(qty) > 0)
-      .map(([variantId, qty]) => ({
-        id: variantId,
-        quantity: qty,
-        properties: { _pd_fee_for: session },
-      }));
-
-    isFeeSyncInFlight = true;
+  /**
+   * Shopify JSON cart adds must hit `/cart/add.js` (locale-safe). Posting `{ items }`
+   * JSON to `/cart/add` yields responses that break `shop_events_listener` and cart UI.
+   */
+  function cartAddJsonUrl(urlRef) {
     try {
-      if (Object.keys(updates).length > 0) {
-        debugLog("fee_sync_updates", { session, updates });
-        await fetch("/cart/update.js", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ updates }),
-        });
-      }
-      if (missingFeeItems.length > 0) {
-        debugLog("fee_sync_missing_fee_lines_add", {
-          session,
-          missingCount: missingFeeItems.length,
-          items: missingFeeItems,
-        });
-        await fetch("/cart/add.js", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ items: missingFeeItems }),
-        });
-      }
-    } finally {
-      isFeeSyncInFlight = false;
-      debugLog("fee_sync_done", { session });
+      const u = new URL(urlRef, window.location.href);
+      if (u.origin !== window.location.origin) return u.toString();
+      const path = u.pathname.replace(/\/+$/, "") || "";
+      if (!path.endsWith("/cart/add")) return u.toString();
+      if (path.endsWith("/cart/add.js")) return u.toString();
+      u.pathname = path.replace(/\/cart\/add$/, "/cart/add.js");
+      return u.toString();
+    } catch (_e) {
+      return urlRef;
     }
-  }
-
-  function parseCartMutationBodyObject(rawBody) {
-    if (!rawBody) return null;
-    if (rawBody instanceof URLSearchParams) {
-      const out = {};
-      rawBody.forEach((value, key) => {
-        out[key] = value;
-      });
-      if (out.updates) {
-        try {
-          out.updates = JSON.parse(String(out.updates));
-        } catch (_error) {
-          // keep raw updates string
-        }
-      }
-      return out;
-    }
-    if (rawBody instanceof FormData) {
-      const out = {};
-      rawBody.forEach((value, key) => {
-        out[key] = typeof value === "string" ? value : String(value);
-      });
-      return out;
-    }
-    if (typeof rawBody === "string") {
-      const jsonParsed = tryParseCartJsonBodyString(rawBody);
-      if (jsonParsed && typeof jsonParsed === "object") return jsonParsed;
-      try {
-        return Object.fromEntries(new URLSearchParams(rawBody).entries());
-      } catch (_error) {
-        return null;
-      }
-    }
-    if (typeof rawBody === "object") return rawBody;
-    return null;
-  }
-
-  async function parseCartMutationBodyFromFetch(input, init) {
-    if (init?.body) {
-      return parseCartMutationBodyObject(init.body);
-    }
-    if (!(input instanceof Request)) return null;
-
-    const contentType = input.headers.get("content-type") || "";
-    if (contentType.includes("application/json")) {
-      return input.clone().json().catch(() => null);
-    }
-    if (
-      contentType.includes("application/x-www-form-urlencoded") ||
-      contentType.includes("multipart/form-data")
-    ) {
-      const formData = await input.clone().formData().catch(() => null);
-      return parseCartMutationBodyObject(formData);
-    }
-    const text = await input.clone().text().catch(() => "");
-    return parseCartMutationBodyObject(text);
-  }
-
-  function getArtworkLineByChangeIdentifier(items, identifier, lineIndexRaw) {
-    if (!Array.isArray(items)) return null;
-    const lineIndex = Number(lineIndexRaw);
-    if (Number.isFinite(lineIndex) && lineIndex > 0 && items[lineIndex - 1]) {
-      return items[lineIndex - 1];
-    }
-    const id = String(identifier || "");
-    if (!id) return null;
-    const byKey = items.find((item) => String(item.key || "") === id);
-    if (byKey) return byKey;
-    return items.find((item) => String(item.variant_id || "") === id) || null;
-  }
-
-  function collectSessionQuantityChangesFromMutation(items, bodyObj) {
-    const changes = new Map();
-    if (!bodyObj || typeof bodyObj !== "object") return changes;
-
-    const singleTarget = getArtworkLineByChangeIdentifier(items, bodyObj.id, bodyObj.line);
-    if (singleTarget) {
-      const session = String(singleTarget?.properties?._uc_session || "");
-      const feeFor = String(singleTarget?.properties?._pd_fee_for || "");
-      const nextQty = Number(bodyObj.quantity || 0);
-      if (session && !feeFor && Number.isFinite(nextQty) && nextQty > 0) {
-        changes.set(session, nextQty);
-      }
-    }
-
-    if (bodyObj.updates && typeof bodyObj.updates === "object") {
-      Object.entries(bodyObj.updates).forEach(([identifier, qtyRaw]) => {
-        const line = getArtworkLineByChangeIdentifier(items, identifier, null);
-        if (!line) return;
-        const session = String(line?.properties?._uc_session || "");
-        const feeFor = String(line?.properties?._pd_fee_for || "");
-        const nextQty = Number(qtyRaw || 0);
-        if (session && !feeFor && Number.isFinite(nextQty) && nextQty > 0) {
-          changes.set(session, nextQty);
-        }
-      });
-    }
-    return changes;
-  }
-    });
   }
 
   function setupCartAddFetchInterceptor() {
     if (window.__printdockFetchPatched) return;
     window.__printdockFetchPatched = true;
     const originalFetch = window.fetch.bind(window);
+
+    async function finalizeCartAddFetch(responsePromise, reason) {
+      const res = await responsePromise;
+      if (res.ok) {
+        resetProductPageUploadSession(reason);
+      }
+      return res;
+    }
+
+    const postJsonMultiCartAdd = async (url, fetchInit) => {
+      const jsonUrl = cartAddJsonUrl(url);
+      try {
+        const before = new URL(url, window.location.href).href;
+        if (DEBUG_PRINTDOCK && jsonUrl !== before) {
+          debugLog("cart_add_url_normalized_to_js", {
+            from: debugTruncateUrl(url),
+            to: debugTruncateUrl(jsonUrl),
+          });
+        }
+      } catch (_e) {
+        /* ignore compare failures */
+      }
+      return finalizeCartAddFetch(nativeFetch(jsonUrl, fetchInit), "fetch_json_multi_ok");
+    };
 
     window.fetch = async (input, init) => {
       const requestUrl =
@@ -1313,15 +1484,26 @@
             ? input.toString()
             : input?.url || "";
       const method = (init && init.method) || (input instanceof Request ? input.method : "GET");
+      debugProbeCartFetch(requestUrl, method, "cart_add_layer");
       if (!isCartAddRequest(requestUrl, method)) {
         return originalFetch(input, init);
       }
 
       const validationError = getAddToCartValidationError();
       if (validationError) {
+        debugLog("fetch_cart_add_blocked_validation", {
+          validationError,
+          truncatedUrl: debugTruncateUrl(requestUrl),
+          state: debugStateSnapshot(),
+        });
         showError(validationError);
         throw new Error(validationError);
       }
+
+      debugLog("fetch_cart_add_validation_ok", {
+        truncatedUrl: debugTruncateUrl(requestUrl),
+        state: debugStateSnapshot(),
+      });
 
       let payloadForMultiItem = null;
 
@@ -1329,9 +1511,9 @@
         try {
           const parsed = await input.clone().json();
           if (parsed && typeof parsed === "object") {
-            payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+            payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
             if (payloadForMultiItem) {
-              return originalFetch(input.url, {
+              return postJsonMultiCartAdd(input.url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Accept: "application/json" },
                 body: JSON.stringify(payloadForMultiItem),
@@ -1345,24 +1527,36 @@
                 signal: input.signal,
               });
             }
-            const properties = getCartProperties();
-            if (Object.keys(properties).length === 0) return originalFetch(input, init);
+            if (lastCartAddBlockReason) {
+              throw new Error(lastCartAddBlockReason);
+            }
+            const baseProps = getCartProperties();
+            if (Object.keys(baseProps).length === 0) {
+              return finalizeCartAddFetch(originalFetch(input, init), "fetch_request_clone_json_passthrough_empty");
+            }
+            const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+            if (properties === null) {
+              throw new Error(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+            }
             const nextPayload = mergePropertiesIntoJsonPayload(parsed, properties);
             const headers = new Headers(input.headers);
             headers.set("content-type", "application/json");
-            return originalFetch(input.url, {
-              method: input.method,
-              headers,
-              body: JSON.stringify(nextPayload),
-              credentials: input.credentials,
-              mode: input.mode,
-              redirect: input.redirect,
-              referrer: input.referrer,
-              referrerPolicy: input.referrerPolicy,
-              integrity: input.integrity,
-              keepalive: input.keepalive,
-              signal: input.signal,
-            });
+            return finalizeCartAddFetch(
+              originalFetch(cartAddJsonUrl(input.url), {
+                method: input.method,
+                headers,
+                body: JSON.stringify(nextPayload),
+                credentials: input.credentials,
+                mode: input.mode,
+                redirect: input.redirect,
+                referrer: input.referrer,
+                referrerPolicy: input.referrerPolicy,
+                integrity: input.integrity,
+                keepalive: input.keepalive,
+                signal: input.signal,
+              }),
+              "fetch_request_clone_json_merge",
+            );
           }
         } catch (_error) {
           /* not JSON — try form body */
@@ -1377,10 +1571,11 @@
             const parsed = {
               id: String(formData.get("id") || root.dataset.variantId || ""),
               quantity: Math.max(1, Number(formData.get("quantity") || 1)),
+              ...extractSectionHintsFromKV(formData),
             };
-            payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+            payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
             if (payloadForMultiItem) {
-              return originalFetch(input.url, {
+              return postJsonMultiCartAdd(input.url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Accept: "application/json" },
                 body: JSON.stringify(payloadForMultiItem),
@@ -1394,26 +1589,38 @@
                 signal: input.signal,
               });
             }
-            const properties = getCartProperties();
-            if (Object.keys(properties).length === 0) return originalFetch(input, init);
+            if (lastCartAddBlockReason) {
+              throw new Error(lastCartAddBlockReason);
+            }
+            const baseProps = getCartProperties();
+            if (Object.keys(baseProps).length === 0) {
+              return finalizeCartAddFetch(originalFetch(input, init), "fetch_request_formdata_passthrough_empty");
+            }
+            const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+            if (properties === null) {
+              throw new Error(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+            }
             const nextBody = new FormData();
             formData.forEach((value, key) => nextBody.append(key, value));
             applyPropertiesToFormData(nextBody, properties);
-            return originalFetch(input.url, {
-              method: input.method,
-              headers: input.headers,
-              body: nextBody,
-              credentials: input.credentials,
-              mode: input.mode,
-              redirect: input.redirect,
-              referrer: input.referrer,
-              referrerPolicy: input.referrerPolicy,
-              integrity: input.integrity,
-              keepalive: input.keepalive,
-              signal: input.signal,
-            });
+            return finalizeCartAddFetch(
+              originalFetch(input.url, {
+                method: input.method,
+                headers: input.headers,
+                body: nextBody,
+                credentials: input.credentials,
+                mode: input.mode,
+                redirect: input.redirect,
+                referrer: input.referrer,
+                referrerPolicy: input.referrerPolicy,
+                integrity: input.integrity,
+                keepalive: input.keepalive,
+                signal: input.signal,
+              }),
+              "fetch_request_formdata_merge",
+            );
           } catch (_error) {
-            return originalFetch(input, init);
+            return finalizeCartAddFetch(originalFetch(input, init), "fetch_request_clone_catch_passthrough");
           }
         }
       }
@@ -1422,22 +1629,35 @@
         const parsed = {
           id: String(init.body.get("id") || root.dataset.variantId || ""),
           quantity: Math.max(1, Number(init.body.get("quantity") || 1)),
+          ...extractSectionHintsFromKV(init.body),
         };
-        payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+        payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
         if (payloadForMultiItem) {
-          return originalFetch(input, {
+          return postJsonMultiCartAdd(requestUrl, {
             ...init,
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify(payloadForMultiItem),
           });
         }
-        const properties = getCartProperties();
-        if (Object.keys(properties).length === 0) return originalFetch(input, init);
+        if (lastCartAddBlockReason) {
+          throw new Error(lastCartAddBlockReason);
+        }
+        const baseProps = getCartProperties();
+        if (Object.keys(baseProps).length === 0) {
+          return finalizeCartAddFetch(originalFetch(input, init), "fetch_init_formdata_passthrough_empty");
+        }
+        const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+        if (properties === null) {
+          throw new Error(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+        }
         const nextBody = new FormData();
         init.body.forEach((value, key) => nextBody.append(key, value));
         applyPropertiesToFormData(nextBody, properties);
-        return originalFetch(input, { ...init, body: nextBody });
+        return finalizeCartAddFetch(
+          originalFetch(input, { ...init, body: nextBody }),
+          "fetch_init_formdata_merge",
+        );
       }
 
       if (init && typeof init.body === "string") {
@@ -1455,20 +1675,38 @@
           parsed = tryParseCartJsonBodyString(init.body);
         }
         if (parsed && typeof parsed === "object") {
-          payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
+          payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
           if (payloadForMultiItem) {
             headers.set("content-type", "application/json");
-            return originalFetch(input, { ...init, headers, body: JSON.stringify(payloadForMultiItem) });
+            return postJsonMultiCartAdd(requestUrl, { ...init, headers, body: JSON.stringify(payloadForMultiItem) });
           }
-          const properties = getCartProperties();
-          if (Object.keys(properties).length === 0) return originalFetch(input, init);
+          if (lastCartAddBlockReason) {
+            throw new Error(lastCartAddBlockReason);
+          }
+          const baseProps = getCartProperties();
+          if (Object.keys(baseProps).length === 0) {
+            return finalizeCartAddFetch(originalFetch(input, init), "fetch_init_string_json_passthrough_empty");
+          }
+          const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+          if (properties === null) {
+            throw new Error(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+          }
           const nextPayload = mergePropertiesIntoJsonPayload(parsed, properties);
           headers.set("content-type", "application/json");
-          return originalFetch(input, { ...init, headers, body: JSON.stringify(nextPayload) });
+          return finalizeCartAddFetch(
+            originalFetch(cartAddJsonUrl(requestUrl), { ...init, headers, body: JSON.stringify(nextPayload) }),
+            "fetch_init_string_json_merge",
+          );
         }
       }
 
-      return originalFetch(input, init);
+      debugLog("fetch_cart_add_unhandled_body_pass_through", {
+        truncatedUrl: debugTruncateUrl(requestUrl),
+        initHasBody: Boolean(init && init.body),
+        inputIsRequest: input instanceof Request,
+        hint: "Theme sent a POST /cart/add shape we did not rewrite — line items may lack PrintDock props.",
+      });
+      return finalizeCartAddFetch(originalFetch(input, init), "fetch_cart_add_pass_through");
     };
   }
 
@@ -1485,60 +1723,16 @@
             ? input.toString()
             : input?.url || "";
       const method = (init && init.method) || (input instanceof Request ? input.method : "GET");
+      debugProbeCartFetch(requestUrl, method, "cart_change_outer_layer");
       if (!isCartChangeRequest(requestUrl, method)) {
         return originalFetch(input, init);
       }
-      if (isFeeSyncInFlight) {
-        debugLog("cart_change_skip_reentrant", { requestUrl });
-        return originalFetch(input, init);
-      }
 
-      let sessionsToSync = new Map();
-      try {
-        const [preCartRes, parsedBody] = await Promise.all([
-          originalFetch("/cart.js", {
-            method: "GET",
-            credentials: "same-origin",
-            headers: { Accept: "application/json" },
-          }),
-          parseCartMutationBodyFromFetch(input, init),
-        ]);
-        if (preCartRes.ok) {
-          const preCart = await preCartRes.json().catch(() => null);
-          const preItems = Array.isArray(preCart?.items) ? preCart.items : [];
-          sessionsToSync = collectSessionQuantityChangesFromMutation(preItems, parsedBody);
-          debugLog("cart_change_sessions_collected", {
-            requestUrl,
-            body: parsedBody,
-            sessionCount: sessionsToSync.size,
-            sessions: Array.from(sessionsToSync.entries()),
-          });
-        }
-      } catch (_error) {
-        sessionsToSync = new Map();
-        debugLog("cart_change_preparse_failed", { requestUrl });
-      }
-
-      const response = await originalFetch(input, init);
-      if (!response.ok || sessionsToSync.size === 0) {
-        debugLog("cart_change_no_sync_needed", {
-          requestUrl,
-          responseOk: response.ok,
-          sessionCount: sessionsToSync.size,
-        });
-        return response;
-      }
-
-      try {
-        for (const [session, nextQty] of sessionsToSync.entries()) {
-          await syncFeeLinesForSession(session, nextQty);
-        }
-      } catch (_error) {
-        // Best-effort sync only.
-        debugLog("cart_change_sync_failed", { requestUrl });
-      }
-      debugLog("cart_change_sync_complete", { requestUrl });
-      return response;
+      debugLog("fetch_cart_change_intercept", {
+        truncatedUrl: debugTruncateUrl(requestUrl),
+        resolvedPath: getSameOriginStorePathname(requestUrl),
+      });
+      return originalFetch(input, init);
     };
   }
 
@@ -1549,6 +1743,38 @@
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
 
+    function attachXhrCartAddResetOnSuccess(xhrRef, reason) {
+      xhrRef.addEventListener(
+        "loadend",
+        function printdockXhrCartAddDone() {
+          if (xhrRef.status >= 200 && xhrRef.status < 300) {
+            resetProductPageUploadSession(reason);
+          }
+        },
+        { once: true },
+      );
+    }
+
+    function reopenXhrForCartAddJson(xhrRef, httpMethod, urlRef) {
+      const fixed = cartAddJsonUrl(urlRef);
+      let cur;
+      try {
+        cur = new URL(urlRef, window.location.href).href;
+      } catch (_e) {
+        return;
+      }
+      if (fixed === cur) return;
+      if (DEBUG_PRINTDOCK) {
+        debugLog("xhr_cart_add_url_normalized_to_js", {
+          from: debugTruncateUrl(cur),
+          to: debugTruncateUrl(fixed),
+        });
+      }
+      xhrRef.abort();
+      originalOpen.call(xhrRef, httpMethod, fixed);
+      xhrRef.__printdockUrl = fixed;
+    }
+
     XMLHttpRequest.prototype.open = function (method, url) {
       this.__printdockMethod = method;
       this.__printdockUrl = typeof url === "string" ? url : String(url || "");
@@ -1556,77 +1782,162 @@
     };
 
     XMLHttpRequest.prototype.send = function (body) {
-      const method = this.__printdockMethod || "GET";
-      const url = this.__printdockUrl || "";
+      const xhr = this;
+      const method = xhr.__printdockMethod || "GET";
+      const url = xhr.__printdockUrl || "";
       if (!isCartAddRequest(url, method)) {
-        return originalSend.call(this, body);
+        return originalSend.call(xhr, body);
       }
+
+      debugLog("xhr_cart_add_intercept", {
+        truncatedUrl: debugTruncateUrl(url),
+        bodyKind:
+          body == null
+            ? "null"
+            : body instanceof FormData
+              ? "FormData"
+              : body instanceof URLSearchParams
+                ? "URLSearchParams"
+                : typeof body === "string"
+                  ? "string"
+                  : typeof body,
+        state: debugStateSnapshot(),
+      });
 
       const validationError = getAddToCartValidationError();
       if (validationError) {
         showError(validationError);
-        this.abort();
+        xhr.abort();
+        debugLog("xhr_cart_add_blocked_validation", { validationError });
         return;
       }
 
+      debugLog("xhr_cart_add_validation_ok", { truncatedUrl: debugTruncateUrl(url) });
       if (body instanceof FormData) {
         const parsed = {
           id: String(body.get("id") || root.dataset.variantId || ""),
           quantity: Math.max(1, Number(body.get("quantity") || 1)),
+          ...extractSectionHintsFromKV(body),
         };
-        const payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
-        if (payloadForMultiItem) {
-          try {
-            this.setRequestHeader("Content-Type", "application/json");
-          } catch (_error) {
-            // Ignore if theme/adapter prevents header mutation after open().
+        void (async () => {
+          const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
+          if (payloadForMultiItem) {
+            try {
+              xhr.setRequestHeader("Content-Type", "application/json");
+            } catch (_error) {
+              // Ignore if theme/adapter prevents header mutation after open().
+            }
+            reopenXhrForCartAddJson(xhr, method, url);
+            attachXhrCartAddResetOnSuccess(xhr, "xhr_formdata_json_multi");
+            originalSend.call(xhr, JSON.stringify(payloadForMultiItem));
+            return;
           }
-          return originalSend.call(this, JSON.stringify(payloadForMultiItem));
-        }
-        const properties = getCartProperties();
-        if (Object.keys(properties).length === 0) {
-          return originalSend.call(this, body);
-        }
-        applyPropertiesToFormData(body, properties);
-        return originalSend.call(this, body);
+          if (lastCartAddBlockReason) {
+            showError(lastCartAddBlockReason);
+            xhr.abort();
+            return;
+          }
+          const baseProps = getCartProperties();
+          if (Object.keys(baseProps).length === 0) {
+            attachXhrCartAddResetOnSuccess(xhr, "xhr_formdata_passthrough_empty");
+            originalSend.call(xhr, body);
+            return;
+          }
+          const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+          if (properties === null) {
+            showError(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+            xhr.abort();
+            return;
+          }
+          applyPropertiesToFormData(body, properties);
+          attachXhrCartAddResetOnSuccess(xhr, "xhr_formdata_merge_props");
+          originalSend.call(xhr, body);
+        })();
+        return;
       }
 
       if (body instanceof URLSearchParams) {
         const parsed = {
           id: String(body.get("id") || root.dataset.variantId || ""),
           quantity: Math.max(1, Number(body.get("quantity") || 1)),
+          ...extractSectionHintsFromKV(body),
         };
-        const payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
-        if (payloadForMultiItem) {
-          try {
-            this.setRequestHeader("Content-Type", "application/json");
-          } catch (_error) {}
-          return originalSend.call(this, JSON.stringify(payloadForMultiItem));
-        }
-        const properties = getCartProperties();
-        if (Object.keys(properties).length === 0) {
-          return originalSend.call(this, body);
-        }
-        applyPropertiesToSearchParams(body, properties);
-        return originalSend.call(this, body);
+        void (async () => {
+          const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
+          if (payloadForMultiItem) {
+            try {
+              xhr.setRequestHeader("Content-Type", "application/json");
+            } catch (_error) {
+              // Some wrappers lock request headers after open(); continue with body payload.
+            }
+            reopenXhrForCartAddJson(xhr, method, url);
+            attachXhrCartAddResetOnSuccess(xhr, "xhr_urlsearch_json_multi");
+            originalSend.call(xhr, JSON.stringify(payloadForMultiItem));
+            return;
+          }
+          if (lastCartAddBlockReason) {
+            showError(lastCartAddBlockReason);
+            xhr.abort();
+            return;
+          }
+          const baseProps = getCartProperties();
+          if (Object.keys(baseProps).length === 0) {
+            attachXhrCartAddResetOnSuccess(xhr, "xhr_urlsearch_passthrough_empty");
+            originalSend.call(xhr, body);
+            return;
+          }
+          const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+          if (properties === null) {
+            showError(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+            xhr.abort();
+            return;
+          }
+          applyPropertiesToSearchParams(body, properties);
+          attachXhrCartAddResetOnSuccess(xhr, "xhr_urlsearch_merge_props");
+          originalSend.call(xhr, body);
+        })();
+        return;
       }
 
       if (typeof body === "string") {
         const jsonParsed = tryParseCartJsonBodyString(body);
         if (jsonParsed && typeof jsonParsed === "object") {
-          const payloadForMultiItem = buildMultiItemCartAddPayload(jsonParsed);
-          if (payloadForMultiItem) {
-            try {
-              this.setRequestHeader("Content-Type", "application/json");
-            } catch (_error) {}
-            return originalSend.call(this, JSON.stringify(payloadForMultiItem));
-          }
-          const properties = getCartProperties();
-          if (Object.keys(properties).length === 0) {
-            return originalSend.call(this, body);
-          }
-          const nextPayload = mergePropertiesIntoJsonPayload(jsonParsed, properties);
-          return originalSend.call(this, JSON.stringify(nextPayload));
+          void (async () => {
+            const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(jsonParsed);
+            if (payloadForMultiItem) {
+              try {
+                xhr.setRequestHeader("Content-Type", "application/json");
+              } catch (_error) {
+                // Some wrappers lock request headers after open(); continue with body payload.
+              }
+              reopenXhrForCartAddJson(xhr, method, url);
+              attachXhrCartAddResetOnSuccess(xhr, "xhr_string_json_multi");
+              originalSend.call(xhr, JSON.stringify(payloadForMultiItem));
+              return;
+            }
+            if (lastCartAddBlockReason) {
+              showError(lastCartAddBlockReason);
+              xhr.abort();
+              return;
+            }
+            const baseProps = getCartProperties();
+            if (Object.keys(baseProps).length === 0) {
+              attachXhrCartAddResetOnSuccess(xhr, "xhr_string_json_passthrough_empty");
+              originalSend.call(xhr, body);
+              return;
+            }
+            const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+            if (properties === null) {
+              showError(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+              xhr.abort();
+              return;
+            }
+            const nextPayload = mergePropertiesIntoJsonPayload(jsonParsed, properties);
+            reopenXhrForCartAddJson(xhr, method, url);
+            attachXhrCartAddResetOnSuccess(xhr, "xhr_string_json_merge_props");
+            originalSend.call(xhr, JSON.stringify(nextPayload));
+          })();
+          return;
         }
         try {
           const params = new URLSearchParams(body);
@@ -1634,27 +1945,52 @@
             const parsed = {
               id: String(params.get("id") || root.dataset.variantId || ""),
               quantity: Math.max(1, Number(params.get("quantity") || 1)),
+              ...extractSectionHintsFromKV(params),
             };
-            const payloadForMultiItem = buildMultiItemCartAddPayload(parsed);
-            if (payloadForMultiItem) {
-              try {
-                this.setRequestHeader("Content-Type", "application/json");
-              } catch (_error) {}
-              return originalSend.call(this, JSON.stringify(payloadForMultiItem));
-            }
-            const properties = getCartProperties();
-            if (Object.keys(properties).length === 0) {
-              return originalSend.call(this, body);
-            }
-            applyPropertiesToSearchParams(params, properties);
-            return originalSend.call(this, params.toString());
+            void (async () => {
+              const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
+              if (payloadForMultiItem) {
+                try {
+                  xhr.setRequestHeader("Content-Type", "application/json");
+                } catch (_error) {
+                  // Some wrappers lock request headers after open(); continue with body payload.
+                }
+                reopenXhrForCartAddJson(xhr, method, url);
+                attachXhrCartAddResetOnSuccess(xhr, "xhr_encoded_params_json_multi");
+                originalSend.call(xhr, JSON.stringify(payloadForMultiItem));
+                return;
+              }
+              if (lastCartAddBlockReason) {
+                showError(lastCartAddBlockReason);
+                xhr.abort();
+                return;
+              }
+              const baseProps = getCartProperties();
+              if (Object.keys(baseProps).length === 0) {
+                attachXhrCartAddResetOnSuccess(xhr, "xhr_encoded_params_passthrough_empty");
+                originalSend.call(xhr, body);
+                return;
+              }
+              const properties = await appendSignedPriceTokenToLinePropertiesAsync({ ...baseProps });
+              if (properties === null) {
+                showError(lastCartAddBlockReason || PRICING_SIGN_FAILED_MESSAGE);
+                xhr.abort();
+                return;
+              }
+              applyPropertiesToSearchParams(params, properties);
+              attachXhrCartAddResetOnSuccess(xhr, "xhr_encoded_params_merge_props");
+              originalSend.call(xhr, params.toString());
+            })();
+            return;
           }
         } catch (_error) {
-          return originalSend.call(this, body);
+          attachXhrCartAddResetOnSuccess(xhr, "xhr_string_parse_error_passthrough");
+          return originalSend.call(xhr, body);
         }
       }
 
-      return originalSend.call(this, body);
+      attachXhrCartAddResetOnSuccess(xhr, "xhr_cart_add_fallback_pass_through");
+      return originalSend.call(xhr, body);
     };
   }
 
@@ -1718,8 +2054,8 @@
       if (!Number.isFinite(fileUnitPrice) || fileUnitPrice <= 0) return sum;
       return sum + fileUnitPrice;
     }, 0);
-    const baseUnitPrice = Number.isFinite(BASE_VARIANT_PRICE) && BASE_VARIANT_PRICE > 0
-      ? BASE_VARIANT_PRICE
+    const baseUnitPrice = Number.isFinite(currentBaseVariantPrice) && currentBaseVariantPrice > 0
+      ? currentBaseVariantPrice
       : 0;
     const finalUnitPrice = baseUnitPrice + unitTotal;
     const total = Math.round(finalUnitPrice * productQuantity * 100) / 100;
@@ -2128,6 +2464,38 @@
     }
   }
 
+  /**
+   * Clear PDP widget state after cart accepted our line item. Does not delete cloud storage.
+   */
+  function resetProductPageUploadSession(reason) {
+    for (const entry of uploadedFiles) {
+      if (entry.xhrUpload) {
+        try {
+          entry.xhrUpload.abort();
+        } catch (_e) {
+          // Ignore abort errors from browsers/themes with patched XHR.
+        }
+        entry.xhrUpload = null;
+      }
+      if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+    }
+    uploadedFiles = [];
+    isUploading = false;
+    isBlocked = false;
+    lastCartAddBlockReason = null;
+    clearStoredSession();
+    const fileInput = document.getElementById("printdock-file-input");
+    if (fileInput) fileInput.value = "";
+    document.querySelectorAll('form[action*="/cart/add"]').forEach((form) => {
+      clearPrintdockHiddenInputs(form);
+    });
+    activeBanners.forEach((_, id) => dismissBanner(id));
+    renderFileList();
+    updateCartState();
+    updatePriceDisplay();
+    debugLog("upload_reset_after_cart_add", { reason: reason || "unknown" });
+  }
+
   function showBanner(message, opts = {}) {
     const stack = ensureBannerStack();
     if (!stack) {
@@ -2273,6 +2641,17 @@
     // "Add to cart" (or a theme could auto-add) while loadFieldConfig is
     // still in flight.
     armCartGuardsEarly();
+    if (DEBUG_PRINTDOCK) {
+      window.__printdockDebugSnapshot = function () {
+        return {
+          validationError: getAddToCartValidationError(),
+          state: debugStateSnapshot(),
+        };
+      };
+      debugLog("debug_help", {
+        tip: 'PrintDock debug is ON. Use __printdockDebugSnapshot() in the console. Toggle: theme block "Enable debug logs", URL ?printdock_debug=1, or localStorage.printdock_debug="1".',
+      });
+    }
     init();
   }
 

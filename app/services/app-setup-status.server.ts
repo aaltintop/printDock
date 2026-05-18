@@ -1,11 +1,8 @@
 import { db } from "../firebase.server";
 import { log } from "../lib/logger.server";
 import { listUploadFields } from "./shop-data.server";
-import { getStoredFeeProductConfig } from "./fee-product.server";
-import {
-  detectPrintDockCartTransform,
-  type CartTransformStatus,
-} from "./cart-transform.server";
+import { getHmacSecretFromFirestore } from "./shop-secret.server";
+import { detectPrintDockCartTransform } from "./cart-transform.server";
 
 type ThemeNode = {
   id: string;
@@ -112,14 +109,6 @@ export async function detectThemeBlockEnabled(admin: {
   }
 }
 
-function isUnavailableStatus(code: CartTransformStatus["code"]): boolean {
-  return (
-    code === "verification_unavailable" ||
-    code === "permission_denied" ||
-    code === "missing_scope"
-  );
-}
-
 /** True when theme step, first field, cart validation, and cart transform are all satisfied (matches onboarding `setupComplete`). */
 export async function isAppSetupComplete(
   admin: {
@@ -133,18 +122,14 @@ export async function isAppSetupComplete(
   const shopSettingsDoc = await db.collection("shops").doc(shopDomain).get();
   const shopSettings = shopSettingsDoc.data() ?? {};
   const fields = await listUploadFields(shopDomain);
-  const feeProduct = await getStoredFeeProductConfig(shopDomain);
+  const pricingSecret = await getHmacSecretFromFirestore(shopDomain);
 
   const { enabled: themeBlockEnabled, verificationUnavailable } = await detectThemeBlockEnabled(admin);
   const cartTransformStatus = await detectPrintDockCartTransform(admin);
   const fieldsConfigured = fields.length > 0;
   const cartValidationVerified =
     fields.some((field) => field.isRequired === true) || Boolean(shopSettings.cartValidationVerified);
-  // Real cart transform detection is the source of truth. We allow setup to
-  // complete when Shopify cannot tell us (`isUnavailableStatus`) so merchants
-  // are not blocked by an unavailable API on plans without Cart Transform.
-  const cartTransformReady =
-    cartTransformStatus.enabled || isUnavailableStatus(cartTransformStatus.code);
+  const cartTransformReady = cartTransformStatus.enabled;
   const themeStepVerified =
     verificationUnavailable ||
     themeBlockEnabled ||
@@ -152,10 +137,10 @@ export async function isAppSetupComplete(
 
   return Boolean(
     themeStepVerified &&
-      fieldsConfigured &&
-      cartValidationVerified &&
-      cartTransformReady &&
-      Boolean(feeProduct),
+    fieldsConfigured &&
+    cartValidationVerified &&
+    cartTransformReady &&
+    Boolean(pricingSecret),
   );
 }
 
@@ -164,5 +149,6 @@ export function isPathExemptFromSetupRedirect(pathname: string): boolean {
   if (pathname === "/app/onboarding" || pathname.startsWith("/app/onboarding/")) return true;
   if (pathname === "/app/fields" || pathname.startsWith("/app/fields/")) return true;
   if (pathname === "/app/plans" || pathname.startsWith("/app/plans/")) return true;
+  if (pathname === "/app/release-notes" || pathname.startsWith("/app/release-notes/")) return true;
   return false;
 }

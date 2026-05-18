@@ -1,0 +1,54 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cartTransform": {
+        "pricingHmac": null
+      },
+      "shop": {
+        "shopHmac": {
+          "value": "fixture-hmac-key-32bytes-long!!"
+        }
+      },
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/9",
+            "quantity": 1,
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/999"
+            },
+            "sellingPlanAllocation": null,
+            "priceToken": {
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoiczIiLCJwIjoxNTAwLCJjIjoiSlBZIiwiZXhwIjoxNzAwMDg2NDAwLCJpYXQiOjE3MDAwMDAwMDB9.UFKLwnc2di1Lqiz5WI1XwS0r5sQVdRiGJk-OfBc46Yk"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "lineExpand": {
+            "cartLineId": "gid://shopify/CartLine/9",
+            "expandedCartItems": [
+              {
+                "merchandiseId": "gid://shopify/ProductVariant/999",
+                "quantity": 1,
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": "1500"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

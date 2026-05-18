@@ -35,6 +35,13 @@ api_version = "2026-07"
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+# App-owned shop metafield: HMAC key for Cart Transform signed price tokens (read by Function input query).
+[shop.metafields.app.hmac_secret]
+type = "single_line_text_field"
+name = "PrintDock pricing HMAC"
+access.admin = "merchant_read"
+access.storefront = "none"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_cart_transforms,read_orders,read_products,read_themes,write_cart_transforms"

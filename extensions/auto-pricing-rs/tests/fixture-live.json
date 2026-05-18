@@ -1,0 +1,28 @@
+{
+  "cartTransform": {
+    "pricingHmac": {
+      "value": "3gNDFEAMvuq78S3NvJJRTJR381GvicA8Ef7C7EiADC0"
+    }
+  },
+  "shop": {
+    "shopHmac": {
+      "value": "3gNDFEAMvuq78S3NvJJRTJR381GvicA8Ef7C7EiADC0"
+    }
+  },
+  "cart": {
+    "lines": [
+      {
+        "id": "gid://shopify/CartLine/5379da2f-2a31-4cf3-b33e-8fd592b66c2b",
+        "quantity": 1,
+        "merchandise": {
+          "__typename": "ProductVariant",
+          "id": "gid://shopify/ProductVariant/43869309993057"
+        },
+        "sellingPlanAllocation": null,
+        "priceToken": {
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoibGV2eWFwcHMubXlzaG9waWZ5LmNvbSIsInNpZCI6IjdkNTAxODdjLWE5MzMtNDYzMC1iNDY4LTM5MzVjNDA0MWIzNyIsInAiOjgwNjMwLCJjIjoiVVNEIiwiZXhwIjoxNzc4ODQ1NDcwLCJpYXQiOjE3Nzg3NTkwNzB9.hQ5cVramOuNtuQj0OPTKkEcz4p3-nc6aYthsxh9tli8"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cartTransform": {
+        "pricingHmac": null
+      },
+      "shop": {
+        "shopHmac": null
+      },
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/111"
+            },
+            "sellingPlanAllocation": null,
+            "priceToken": {
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoiczEiLCJwIjoxMjk5LCJjIjoiVVNEIiwiZXhwIjoxNzAwMDg2NDAwLCJpYXQiOjE3MDAwMDAwMDB9.kz70NQscF-VbFqh56Ze_lSLzbyVZEKdtKOit6bGNMlo"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

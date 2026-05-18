@@ -17,6 +17,27 @@ import {
   applyRenamePattern,
   sanitizeSegment,
 } from "../utils/file-rename-pattern";
+import { getHmacSecretFromFirestore } from "../services/shop-secret.server";
+import { verifyPriceToken } from "../services/price-token.server";
+
+type OrderLineProperty = {
+  name?: string;
+  value?: string;
+};
+
+type OrdersCreateLine = {
+  id?: string | number;
+  quantity?: number;
+  variant_title?: string;
+  title?: string;
+  properties?: OrderLineProperty[];
+};
+
+type OrdersCreatePayload = {
+  id?: string | number;
+  name?: string;
+  line_items?: OrdersCreateLine[];
+};
 
 async function buildRenamedAsset({
   shopDomain,
@@ -27,8 +48,8 @@ async function buildRenamedAsset({
   fileIndex,
 }: {
   shopDomain: string;
-  order: any;
-  line: any;
+  order: OrdersCreatePayload;
+  line: OrdersCreateLine;
   asset: NonNullable<OrderJob["assetSnapshot"]>;
   pattern: string;
   fileIndex: number;
@@ -61,17 +82,18 @@ async function buildRenamedAsset({
   };
 }
 
-function parsePerFileQuantities(lineProperties: any[]): Record<string, number> {
-  const quantityProp = lineProperties.find((prop: any) => prop.name === "_pd_file_quantities");
+function parsePerFileQuantities(lineProperties: OrderLineProperty[]): Record<string, number> {
+  const quantityProp = lineProperties.find((prop) => prop.name === "_pd_file_quantities");
   if (!quantityProp || !quantityProp.value) return {};
 
   try {
     const parsed = JSON.parse(String(quantityProp.value));
     if (!Array.isArray(parsed)) return {};
 
-    return parsed.reduce((acc: Record<string, number>, item: any) => {
-      const fileName = String(item.fileName || "");
-      const quantity = Number(item.quantity || 1);
+    return parsed.reduce((acc: Record<string, number>, item: unknown) => {
+      const row = item as { fileName?: string; quantity?: number };
+      const fileName = String(row.fileName || "");
+      const quantity = Number(row.quantity || 1);
       if (!fileName) return acc;
       acc[fileName] = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
       return acc;
@@ -91,7 +113,7 @@ export async function action({ request }: ActionFunctionArgs) {
         return new Response("Ignored", { status: 200 });
       }
 
-      const order = payload as any;
+      const order = payload as OrdersCreatePayload;
       const shopDomain = shop;
       setLogShopDomain(shopDomain);
       log.event("webhook_received", { topic, shopDomain });
@@ -101,156 +123,190 @@ export async function action({ request }: ActionFunctionArgs) {
         lineItemCount: Array.isArray(order.line_items) ? order.line_items.length : 0,
       });
 
-  // Process each line item
-  for (const line of order.line_items ?? []) {
-    const props = line.properties ?? [];
-    const sessionToken = props.find((p: any) => p.name === "_uc_session")?.value;
-    if (!sessionToken) {
-      const hasPrintDockHints = props.some((p: any) =>
-        [
-          "_pd_session",
-          "__ucToken",
-          "_Artwork",
-          "Artwork",
-          "_Print Ready File",
-          "_View uploads",
-          "_pd_file_quantities",
-          "_pd_calculated_price",
-          "_pd_unit_fee_minor",
-          "_pd_fee_for",
-        ].includes(String(p?.name || "")),
-      );
-      if (hasPrintDockHints) {
-        log.warn("orders_create_missing_uc_session", "PrintDock hints without session token", {
-          shopDomain,
-          orderId: String(order.id),
-          lineItemId: String(line.id),
-          propertyNames: props.map((p: any) => String(p?.name || "")).slice(0, 20),
+      const hmacKey = await getHmacSecretFromFirestore(shopDomain);
+      const nowUnix = Math.floor(Date.now() / 1000);
+
+      // Process each line item
+      for (const line of order.line_items ?? []) {
+        const props = line.properties ?? [];
+        const sessionToken = props.find((p) => p.name === "_uc_session")?.value;
+        if (!sessionToken) {
+          const hasPrintDockHints = props.some((p) =>
+            [
+              "_pd_session",
+              "__ucToken",
+              "_Artwork",
+              "Artwork",
+              "_Print Ready File",
+              "_View uploads",
+              "_pd_file_quantities",
+              "_pd_price_token",
+            ].includes(String(p?.name || "")),
+          );
+          if (hasPrintDockHints) {
+            log.warn("orders_create_missing_uc_session", "PrintDock hints without session token", {
+              shopDomain,
+              orderId: String(order.id),
+              lineItemId: String(line.id),
+              propertyNames: props.map((p) => String(p?.name || "")).slice(0, 20),
+            });
+          }
+          continue;
+        }
+
+        // Find the session
+        const sessionData = await getUploadSession(shopDomain, String(sessionToken));
+        if (!sessionData || !sessionData.asset) {
+          log.warn("orders_create_session_not_found", "Upload session missing for line item", {
+            shopDomain,
+            orderId: String(order.id),
+            lineItemId: String(line.id),
+            sessionToken: String(sessionToken),
+          });
+          continue;
+        }
+        const sessionAssets = sessionData.assets.length > 0 ? sessionData.assets : [sessionData.asset];
+        const perFileQuantities = parsePerFileQuantities(props);
+
+        const field = sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null;
+        const renamePattern = field?.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
+
+        const priceTokenRaw = props.find((p) => p.name === "_pd_price_token")?.value;
+        let pricingEvidence: OrderJob["pricingEvidence"] | undefined;
+        if (field?.pricing?.enabled || priceTokenRaw) {
+          const verified =
+            priceTokenRaw && hmacKey
+              ? verifyPriceToken(String(priceTokenRaw), hmacKey, nowUnix)
+              : null;
+          const sessionOk = Boolean(
+            verified &&
+            verified.shop === shopDomain &&
+            verified.sid === String(sessionToken),
+          );
+          let anomalyReason: string | undefined;
+          if (field?.pricing?.enabled) {
+            if (!priceTokenRaw) {
+              anomalyReason = "signed_price_missing";
+            } else if (!sessionOk) {
+              anomalyReason = "signed_price_invalid_or_expired";
+            }
+          }
+          pricingEvidence = {
+            hadPriceToken: Boolean(priceTokenRaw),
+            tokenValid: sessionOk,
+            signedMinorPerUnit: sessionOk && verified ? verified.p : undefined,
+            anomalyReason,
+          };
+        }
+
+        const renamedAssets = [];
+
+        for (const [assetIndex, asset] of sessionAssets.entries()) {
+          const jobId = `${order.id}_${line.id}_${asset.id || assetIndex}`;
+          const existingJobDoc = await jobsCollection(shopDomain).doc(jobId).get();
+          if (existingJobDoc.exists) {
+            log.event("orders_create_duplicate_job_skipped", {
+              shopDomain,
+              orderId: String(order.id),
+              lineItemId: String(line.id),
+              jobId,
+            });
+            continue;
+          }
+
+          const renamedAsset = await buildRenamedAsset({
+            shopDomain,
+            order,
+            line,
+            asset,
+            pattern: renamePattern,
+            fileIndex: assetIndex,
+          });
+          renamedAssets.push(renamedAsset);
+
+          const nowIso = new Date().toISOString();
+          const perFileQuantity =
+            perFileQuantities[asset.originalName] ??
+            perFileQuantities[renamedAsset.originalName] ??
+            Number(line.quantity || 1);
+          const fileUnitPrice = Number(
+            renamedAsset.pricing?.filePrice != null
+              ? renamedAsset.pricing.filePrice
+              : renamedAsset.pricing?.total || 0,
+          );
+          const calculatedPrice = Math.round(fileUnitPrice * Math.max(1, perFileQuantity) * 100) / 100;
+          const assignee = null;
+          const tags = [];
+          if (sessionAssets.length > 1) tags.push("multi_file");
+          if (renamedAsset.blocked) tags.push("blocked_asset");
+          if (renamedAsset.validationResults.some((result) => result.severity === "warning")) {
+            tags.push("needs_review");
+          }
+          if ((renamedAsset.widthInch || 0) > 20 || (renamedAsset.heightInch || 0) > 20) {
+            tags.push("large_format");
+          }
+          if (pricingEvidence?.anomalyReason) {
+            tags.push("pricing_anomaly");
+          }
+          const hasWarningOrBlocker =
+            renamedAsset.blocked ||
+            renamedAsset.validationResults.some(
+              (result) => result.severity === "warning" || result.severity === "blocking",
+            );
+          const initialStatus = hasWarningOrBlocker ? "pending_review" : "uploaded";
+
+          const job: OrderJob = {
+            id: jobId,
+            shopDomain,
+            shopifyOrderId: String(order.id),
+            shopifyOrderName: String(order.name ?? ""),
+            shopifyLineItemId: String(line.id),
+            sessionId: String(sessionToken),
+            legacySessionUploadPath: asset.storagePath,
+            shippingAddress: null,
+            productId: sessionData.productId,
+            variantId: sessionData.variantId,
+            assetSnapshot: renamedAsset,
+            lineItemPropsSnapshot: Array.isArray(props)
+              ? props.map((prop) => ({
+                name: String(prop.name ?? ""),
+                value: String(prop.value ?? ""),
+              }))
+              : [],
+            calculatedPrice,
+            pricingEvidence,
+            warnings: renamedAsset.validationResults
+              .filter((result) => result.severity === "warning")
+              .map((result) => result.message),
+            status: initialStatus,
+            assignee,
+            internalNotes: "",
+            tags,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+
+          await saveOrderJob(shopDomain, job);
+          await appendOrderJobAuditEvent(shopDomain, jobId, {
+            eventType: "job_created",
+            message: `Order job created with status "${job.status}"`,
+            metadata: {
+              orderId: job.shopifyOrderId,
+              lineItemId: job.shopifyLineItemId,
+              tags: job.tags,
+              calculatedPrice: job.calculatedPrice,
+            },
+            actor: "system:webhook",
+          });
+        }
+
+        // Mark session as converted
+        await updateUploadSession(shopDomain, String(sessionToken), {
+          asset: renamedAssets[0] || sessionData.asset,
+          assets: renamedAssets.length > 0 ? renamedAssets : sessionAssets,
+          status: "converted",
         });
       }
-      continue;
-    }
-
-    // Find the session
-    const sessionData = await getUploadSession(shopDomain, String(sessionToken));
-    if (!sessionData || !sessionData.asset) {
-      log.warn("orders_create_session_not_found", "Upload session missing for line item", {
-        shopDomain,
-        orderId: String(order.id),
-        lineItemId: String(line.id),
-        sessionToken: String(sessionToken),
-      });
-      continue;
-    }
-    const sessionAssets = sessionData.assets.length > 0 ? sessionData.assets : [sessionData.asset];
-    const perFileQuantities = parsePerFileQuantities(props);
-
-    const field = sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null;
-    const renamePattern = field?.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
-    const renamedAssets = [];
-
-    for (const [assetIndex, asset] of sessionAssets.entries()) {
-      const jobId = `${order.id}_${line.id}_${asset.id || assetIndex}`;
-      const existingJobDoc = await jobsCollection(shopDomain).doc(jobId).get();
-      if (existingJobDoc.exists) {
-        log.event("orders_create_duplicate_job_skipped", {
-          shopDomain,
-          orderId: String(order.id),
-          lineItemId: String(line.id),
-          jobId,
-        });
-        continue;
-      }
-
-      const renamedAsset = await buildRenamedAsset({
-        shopDomain,
-        order,
-        line,
-        asset,
-        pattern: renamePattern,
-        fileIndex: assetIndex,
-      });
-      renamedAssets.push(renamedAsset);
-
-      const nowIso = new Date().toISOString();
-      const perFileQuantity =
-        perFileQuantities[asset.originalName] ??
-        perFileQuantities[renamedAsset.originalName] ??
-        Number(line.quantity || 1);
-      const fileUnitPrice = Number(
-        renamedAsset.pricing?.filePrice != null
-          ? renamedAsset.pricing.filePrice
-          : renamedAsset.pricing?.total || 0,
-      );
-      const calculatedPrice = Math.round(fileUnitPrice * Math.max(1, perFileQuantity) * 100) / 100;
-      const assignee = null;
-      const tags = [];
-      if (sessionAssets.length > 1) tags.push("multi_file");
-      if (renamedAsset.blocked) tags.push("blocked_asset");
-      if (renamedAsset.validationResults.some((result) => result.severity === "warning")) {
-        tags.push("needs_review");
-      }
-      if ((renamedAsset.widthInch || 0) > 20 || (renamedAsset.heightInch || 0) > 20) {
-        tags.push("large_format");
-      }
-      const hasWarningOrBlocker =
-        renamedAsset.blocked ||
-        renamedAsset.validationResults.some(
-          (result) => result.severity === "warning" || result.severity === "blocking",
-        );
-      const initialStatus = hasWarningOrBlocker ? "pending_review" : "uploaded";
-
-      const job: OrderJob = {
-        id: jobId,
-        shopDomain,
-        shopifyOrderId: String(order.id),
-        shopifyOrderName: String(order.name ?? ""),
-        shopifyLineItemId: String(line.id),
-        sessionId: String(sessionToken),
-        legacySessionUploadPath: asset.storagePath,
-        shippingAddress: null,
-        productId: sessionData.productId,
-        variantId: sessionData.variantId,
-        assetSnapshot: renamedAsset,
-        lineItemPropsSnapshot: Array.isArray(props)
-          ? props.map((prop: any) => ({
-              name: String(prop.name ?? ""),
-              value: String(prop.value ?? ""),
-            }))
-          : [],
-        calculatedPrice,
-        warnings: renamedAsset.validationResults
-          .filter((result) => result.severity === "warning")
-          .map((result) => result.message),
-        status: initialStatus,
-        assignee,
-        internalNotes: "",
-        tags,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      };
-
-      await saveOrderJob(shopDomain, job);
-      await appendOrderJobAuditEvent(shopDomain, jobId, {
-        eventType: "job_created",
-        message: `Order job created with status "${job.status}"`,
-        metadata: {
-          orderId: job.shopifyOrderId,
-          lineItemId: job.shopifyLineItemId,
-          tags: job.tags,
-          calculatedPrice: job.calculatedPrice,
-        },
-        actor: "system:webhook",
-      });
-    }
-
-    // Mark session as converted
-    await updateUploadSession(shopDomain, String(sessionToken), {
-      asset: renamedAssets[0] || sessionData.asset,
-      assets: renamedAssets.length > 0 ? renamedAssets : sessionAssets,
-      status: "converted",
-    });
-  }
 
       log.event("webhook_processed", { topic: "ORDERS_CREATE", shopDomain });
       return new Response("OK", { status: 200 });

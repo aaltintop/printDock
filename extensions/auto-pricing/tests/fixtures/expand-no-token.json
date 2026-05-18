@@ -3,26 +3,26 @@
     "export": "cart-transform-run",
     "target": "cart.transform.run",
     "input": {
+      "cartTransform": {
+        "pricingHmac": null
+      },
+      "shop": {
+        "shopHmac": {
+          "value": "fixture-hmac-key-32bytes-long!!"
+        }
+      },
       "cart": {
         "lines": [
           {
             "id": "gid://shopify/CartLine/1",
             "quantity": 1,
-            "cost": {
-              "amountPerQuantity": {
-                "amount": "14.00"
-              }
-            },
-            "priceAttribute": {
-              "value": "not-a-number"
-            },
-            "sessionAttribute": {
-              "value": "session_123"
-            },
-            "feeForAttribute": null,
-            "sellingPlanAllocation": null,
             "merchandise": {
+              "__typename": "ProductVariant",
               "id": "gid://shopify/ProductVariant/111"
+            },
+            "sellingPlanAllocation": null,
+            "priceToken": {
+              "value": null
             }
           }
         ]

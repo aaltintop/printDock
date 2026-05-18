@@ -40,7 +40,7 @@ function scrubValue(key: string, value: unknown): unknown {
     return scrubMeta(value as Record<string, unknown>);
   }
   if (Array.isArray(value)) {
-    return value.map((v, i) =>
+    return value.map((v) =>
       typeof v === "object" && v !== null ? scrubMeta(v as Record<string, unknown>) : v,
     );
   }

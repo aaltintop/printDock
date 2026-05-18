@@ -19,7 +19,7 @@ import {
   registerPrintDockCartTransform,
   type CartTransformStatusCode,
 } from "../services/cart-transform.server";
-import { ensureFeeProductForShop, getStoredFeeProductConfig } from "../services/fee-product.server";
+import { ensureHmacSecret, getHmacSecretFromFirestore } from "../services/shop-secret.server";
 
 type SetupState = {
   themeBlockEnabled: boolean;
@@ -33,7 +33,7 @@ type SetupState = {
   cartTransformVerificationMessage: string | null;
   cartTransformConflictMessage: string | null;
   fieldsConfigured: boolean;
-  feeProductConfigured: boolean;
+  pricingSecretConfigured: boolean;
   themeEditorUrl: string;
   reauthUrl: string;
 };
@@ -72,7 +72,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         jobs,
         billingPlan,
         stats,
-        feeProduct,
+        pricingSecret,
       ] = await Promise.all([
         detectThemeBlockEnabled(admin),
         detectPrintDockCartTransform(admin),
@@ -82,7 +82,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         listOrderJobs(shopDomain),
         getEffectiveBillingPlan(shopDomain),
         computeDashboardStats(shopDomain),
-        getStoredFeeProductConfig(shopDomain),
+        getHmacSecretFromFirestore(shopDomain),
       ]);
 
       const fieldsConfigured = fields.length > 0;
@@ -96,6 +96,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       const reauthUrl = `/auth?shop=${encodeURIComponent(shopDomain)}`;
 
+      const pricingSecretConfigured = Boolean(pricingSecret);
       const setup: SetupState = {
         themeBlockEnabled: themeStatus.enabled,
         themeBlockVerified: Boolean(shopSettings.themeBlockVerified),
@@ -112,26 +113,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         cartTransformConflictMessage: cartTransformConflict.message,
         themeEditorUrl,
         reauthUrl,
-        feeProductConfigured: Boolean(feeProduct),
+        pricingSecretConfigured,
       };
 
       const themeStepVerified =
         setup.themeVerificationUnavailable || setup.themeBlockEnabled || setup.themeBlockVerified;
 
-      // Real cart transform detection drives setup completion. We treat
-      // "verification unavailable" cases (missing scope, not supported, etc.)
-      // as soft passes so merchants on plans without Cart Transform are not
-      // blocked from finishing onboarding.
-      const cartTransformStepReady =
-        (setup.cartTransformEnabled || cartTransformVerificationUnavailable) &&
-        !setup.cartTransformConflictMessage;
+      const cartTransformStepReady = setup.cartTransformEnabled && !setup.cartTransformConflictMessage;
 
       const setupComplete =
         themeStepVerified &&
         setup.fieldsConfigured &&
         setup.cartValidationVerified &&
         cartTransformStepReady &&
-        setup.feeProductConfigured;
+        setup.pricingSecretConfigured;
 
       const checks = [
         {
@@ -145,7 +140,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           label: "Setup wizard completed",
           help: "Cart validation and dynamic pricing have both been verified.",
           pass: Boolean(
-            setup.cartValidationVerified && cartTransformStepReady && setup.feeProductConfigured,
+            setup.cartValidationVerified && cartTransformStepReady && setup.pricingSecretConfigured,
           ),
         },
         {
@@ -243,6 +238,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           return data({
             ok: false,
             intent: "register_cart_transform",
+            pricingSecretConfigured: false,
             cartTransform: {
               code: "unknown_error" as CartTransformStatusCode,
               enabled: false,
@@ -252,13 +248,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             },
           });
         }
-        const feeProduct = await ensureFeeProductForShop(session.shop);
-        const result = await registerPrintDockCartTransform(admin);
+        try {
+          await ensureHmacSecret(admin, session.shop);
+        } catch (error) {
+          const rawMessage = String((error as { message?: string })?.message || error || "");
+          const friendlyMessage = /^could not mirror hmac secret/i.test(rawMessage)
+            ? rawMessage
+            : `Could not store the pricing signing key: ${rawMessage}`;
+          log.error("onboarding_hmac_setup_failed", error, { shopDomain: session.shop });
+          return data({
+            ok: false,
+            intent: "register_cart_transform",
+            pricingSecretConfigured: false,
+            cartTransform: {
+              code: "unknown_error" as CartTransformStatusCode,
+              enabled: false,
+              created: false,
+              cartTransformId: null,
+              message: friendlyMessage,
+            },
+          });
+        }
+        const result = await registerPrintDockCartTransform(admin, session.shop);
+        const pricingSecretConfigured = Boolean(await getHmacSecretFromFirestore(session.shop));
         const okStatuses: CartTransformStatusCode[] = ["active"];
         return data({
           ok: okStatuses.includes(result.code),
           intent: "register_cart_transform",
-          feeProductConfigured: Boolean(feeProduct),
+          pricingSecretConfigured,
           cartTransform: {
             code: result.code,
             enabled: result.enabled,
@@ -372,10 +389,13 @@ export default function OnboardingPage() {
   const fetcher = useFetcher<typeof action>();
   const ready = passedCount === totalChecks;
 
+  const cartTransformIntents = new Set(["register_cart_transform"]);
   const cartTransformResult =
-    fetcher.data && (fetcher.data as { intent?: string }).intent === "register_cart_transform"
+    fetcher.data &&
+      cartTransformIntents.has(String((fetcher.data as { intent?: string }).intent || ""))
       ? (fetcher.data as {
         ok: boolean;
+        pricingSecretConfigured?: boolean;
         cartTransform: {
           code: CartTransformStatusCode;
           enabled: boolean;
@@ -396,9 +416,27 @@ export default function OnboardingPage() {
     cartTransformResult?.cartTransform
       ? CART_TRANSFORM_UNAVAILABLE_CODES.has(cartTransformResult.cartTransform.code)
       : setup.cartTransformVerificationUnavailable;
+  const livePricingSecretConfigured =
+    cartTransformResult &&
+      typeof cartTransformResult.pricingSecretConfigured === "boolean"
+      ? cartTransformResult.pricingSecretConfigured
+      : setup.pricingSecretConfigured;
+  const needsReauthForScopes =
+    liveCartTransformCode === "missing_scope" ||
+    (liveCartTransformCode === "unknown_error" &&
+      (() => {
+        const lower = String(liveCartTransformMessage || "").toLowerCase();
+        return (
+          lower.includes("write_cart_transforms") ||
+          lower.includes("write_products") ||
+          lower.includes("write_publications") ||
+          lower.includes("read_publications") ||
+          lower.includes("metafield")
+        );
+      })());
   const showRegisterButton =
     !setup.cartTransformConflictMessage &&
-    (!liveCartTransformEnabled || !setup.feeProductConfigured) &&
+    (!liveCartTransformEnabled || !livePricingSecretConfigured) &&
     (liveCartTransformCode === "missing" ||
       liveCartTransformCode === "function_not_deployed" ||
       liveCartTransformCode === "unknown_error" ||
@@ -513,8 +551,8 @@ export default function OnboardingPage() {
               />
             </InlineStack>
             <Text as="p" tone="subdued">
-              Set up PrintDock upload pricing. This creates the hidden fee product and registers
-              Cart Transform for bundled fee handling on every Shopify plan.
+              Registers PrintDock Cart Transform and stores a shop signing key so checkout can apply
+              your upload fees as a single line item price (no separate fee products).
             </Text>
             {setup.cartTransformConflictMessage ? (
               <Text as="p" tone="critical">
@@ -526,7 +564,7 @@ export default function OnboardingPage() {
               message={liveCartTransformMessage}
               enabled={liveCartTransformEnabled}
             />
-            {liveCartTransformCode === "missing_scope" ? (
+            {needsReauthForScopes ? (
               <Button url={setup.reauthUrl} target="_top">
                 Reauthorize PrintDock
               </Button>

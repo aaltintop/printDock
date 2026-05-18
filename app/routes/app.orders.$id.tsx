@@ -3,6 +3,7 @@ import { data, useFetcher, useLoaderData } from "react-router";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   BlockStack,
+  Banner,
   Button,
   Card,
   Layout,
@@ -182,6 +183,17 @@ export default function OrderJobDetailPage() {
   return (
     <Page title={`Order ${job.shopifyOrderName}`} backAction={{ content: "Order jobs", url: "/app/orders" }}>
       <Layout>
+        {job.pricingEvidence?.anomalyReason ? (
+          <Layout.Section>
+            <Banner tone="warning" title="Upload pricing verification">
+              <Text as="p">
+                Shopify captured this line without a valid signed upload price ({job.pricingEvidence.anomalyReason}).
+                The charged amount may not match the in-app calculation. Compare the order in Shopify Admin with the
+                job details below if the customer disputes pricing.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        ) : null}
         <Layout.Section variant="oneHalf">
           <Card>
             <BlockStack gap="300">

@@ -1,4 +1,4 @@
-query CartTransformRunInput {
+query Input {
   cartTransform {
     pricingHmac: metafield(namespace: "$app", key: "hmac_secret") {
       value

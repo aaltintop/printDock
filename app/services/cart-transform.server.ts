@@ -244,6 +244,143 @@ export async function syncPrintDockCartTransformHmacMirror(
 }
 
 /**
+ * Returns the gid of the *currently deployed* PrintDock cart-transform function
+ * (the one whose handle in the app's `shopify.extension.toml` matches
+ * `PRINTDOCK_CART_TRANSFORM_FUNCTION_HANDLE`).
+ *
+ * Returns `null` if the function is missing or the query failed — callers
+ * should treat that as "unknown" and avoid mutating cart transforms.
+ */
+async function getActivePrintDockFunctionId(admin: AdminLike): Promise<string | null> {
+  try {
+    const response = await admin.graphql(`#graphql
+      query PrintDockActiveFunction {
+        shopifyFunctions(apiType: "cart_transform", first: 25) {
+          nodes {
+            id
+            handle
+            apiType
+          }
+        }
+      }
+    `);
+    const json = await response.json();
+    const nodes = Array.isArray(json?.data?.shopifyFunctions?.nodes)
+      ? (json.data.shopifyFunctions.nodes as Array<{ id?: string; handle?: string }>)
+      : [];
+    const match = nodes.find(
+      (n) => String(n?.handle ?? "") === PRINTDOCK_CART_TRANSFORM_FUNCTION_HANDLE,
+    );
+    return match?.id ? String(match.id) : null;
+  } catch (error) {
+    log.warn(
+      "cart_transform_active_function_lookup_failed",
+      error instanceof Error ? error.message : String(error),
+      {},
+    );
+    return null;
+  }
+}
+
+/**
+ * Deletes a Cart Transform by gid. Returns true on success, false otherwise.
+ * Logs the outcome either way.
+ */
+async function deleteCartTransform(admin: AdminLike, cartTransformId: string): Promise<boolean> {
+  try {
+    const response = await admin.graphql(
+      `#graphql
+      mutation PrintDockCartTransformDelete($id: ID!) {
+        cartTransformDelete(id: $id) {
+          deletedId
+          userErrors {
+            field
+            message
+          }
+        }
+      }`,
+      { variables: { id: cartTransformId } },
+    );
+    const json = await response.json();
+    const userErrors = Array.isArray(json?.data?.cartTransformDelete?.userErrors)
+      ? (json.data.cartTransformDelete.userErrors as Array<{ message?: string }>)
+      : [];
+    if (userErrors.length > 0) {
+      log.warn(
+        "cart_transform_delete_user_errors",
+        userErrors.map((e) => String(e?.message ?? "")).join("; "),
+        { cartTransformId },
+      );
+      return false;
+    }
+    const deletedId = json?.data?.cartTransformDelete?.deletedId;
+    if (deletedId) {
+      log.event("cart_transform_deleted", { cartTransformId: String(deletedId) });
+      return true;
+    }
+    return false;
+  } catch (error) {
+    log.error("cart_transform_delete_failed", error, { cartTransformId });
+    return false;
+  }
+}
+
+/**
+ * Purges PrintDock-owned Cart Transforms that are bound to a *stale* function.
+ *
+ * Why this matters: when we replaced the JS cart-transform with the Rust one
+ * (different export name → different functionId), Shopify did not rebind the
+ * existing Cart Transform, so it continued invoking the dead JS function and
+ * timing out at 11M instructions. After purging, `registerPrintDockCartTransform`
+ * recreates the CT bound to the current (Rust) function via `functionHandle`.
+ *
+ * Idempotent: a no-op when every CT already points at the current function ID,
+ * or when we can't determine the function ID (we never delete blindly).
+ */
+async function purgeStalePrintDockCartTransforms(admin: AdminLike): Promise<void> {
+  const currentFunctionId = await getActivePrintDockFunctionId(admin);
+  if (!currentFunctionId) return;
+
+  try {
+    const response = await admin.graphql(`#graphql
+      query PrintDockCartTransformsForRebind {
+        cartTransforms(first: 25) {
+          nodes {
+            id
+            functionId
+          }
+        }
+      }
+    `);
+    const json = await response.json();
+    const nodes = Array.isArray(json?.data?.cartTransforms?.nodes)
+      ? (json.data.cartTransforms.nodes as Array<{ id?: string; functionId?: string }>)
+      : [];
+    const stale = nodes.filter(
+      (n) => Boolean(n?.id) && String(n?.functionId ?? "") !== currentFunctionId,
+    );
+    if (stale.length === 0) return;
+
+    log.event("cart_transform_stale_detected", {
+      currentFunctionId,
+      staleCount: stale.length,
+      staleIds: stale.map((s) => String(s.id ?? "")),
+    });
+
+    for (const ct of stale) {
+      if (!ct.id) continue;
+      await deleteCartTransform(admin, String(ct.id));
+    }
+  } catch (error) {
+    log.warn(
+      "cart_transform_purge_stale_failed",
+      error instanceof Error ? error.message : String(error),
+      {},
+    );
+  }
+}
+
+/**
  * Self-heal helper for stores where onboarding never completed:
  * ensure the HMAC key exists and register/mirror the PrintDock cart transform.
  */
@@ -261,6 +398,8 @@ export async function ensurePrintDockCartTransformReady(
     );
     return null;
   }
+
+  await purgeStalePrintDockCartTransforms(admin);
 
   const conflict = await detectCartTransformConflict(admin);
   if (conflict.hasConflict) {

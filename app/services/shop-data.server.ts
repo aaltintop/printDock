@@ -354,8 +354,13 @@ export function createCollectionIdResolver(): CollectionIdResolver {
         { variables: { id: productGid } },
       );
       const json = await response.json();
-      const edges = json?.data?.product?.collections?.edges ?? [];
-      return edges.map((edge: any) => extractNumericId(String(edge.node.id)));
+      const edges = Array.isArray(json?.data?.product?.collections?.edges)
+        ? (json.data.product.collections.edges as Array<{ node?: { id?: string } }>)
+        : [];
+      return edges
+        .map((edge) => String(edge?.node?.id || ""))
+        .filter((id) => Boolean(id))
+        .map((id) => extractNumericId(id));
     } catch (err) {
       log.warn("collection_id_resolve_failed", err instanceof Error ? err.message : String(err), {
         shopDomain,

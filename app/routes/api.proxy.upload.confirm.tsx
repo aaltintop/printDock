@@ -11,10 +11,10 @@ import { createPrintReadyFileToken } from "../services/file-download-token.serve
 import { deleteFile, getFileBuffer } from "../services/storage.server";
 import { extractMetadata, hasBlockingError } from "../services/validation.server";
 import { calculatePrice } from "../services/pricing.server";
-import { ensureFeeProductForShop, inferCurrencyDecimals } from "../services/fee-product.server";
+import { inferCurrencyDecimals } from "../services/currency.server";
 import { buildDimensionRuleMessages } from "../services/dimension-rule-message";
 import type { DimensionRuleInput } from "../services/dimension-rule-message";
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import {
   adjustShopStorageUsageBytes,
   billableBytesForStoragePath,
@@ -210,10 +210,18 @@ export async function action({ request }: ActionFunctionArgs) {
       // Calculate price
       let pricing = null;
       if (planAllowsDynamicPricing && field?.pricing?.enabled && !blocked) {
-        const feeConfig = await ensureFeeProductForShop(shopDomain).catch(() => null);
-        const currencyCode = feeConfig?.currencyCode ?? "USD";
-        const currencyDecimals =
-          feeConfig?.currencyDecimals ?? inferCurrencyDecimals(currencyCode);
+        let currencyCode = "USD";
+        try {
+          const { admin } = await unauthenticated.admin(shopDomain);
+          const curRes = await admin.graphql(`#graphql
+            query PrintDockConfirmShopCurrency { shop { currencyCode } }
+          `);
+          const curJson = await curRes.json();
+          currencyCode = String(curJson?.data?.shop?.currencyCode || "USD").toUpperCase() || "USD";
+        } catch {
+          currencyCode = "USD";
+        }
+        const currencyDecimals = inferCurrencyDecimals(currencyCode);
         const priceResult = calculatePrice(
           metadata,
           {

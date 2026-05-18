@@ -75,6 +75,13 @@ module.exports = {
         "plugin:import/typescript",
       ],
     },
+    {
+      files: ["extensions/**/generated/**/*.ts"],
+      rules: {
+        // Shopify codegen emits `any` for scalar input/output placeholders.
+        "@typescript-eslint/no-explicit-any": "off",
+      },
+    },
 
     // Node
     {

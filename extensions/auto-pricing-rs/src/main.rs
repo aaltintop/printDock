@@ -1,0 +1,194 @@
+use std::process;
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL;
+use base64::Engine as _;
+use hmac::{Hmac, Mac};
+use serde::Deserialize;
+use sha2::Sha256;
+use shopify_function::prelude::*;
+use shopify_function::Result;
+
+#[typegen("./schema.graphql")]
+pub mod schema {
+    #[query("./src/run.graphql")]
+    pub mod cart_transform_run {}
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// JWT body our app's price-token signer emits. Keep this in sync with
+/// `app/services/price-token.server.ts` on the Node side.
+#[derive(Deserialize)]
+struct TokenPayload {
+    #[allow(dead_code)]
+    shop: String,
+    #[allow(dead_code)]
+    sid: String,
+    /// Price in *minor units* (e.g. cents). Always positive.
+    p: i64,
+    /// ISO-4217 currency code. We use it only for decimal placement.
+    c: String,
+    #[allow(dead_code)]
+    exp: i64,
+    #[allow(dead_code)]
+    iat: i64,
+}
+
+#[shopify_function]
+fn cart_transform_run(
+    input: schema::cart_transform_run::Input,
+) -> Result<schema::CartTransformRunResult> {
+    let no_changes = schema::CartTransformRunResult { operations: vec![] };
+
+    let hmac_key_str = input
+        .cart_transform()
+        .pricing_hmac()
+        .as_ref()
+        .map(|m| m.value().trim())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            input
+                .shop()
+                .shop_hmac()
+                .as_ref()
+                .map(|m| m.value().trim())
+                .filter(|s| !s.is_empty())
+        });
+
+    let Some(hmac_key) = hmac_key_str else {
+        return Ok(no_changes);
+    };
+    let hmac_key_bytes = hmac_key.as_bytes();
+
+    let mut operations: Vec<schema::Operation> = Vec::new();
+
+    for line in input.cart().lines() {
+        if line.selling_plan_allocation().is_some() {
+            continue;
+        }
+
+        let Some(token_attr) = line.price_token() else {
+            continue;
+        };
+        let Some(token_str) = token_attr.value() else {
+            continue;
+        };
+        let token_raw = token_str.trim();
+        if token_raw.is_empty() {
+            continue;
+        }
+
+        let Some(payload) = verify_price_token(token_raw, hmac_key_bytes) else {
+            continue;
+        };
+
+        let variant_id = match line.merchandise() {
+            schema::cart_transform_run::input::cart::lines::Merchandise::ProductVariant(pv) => {
+                pv.id().to_string()
+            }
+            _ => continue,
+        };
+
+        let qty_raw: i64 = (*line.quantity()).into();
+        let qty: i32 = qty_raw.max(1).min(i32::MAX as i64) as i32;
+        let amount = price_minor_to_f64(payload.p, &payload.c);
+
+        operations.push(schema::Operation::LineExpand(schema::LineExpandOperation {
+            cart_line_id: line.id().to_string(),
+            expanded_cart_items: vec![schema::ExpandedItem {
+                attributes: None,
+                merchandise_id: variant_id,
+                price: Some(schema::ExpandedItemPriceAdjustment {
+                    adjustment: schema::ExpandedItemPriceAdjustmentValue::FixedPricePerUnit(
+                        schema::ExpandedItemFixedPricePerUnitAdjustment {
+                            amount: amount.into(),
+                        },
+                    ),
+                }),
+                quantity: qty,
+            }],
+            image: None,
+            price: None,
+            title: None,
+        }));
+    }
+
+    if operations.is_empty() {
+        return Ok(no_changes);
+    }
+    Ok(schema::CartTransformRunResult { operations })
+}
+
+/// Returns the decoded payload iff the JWT's HMAC-SHA256 signature is valid.
+///
+/// Expiration is *not* checked here. The Cart Transform input does not expose a
+/// raw clock (only boolean comparisons on `shop.localTime`), and the
+/// order/create webhook re-verifies `exp` server-side with a real wall clock.
+fn verify_price_token(token: &str, hmac_key: &[u8]) -> Option<TokenPayload> {
+    let mut parts = token.split('.');
+    let header_part = parts.next()?;
+    let payload_part = parts.next()?;
+    let sig_part = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let mut mac = HmacSha256::new_from_slice(hmac_key).ok()?;
+    mac.update(header_part.as_bytes());
+    mac.update(b".");
+    mac.update(payload_part.as_bytes());
+    let expected = mac.finalize().into_bytes();
+
+    let actual = B64_URL.decode(sig_part).ok()?;
+    if expected.as_slice().len() != actual.len() {
+        return None;
+    }
+    if !constant_time_eq(expected.as_slice(), &actual) {
+        return None;
+    }
+
+    let payload_bytes = B64_URL.decode(payload_part).ok()?;
+    serde_json::from_slice::<TokenPayload>(&payload_bytes).ok()
+}
+
+#[inline]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.ct_eq(b).into()
+}
+
+/// Converts a price in minor units into a Decimal-compatible f64.
+///
+/// Shopify's `Decimal` scalar serializes to a JSON string so the f64 only acts
+/// as an exact carrier for the small magnitudes we deal with (cart line
+/// amounts, well under 2^53). The schema clamps to the currency's natural
+/// decimal places downstream, so we don't need to format the string ourselves.
+fn price_minor_to_f64(amount_minor: i64, currency: &str) -> f64 {
+    let decimals = currency_decimals(currency);
+    if decimals == 0 {
+        return amount_minor as f64;
+    }
+    let scale: f64 = 10_f64.powi(decimals as i32);
+    (amount_minor as f64) / scale
+}
+
+fn currency_decimals(currency: &str) -> usize {
+    let mut buf = [0u8; 4];
+    let len = currency.len().min(4);
+    for (i, b) in currency.as_bytes().iter().take(len).enumerate() {
+        buf[i] = b.to_ascii_uppercase();
+    }
+    let upper = std::str::from_utf8(&buf[..len]).unwrap_or("");
+
+    match upper {
+        "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
+        "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "MGA" | "PYG" | "RWF" | "UGX"
+        | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
+        _ => 2,
+    }
+}
+
+fn main() {
+    log!("Invoke a named export");
+    process::abort()
+}

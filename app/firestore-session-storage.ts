@@ -29,7 +29,7 @@ export class FirestoreSessionStorage implements SessionStorage {
         data.expires = data.expires.toDate();
       }
 
-      const session = new Session(data as any);
+      const session = new Session(data as ConstructorParameters<typeof Session>[0]);
       return session;
     } catch (error) {
       console.error("Error loading session from Firestore:", error);
@@ -71,7 +71,7 @@ export class FirestoreSessionStorage implements SessionStorage {
         } else if (data.expires && data.expires.toDate) {
           data.expires = data.expires.toDate();
         }
-        return new Session(data as any);
+        return new Session(data as ConstructorParameters<typeof Session>[0]);
       });
     } catch (error) {
       console.error("Error finding sessions by shop in Firestore:", error);

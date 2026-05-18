@@ -1,5 +1,6 @@
 {
   "name": "printdock",
+  "version": "1.0.1",
   "private": true,
   "scripts": {
     "build": "react-router build",
@@ -8,6 +9,7 @@
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
+    "predeploy": "npm run check:theme-upload-syntax",
     "config:use": "shopify app config use",
     "env": "shopify app env",
     "start": "react-router-serve ./build/server/index.js",
@@ -19,7 +21,8 @@
     "typecheck": "react-router typegen && tsc --noEmit",
     "migrate:firestore": "node scripts/migrate-firestore-hierarchy.mjs",
     "gen:fixtures": "node scripts/generate-test-fixtures.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:theme-upload-syntax": "node --check extensions/theme-extension/assets/upload.js"
   },
   "type": "module",
   "engines": {

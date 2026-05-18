@@ -134,6 +134,13 @@ export interface OrderJob {
   legacySessionUploadPath?: string;
   lineItemPropsSnapshot: Array<{ name: string; value: string }>;
   calculatedPrice: number;
+  /** Captured at order ingest when dynamic signed pricing is in use. */
+  pricingEvidence?: {
+    hadPriceToken: boolean;
+    tokenValid: boolean;
+    signedMinorPerUnit?: number;
+    anomalyReason?: string;
+  };
   warnings: string[];
   status: string;
   assignee: string | null;

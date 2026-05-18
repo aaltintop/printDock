@@ -11,9 +11,26 @@
   data-choose-label="{{ block.settings.choose_label | default: 'Choose file' | escape }}"
   data-checking-label="{{ block.settings.checking_label | default: 'Checking file...' | escape }}"
   data-price-label="{{ block.settings.price_label | default: 'Calculated upload price:' | escape }}"
+  data-debug="{{ block.settings.enable_debug_logs }}"
 >
   <div class="printdock-loading">Loading PrintDock…</div>
 </div>
+
+<script>
+  (function () {
+    if (typeof window.fetch === "function") return;
+
+    if (typeof globalThis !== "undefined" && typeof globalThis.fetch === "function") {
+      window.fetch = globalThis.fetch.bind(globalThis);
+      return;
+    }
+
+    window.fetch = function () {
+      return Promise.reject(new Error("Fetch API unavailable in this context"));
+    };
+    console.warn("[PrintDock] Applied fallback fetch shim for compatibility.");
+  })();
+</script>
 
 <link rel="stylesheet" href="{{ 'upload.css' | asset_url }}">
 
@@ -55,6 +72,13 @@
       "id": "required",
       "label": "Require upload before add to cart",
       "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_debug_logs",
+      "label": "Enable debug logs (browser console)",
+      "info": "Logs cart interceptors, validation, and config to the console for troubleshooting. Also use ?printdock_debug=1 or localStorage printdock_debug=1.",
+      "default": false
     },
 
     { "type": "header", "content": "Colors" },
