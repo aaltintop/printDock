@@ -82,27 +82,6 @@ async function buildRenamedAsset({
   };
 }
 
-function parsePerFileQuantities(lineProperties: OrderLineProperty[]): Record<string, number> {
-  const quantityProp = lineProperties.find((prop) => prop.name === "_pd_file_quantities");
-  if (!quantityProp || !quantityProp.value) return {};
-
-  try {
-    const parsed = JSON.parse(String(quantityProp.value));
-    if (!Array.isArray(parsed)) return {};
-
-    return parsed.reduce((acc: Record<string, number>, item: unknown) => {
-      const row = item as { fileName?: string; quantity?: number };
-      const fileName = String(row.fileName || "");
-      const quantity = Number(row.quantity || 1);
-      if (!fileName) return acc;
-      acc[fileName] = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
-      return acc;
-    }, {});
-  } catch (error) {
-    return {};
-  }
-}
-
 export async function action({ request }: ActionFunctionArgs) {
   return runWithRequestContext(request, async () => {
     try {
@@ -138,9 +117,7 @@ export async function action({ request }: ActionFunctionArgs) {
               "_Artwork",
               "Artwork",
               "_Print Ready File",
-              "_View uploads",
-              "_pd_file_quantities",
-              "_pd_price_token",
+              "__pd_price_token",
             ].includes(String(p?.name || "")),
           );
           if (hasPrintDockHints) {
@@ -166,12 +143,11 @@ export async function action({ request }: ActionFunctionArgs) {
           continue;
         }
         const sessionAssets = sessionData.assets.length > 0 ? sessionData.assets : [sessionData.asset];
-        const perFileQuantities = parsePerFileQuantities(props);
 
         const field = sessionData.fieldId ? await getUploadField(shopDomain, sessionData.fieldId) : null;
         const renamePattern = field?.fileRenamingPattern || DEFAULT_FILE_RENAME_PATTERN;
 
-        const priceTokenRaw = props.find((p) => p.name === "_pd_price_token")?.value;
+        const priceTokenRaw = props.find((p) => p.name === "__pd_price_token")?.value;
         let pricingEvidence: OrderJob["pricingEvidence"] | undefined;
         if (field?.pricing?.enabled || priceTokenRaw) {
           const verified =
@@ -225,10 +201,7 @@ export async function action({ request }: ActionFunctionArgs) {
           renamedAssets.push(renamedAsset);
 
           const nowIso = new Date().toISOString();
-          const perFileQuantity =
-            perFileQuantities[asset.originalName] ??
-            perFileQuantities[renamedAsset.originalName] ??
-            Number(line.quantity || 1);
+          const perFileQuantity = Number(line.quantity || 1);
           const fileUnitPrice = Number(
             renamedAsset.pricing?.filePrice != null
               ? renamedAsset.pricing.filePrice

@@ -24,7 +24,7 @@ query CartTransformRunInput {
           id
         }
       }
-      priceToken: attribute(key: "_pd_price_token") {
+      priceToken: attribute(key: "__pd_price_token") {
         value
       }
     }

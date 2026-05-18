@@ -14,20 +14,19 @@ This document defines the line item properties PrintDock writes so merchants can
 |---|---|---|---|---|
 | `_uc_session` | App + support | `8f963f7e-...` | Primary key for webhooks, jobs, and Cart Transform “session present” check. Same UUID merchants can use for support. | Stable |
 | `_Print Ready File` | Merchant (underscore) | `https://{shop}.myshopify.com/apps/printdock/api/proxy/upload/file?token=...` | One-tap download of the stored upload via proxy + short-lived Storage URL (`attachment`). Omitted if no print-ready URL. | Stable |
-| `_View uploads` | Merchant (underscore) | `https://admin.shopify.com/store/{store}/apps/printdock/app/uploads?session={session}` | Direct jump to upload session in PrintDock app. | Stable |
-| `_Artwork` | Merchant (underscore) | `logo-front.png` | Quick visible list of uploaded file names. | Stable |
-| `_pd_file_quantities` | Pipeline | `[{\"fileName\":\"logo.png\",\"quantity\":1}]` | Per-file quantity map for order job creation. | Stable |
-| `_pd_calculated_price` | Cart Transform | `29.68` | Upload-derived **per-unit** line price; Cart Transform reads this and `_uc_session` to apply dynamic pricing via `fixedPricePerUnit`, so the fee scales with cart line quantity. Omitted if not positive. | Stable |
+| `Artwork` | Merchant + customer | `logo-front.png` | Quick visible list of uploaded file names. | Stable (v1.0.3+; was `_Artwork`) |
+| `__pd_price_token` | Internal (Cart Transform) | `eyJhbGciOiJIUzI1NiIs...` (JWT-shaped) | Short-lived HMAC-signed token encoding the calculated upload fee in shop currency minor units. Cart Transform verifies it and applies `fixedPricePerUnit` on the same line via `lineExpand`. Omitted when dynamic pricing is off or the fee is zero. Not intended for merchant action post-checkout. | Stable (v1.0.2+) |
 
 ## Legacy (older checkouts; may still appear on historical orders)
 
-Some properties were removed from the theme to reduce clutter. Old orders or stale carts may still list: `__ucToken`, `__ucExp`, `"_Upload session ID"`, `_pd_session`, `_pd_asset_count`, `_pd_asset_ids`, `_pd_field_id`.
+Some properties were removed from the theme to reduce clutter. Old orders or stale carts may still list: `__ucToken`, `__ucExp`, `"_Upload session ID"`, `_pd_session`, `_pd_asset_count`, `_pd_asset_ids`, `_pd_field_id`, `_pd_calculated_price` (pre–v1.0.2 fee-line / lineUpdate flow), `_Artwork` (pre–v1.0.3), `_View uploads`, `_pd_file_quantities`.
 
 ## Operational Notes
 
-- If `_View uploads` or `_Print Ready File` is present, merchants can open the app session or download the file from Shopify Admin line items.
+- If `_Print Ready File` is present, merchants can download the file directly from Shopify Admin line items.
 - Download token in `_Print Ready File` is valid for **7 days** (Storage object lifecycle may differ).
 - `_uc_session` must be present for order webhook linkage and billing recognition.
+- `__pd_price_token` is required for checkout pricing logic but is not intended for merchant-side operational use after order creation.
 - For support, the store domain plus **`_uc_session` UUID** and Shopify order name are usually enough to correlate with app data.
 
 ## Troubleshooting Missing Fields

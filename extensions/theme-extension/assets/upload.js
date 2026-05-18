@@ -1177,7 +1177,6 @@
 
     const properties = {
       _uc_session: sessionToken,
-      "_View uploads": getMerchantUploadsLink(sessionToken),
       Artwork: successfulFiles.map((entry) => entry.name).join(", "),
     };
     const printUrl = successfulFiles[0]?.printReadyFileUrl;
@@ -1195,7 +1194,7 @@
   let lastCartAddBlockReason = null;
 
   /**
-   * When dynamic pricing + a positive upload fee apply, POST /sign and set `_pd_price_token`.
+   * When dynamic pricing + a positive upload fee apply, POST /sign and set `__pd_price_token`.
    * Merge fallbacks and native form submit only used to call `getCartProperties()` — they never
    * attached the token, so checkout stayed at variant list price. This helper is shared by
    * `buildMultiItemCartAddPayloadAsync` and every merge / XHR fallback path.
@@ -1240,7 +1239,7 @@
         return null;
       }
       const unix = String(Math.floor(Date.now() / 1000));
-      lineProps._pd_price_token = signJson.token;
+      lineProps.__pd_price_token = signJson.token;
       debugLog("price_sign_ok", {
         priceMinorPerUnit,
         unix,

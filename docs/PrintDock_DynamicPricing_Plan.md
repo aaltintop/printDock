@@ -3,7 +3,7 @@ name: Dynamic upload pricing via signed-token lineExpand
 overview: Replace the broken `lineUpdate`-based dynamic pricing (Plus/dev-store-only) with a Cart-Transform `lineExpand` approach that works on every Shopify plan, requires zero hidden products in the merchant's catalog, and is structurally identical to how Upload Center solves the same problem. The calculated upload fee is encoded in an HMAC-signed JWT attached as a line attribute; the Cart Transform function verifies the signature against a per-shop secret and uses `lineExpand` with `fixedPricePerUnit` to set the cart line's displayed price.
 todos:
   - id: spike
-    content: "Phase 0 spike (1 day, throwaway dev branch). Build minimum end-to-end: token-signing endpoint, theme JS that attaches `_pd_price_token`, Cart Transform function emitting `lineExpand` into a same-variant ExpandedItem at a fixed price. Test on a non-Plus paid Shopify store. Capture answers to Q-keystone (same-variant expansion accepted?), Q-runtime (`expand` vs `lineExpand` name), Q-property (line attributes survive expand?), Q-multiple (multiple uploads of same variant). Document in `docs/SPIKE_LINE_EXPAND_RESULTS.md`."
+    content: "Phase 0 spike (1 day, throwaway dev branch). Build minimum end-to-end: token-signing endpoint, theme JS that attaches `__pd_price_token`, Cart Transform function emitting `lineExpand` into a same-variant ExpandedItem at a fixed price. Test on a non-Plus paid Shopify store. Capture answers to Q-keystone (same-variant expansion accepted?), Q-runtime (`expand` vs `lineExpand` name), Q-property (line attributes survive expand?), Q-multiple (multiple uploads of same variant). Document in `docs/SPIKE_LINE_EXPAND_RESULTS.md`."
     status: pending
   - id: pick_architecture
     content: Based on spike results, pick build A (same-variant lineExpand), build B (placeholder-variant lineExpand), or build C (separate fee line, no Cart Transform). Update plan + remaining todos to match. Decision criteria inline below. Implicitly Build A in code; not formally documented.
@@ -15,16 +15,16 @@ todos:
     content: "Build app/services/price-token.server.ts: sign({shop, sessionToken, priceMinorUnits, currencyCode, expiresAt}) returns HMAC-SHA256 JWT (header.payload.signature) using shop's hmacKey. Verify function in tests mirrors what the WASM function will do."
     status: completed
   - id: cart_transform_rewrite
-    content: "Rewrite extensions/auto-pricing/src/cart_transform_run.{ts,graphql}: read `_pd_price_token` from each cart line attribute, read shop's hmacKey from shop metafield via input query, verify HMAC-SHA256 in WASM (use @noble/hashes/hmac + sha256), check token's expiresAt against cart.attribute('__pd_now') (set by theme JS as a fallback time source), emit lineExpand per chosen build. Skip lines with sellingPlanAllocation. Update + add fixtures. NOTE: now two implementations exist — TypeScript (`extensions/auto-pricing`, disabled via `shopify.extension.disabled.toml`) and Rust (`extensions/auto-pricing-rs`, the active one). `exp` is NOT checked in WASM (no clock in Functions); expiry is enforced only in the order webhook."
+    content: "Rewrite extensions/auto-pricing/src/cart_transform_run.{ts,graphql}: read `__pd_price_token` from each cart line attribute, read shop's hmacKey from shop metafield via input query, verify HMAC-SHA256 in WASM (use @noble/hashes/hmac + sha256), check token's expiresAt against cart.attribute('__pd_now') (set by theme JS as a fallback time source), emit lineExpand per chosen build. Skip lines with sellingPlanAllocation. Update + add fixtures. NOTE: now two implementations exist — TypeScript (`extensions/auto-pricing`, disabled via `shopify.extension.disabled.toml`) and Rust (`extensions/auto-pricing-rs`, the active one). `exp` is NOT checked in WASM (no clock in Functions); expiry is enforced only in the order webhook."
     status: in_progress
   - id: config_endpoint
     content: Extend app/routes/api.proxy.upload.config.tsx loader. Add a new sibling endpoint `app/routes/api.proxy.upload.sign.tsx` that takes {sessionToken, priceMinorUnits} and returns a signed token. Auth via App Proxy signature (already in place).
     status: completed
   - id: theme_js_rewrite
-    content: "Update extensions/theme-extension/assets/upload.js: after upload + price calc, POST to /api/proxy/upload/sign with the calculated fee, receive signed token, attach as `_pd_price_token` line property on the artwork. Single /cart/add.js call with just the artwork variant. Drop `_pd_calculated_price` and `Upload pricing` properties. No decomposition. No /cart/change interception. NOTE: `__pd_now` cart attribute is referenced in plan and merchant docs but NOT set by upload.js and NOT read by the function. Decide whether to ship `__pd_now` or remove the references."
+    content: "Update extensions/theme-extension/assets/upload.js: after upload + price calc, POST to /api/proxy/upload/sign with the calculated fee, receive signed token, attach as `__pd_price_token` line property on the artwork. Single /cart/add.js call with just the artwork variant. Drop `_pd_calculated_price` and `Upload pricing` properties. No decomposition. No /cart/change interception. NOTE: `__pd_now` cart attribute is referenced in plan and merchant docs but NOT set by upload.js and NOT read by the function. Decide whether to ship `__pd_now` or remove the references."
     status: in_progress
   - id: order_webhook
-    content: "Update app/routes/webhooks.orders.create.tsx: extract `_pd_price_token` from each line item's properties, verify signature, store the verified price + expiresAt + sessionToken on the OrderUploadJob doc for audit. Implemented as `pricingEvidence.anomalyReason` ('signed_price_missing' / 'signed_price_invalid_or_expired') on the OrderUploadJob doc; surfaces in app/routes/app.orders.$id.tsx. Plan also mentioned a `pricing_invalid` job status — current code does not change job status, only annotates."
+    content: "Update app/routes/webhooks.orders.create.tsx: extract `__pd_price_token` from each line item's properties, verify signature, store the verified price + expiresAt + sessionToken on the OrderUploadJob doc for audit. Implemented as `pricingEvidence.anomalyReason` ('signed_price_missing' / 'signed_price_invalid_or_expired') on the OrderUploadJob doc; surfaces in app/routes/app.orders.$id.tsx. Plan also mentioned a `pricing_invalid` job status — current code does not change job status, only annotates."
     status: completed
   - id: onboarding_wiring
     content: "Pre-flight check in onboarding: query existing CartTransforms — fail loudly if a non-PrintDock transform exists. Replace 'Enable dynamic pricing' step with 'Set up upload pricing' which atomically (a) provisions HMAC secret + metafield, (b) registers Cart Transform. Remove `not_supported` Plus copy from app/routes/app.onboarding.tsx and the not_supported branch from app/services/cart-transform.server.ts. Require hmacKey doc + CartTransform registration in app/services/app-setup-status.server.ts setup-complete check."
@@ -41,30 +41,31 @@ isProject: false
 
 Snapshot of how the on-disk code compares to this plan. Update on each ship.
 
+**Shipped in v1.0.3 (2026-05-18)** — streamlined cart line properties (`Artwork`, no `_View uploads` / `_pd_file_quantities`).
+
+**Shipped in v1.0.2 (2026-05-18)** — signed-token dynamic pricing; merchant-facing notes in `app/data/release-notes.ts` and `CHANGELOG.md`.
+
 **Built and live**
 
 - HMAC secret service (`app/services/shop-secret.server.ts`), Firestore + app-owned shop metafield (`shopify.app.toml` → `[shop.metafields.app.hmac_secret]`).
 - Token sign/verify (`app/services/price-token.server.ts`) + unit tests (`tests/price-token.test.ts`).
 - App-proxy sign endpoint (`app/routes/api.proxy.upload.sign.tsx`).
-- Cart Transform function (Rust) at `extensions/auto-pricing-rs/` with handle `auto-pricing`, reads `_pd_price_token`, verifies HMAC, emits `lineExpand` with `fixedPricePerUnit`. TypeScript twin at `extensions/auto-pricing/` is parked behind `shopify.extension.disabled.toml`.
-- Theme `upload.js` signs the token via `/apps/printdock/api/proxy/upload/sign` and attaches `_pd_price_token` as a line property; single `/cart/add.js` call; legacy `_pd_calculated_price` removed.
+- Cart Transform function (Rust) at `extensions/auto-pricing-rs/` with handle `auto-pricing`, reads `__pd_price_token`, verifies HMAC, emits `lineExpand` with `fixedPricePerUnit`. TypeScript twin at `extensions/auto-pricing/` is parked behind `shopify.extension.disabled.toml`.
+- Theme `upload.js` signs the token via `/apps/printdock/api/proxy/upload/sign` and attaches `__pd_price_token` as a line property; single `/cart/add.js` call; legacy `_pd_calculated_price` removed.
 - Order webhook (`app/routes/webhooks.orders.create.tsx`) re-verifies the token and writes `pricingEvidence.{hadPriceToken, tokenValid, signedMinorPerUnit, anomalyReason}` on the `OrderUploadJob`. Anomaly surfaces in `app/routes/app.orders.$id.tsx`.
 - Onboarding "Set up upload pricing" step + Cart Transform conflict detection (`app/services/cart-transform.server.ts`).
 - `app/services/app-setup-status.server.ts` requires HMAC secret + Cart Transform registration.
 - `app/services/fee-product.server.ts` deleted; no fee variant lookups in the app or theme.
 - `docs/MERCHANT_GUIDE.md` no longer claims Plus is required and documents selling-plan + Cart Transform conflict caveats.
+- `docs/MERCHANT_FIELDS.md` documents `__pd_price_token` (v1.0.2+) and `Artwork` (v1.0.3+); legacy properties under **Legacy**.
 
 **Gaps vs. plan**
 
 - **Phase 0 spike not formally executed.** `docs/SPIKE_LINE_EXPAND_RESULTS.md` is still the empty template; no captured non-Plus paid-store evidence for Q-keystone / Q-runtime / Q-property / Q-multiple.
 - **Architecture decision not documented.** Code commits to Build A (same-variant `lineExpand`), but there is no written decision artifact tying spike results to that choice.
-- **`__pd_now` cart attribute is referenced but unused.**
-  - Plan + `docs/MERCHANT_GUIDE.md` mention it.
-  - `upload.js` does *not* set it. `extensions/auto-pricing-rs/src/run.graphql` does *not* read it. The Rust function comment explicitly states `exp` is not checked because Functions have no clock; expiry enforcement lives only in the order webhook.
-  - Action: either implement the soft `__pd_now` write + read, or strike the references from plan + merchant guide so it stops looking half-built.
+- **Token expiry in Cart Transform.** `exp` is not checked in WASM (no clock in Functions); expiry enforcement lives only in the order webhook. Optional future: `__pd_now` cart attribute as a soft clock — not shipped in v1.0.2.
 - **Order-side anomaly handling is annotation-only.** Plan mentioned setting `OrderUploadJob.status = 'pricing_invalid'`. Current code records `pricingEvidence.anomalyReason` but leaves job status alone. Confirm whether that is the intended final design or finish the status flip.
 - **Two function implementations co-exist.** `extensions/auto-pricing-rs` is active; `extensions/auto-pricing` (TS) is disabled but still under git. Decide: keep both (RS prod, TS as testbed/reference) or delete the TS copy to avoid confusion.
-- **`docs/MERCHANT_FIELDS.md`** still documents the legacy `_pd_calculated_price` property and should be updated to `_pd_price_token` semantics.
 - **Discount Function exclusion snippet** for sitewide % codes is still missing from `docs/MERCHANT_GUIDE.md` (plan calls this V1, deferred-to-V2 note exists at the bottom).
 
 ## Why
@@ -87,7 +88,7 @@ The fix exploits the asymmetry in `PriceAdjustment` across Cart Transform operat
 flowchart LR
     Upload[Shopper uploads artwork] --> Calc[Server calculates fee EUR 12.42]
     Calc --> Sign["Server signs JWT: {p: 12.42, exp, session, shop}"]
-    Sign --> ThemeJS[Theme JS attaches token as _pd_price_token]
+    Sign --> ThemeJS[Theme JS attaches token as __pd_price_token]
     ThemeJS --> CartAdd["/cart/add.js (just the artwork variant)"]
     CartAdd --> CartTransform[Cart Transform function]
     CartTransform --> Verify[Verify HMAC against shop's secret from metafield]
@@ -97,7 +98,7 @@ flowchart LR
 
 **Trust model.** The calculated price is computed by PrintDock's trusted backend, signed with a per-shop HMAC secret, and verified inside the Cart Transform function (which can read shop metafields but cannot make network calls). The customer's browser passes the signed token through unmodified; tampering invalidates the signature; the function falls back to the variant's base price (or rejects the line) on invalid/expired tokens. This is identical to how Upload Center's `__ucToken` works.
 
-**Order-side integrity.** Cart Transform runs only in cart/checkout. The order's webhook payload contains the line item with its properties (including `_pd_price_token`), which `webhooks.orders.create.tsx` re-verifies and persists. Stale or invalid tokens at order time get flagged for merchant review rather than auto-rejecting the (already-paid) order.
+**Order-side integrity.** Cart Transform runs only in cart/checkout. The order's webhook payload contains the line item with its properties (including `__pd_price_token`), which `webhooks.orders.create.tsx` re-verifies and persists. Stale or invalid tokens at order time get flagged for merchant review rather than auto-rejecting the (already-paid) order.
 
 ## Phase 0: Spike — narrow, but still mandatory
 
@@ -105,7 +106,7 @@ Throwaway branch + a real non-Plus paid Shopify store. Output goes into `docs/SP
 
 ### Q-keystone: Does `lineExpand` accept `merchandiseId` equal to the parent line's variant?
 
-Setup: One real artwork product (e.g. variant `gid://shopify/ProductVariant/12345` at €5). Customer adds it to cart with a `_pd_price_token` attribute containing a signed price of €12.42. Function emits:
+Setup: One real artwork product (e.g. variant `gid://shopify/ProductVariant/12345` at €5). Customer adds it to cart with a `__pd_price_token` attribute containing a signed price of €12.42. Function emits:
 
 ```ts
 { lineExpand: {
@@ -131,11 +132,11 @@ The same docs-vs-runtime mismatch that plagued `merge` vs `linesMerge` (Aug–Oc
 
 ### Q-property: Do line attributes survive `lineExpand` at order creation?
 
-Convert the spike cart to a real order via Bogus Gateway. Inspect the `orders/create` webhook payload. We need `_pd_price_token`, `_uc_session`, `_View uploads`, `_Artwork`, `_Print Ready File` to all survive on the resulting order line item — otherwise the ops center loses its lookup keys. If properties get stripped, write the session token into a `cart.attribute` instead and reshape the ops center lookup.
+Convert the spike cart to a real order via Bogus Gateway. Inspect the `orders/create` webhook payload. We need `__pd_price_token`, `_uc_session`, `_View uploads`, `_Artwork`, `_Print Ready File` to all survive on the resulting order line item — otherwise the ops center loses its lookup keys. If properties get stripped, write the session token into a `cart.attribute` instead and reshape the ops center lookup.
 
 ### Q-multiple: Two artworks of the same variant in one cart
 
-Add two separate artwork sessions of the same product variant to one cart, each with its own `_pd_price_token`. Function emits two separate `lineExpand` operations, each targeting a different `cartLineId`. Verify both lines render at their independent prices. Unlike `linesMerge`'s multi-parent-variant bug, separate `lineExpand` ops target distinct lines and should not conflict — but verify before relying on it.
+Add two separate artwork sessions of the same product variant to one cart, each with its own `__pd_price_token`. Function emits two separate `lineExpand` operations, each targeting a different `cartLineId`. Verify both lines render at their independent prices. Unlike `linesMerge`'s multi-parent-variant bug, separate `lineExpand` ops target distinct lines and should not conflict — but verify before relying on it.
 
 ### Spike infrastructure note
 
@@ -202,7 +203,7 @@ query CartTransformRunInput {
       quantity
       merchandise { ... on ProductVariant { id } }
       sellingPlanAllocation { sellingPlan { id } }
-      priceToken: attribute(key: "_pd_price_token") { value }
+      priceToken: attribute(key: "__pd_price_token") { value }
       session: attribute(key: "_uc_session") { value }
     }
     attribute(key: "__pd_now") { value }  // theme-provided client timestamp, see A.4
@@ -272,7 +273,7 @@ await fetch('/cart/add.js', {
       quantity: productQuantity,
       properties: {
         _uc_session: ucSessionToken,
-        _pd_price_token: token,
+        __pd_price_token: token,
         _View_uploads: viewUrl,
         _Artwork: artworkFilename,
         _Print_Ready_File: printReadyUrl,
@@ -299,11 +300,11 @@ Quantity changes work natively: `lineExpand` runs on every cart read with the cu
 ```ts
 for (const line of order.line_items) {
   const props = parseLineItemProperties(line.properties);
-  if (!props._pd_price_token) continue;
+  if (!props.__pd_price_token) continue;
 
   const hmacKey = await getShopSecret(shopDomain);
   const payload = verifyPriceToken(
-    props._pd_price_token,
+    props.__pd_price_token,
     hmacKey,
     Math.floor(new Date(order.created_at).getTime() / 1000),
   );
@@ -351,7 +352,7 @@ If `anomaly` is non-null, the ops center surfaces a yellow banner on the order: 
 If Q-keystone returns (b) (Shopify rejects same-variant expansion), pivot to a single placeholder variant:
 
 - `app/services/fee-product.server.ts` creates one hidden product "PrintDock Upload Fee" with one variant at €0.00, persisted to `shops/{shop}/feeProduct`. Product hidden via `templateSuffix: "printdock-fee"` (404 PDP), `seo.title: ""`, `seo.description: ""`, no collections.
-- Theme JS adds artwork + 1 placeholder fee variant (with `_pd_fee_for: sessionToken` and `_pd_price_token` on the fee line, not the artwork).
+- Theme JS adds artwork + 1 placeholder fee variant (with `_pd_fee_for: sessionToken` and `__pd_price_token` on the fee line, not the artwork).
 - Cart Transform `lineExpand`s the placeholder fee line into one ExpandedItem at the signed price.
 - Optionally `linesMerge` the artwork + expanded fee line into one displayed line — but this re-introduces the merge-price-defaulting uncertainty, so default to leaving them as two visible lines.
 
