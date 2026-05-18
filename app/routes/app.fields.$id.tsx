@@ -711,6 +711,8 @@ export default function FieldEditorPage() {
   const [adminTitle, setAdminTitle] = useState(initialState.adminTitle);
   const [targetProducts, setTargetProducts] = useState<FieldTargetProduct[]>(initialState.targetProducts);
   const [targetCollections, setTargetCollections] = useState<FieldTargetCollection[]>(initialState.targetCollections);
+  const [allProductsSelected, setAllProductsSelected] = useState(false);
+  const [allCollectionsSelected, setAllCollectionsSelected] = useState(false);
   const [targetVariantIds, setTargetVariantIds] = useState<string[]>(initialState.targetVariantIds);
   const [isActive, setIsActive] = useState(initialState.isActive);
   const [storefrontTitle, setStorefrontTitle] = useState(initialState.storefrontTitle);
@@ -892,11 +894,19 @@ export default function FieldEditorPage() {
   }, [appBridge]);
 
   const removeProduct = useCallback((id: string) => {
-    setTargetProducts((prev) => prev.filter((p) => p.id !== id));
+    setTargetProducts((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      if (next.length === 0) setAllProductsSelected(false);
+      return next;
+    });
   }, []);
 
   const removeCollection = useCallback((id: string) => {
-    setTargetCollections((prev) => prev.filter((c) => c.id !== id));
+    setTargetCollections((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      if (next.length === 0) setAllCollectionsSelected(false);
+      return next;
+    });
   }, []);
 
   // `useNewValueEffect` prevents the error toast from re-firing on every
@@ -1072,13 +1082,33 @@ export default function FieldEditorPage() {
                   <Button onClick={openProductPicker}>Browse products</Button>
                 </InlineStack>
                 {targetProducts.length > 0 ? (
-                  <InlineStack gap="200" wrap>
-                    {targetProducts.map((product) => (
-                      <Tag key={product.id} onRemove={() => removeProduct(product.id)}>
-                        {product.title || `Product ${product.id}`}
-                      </Tag>
-                    ))}
-                  </InlineStack>
+                  <BlockStack gap="200">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Checkbox
+                        label="Select all"
+                        checked={allProductsSelected}
+                        onChange={(checked) => setAllProductsSelected(checked)}
+                      />
+                      {allProductsSelected && (
+                        <Button
+                          tone="critical"
+                          onClick={() => {
+                            setTargetProducts([]);
+                            setAllProductsSelected(false);
+                          }}
+                        >
+                          Remove all
+                        </Button>
+                      )}
+                    </InlineStack>
+                    <InlineStack gap="200" wrap>
+                      {targetProducts.map((product) => (
+                        <Tag key={product.id} onRemove={() => removeProduct(product.id)}>
+                          {product.title || `Product ${product.id}`}
+                        </Tag>
+                      ))}
+                    </InlineStack>
+                  </BlockStack>
                 ) : (
                   <Text as="p" tone="subdued">
                     No products selected
@@ -1096,13 +1126,33 @@ export default function FieldEditorPage() {
                   <Button onClick={openCollectionPicker}>Browse collections</Button>
                 </InlineStack>
                 {targetCollections.length > 0 ? (
-                  <InlineStack gap="200" wrap>
-                    {targetCollections.map((collection) => (
-                      <Tag key={collection.id} onRemove={() => removeCollection(collection.id)}>
-                        {collection.title || `Collection ${collection.id}`}
-                      </Tag>
-                    ))}
-                  </InlineStack>
+                  <BlockStack gap="200">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Checkbox
+                        label="Select all"
+                        checked={allCollectionsSelected}
+                        onChange={(checked) => setAllCollectionsSelected(checked)}
+                      />
+                      {allCollectionsSelected && (
+                        <Button
+                          tone="critical"
+                          onClick={() => {
+                            setTargetCollections([]);
+                            setAllCollectionsSelected(false);
+                          }}
+                        >
+                          Remove all
+                        </Button>
+                      )}
+                    </InlineStack>
+                    <InlineStack gap="200" wrap>
+                      {targetCollections.map((collection) => (
+                        <Tag key={collection.id} onRemove={() => removeCollection(collection.id)}>
+                          {collection.title || `Collection ${collection.id}`}
+                        </Tag>
+                      ))}
+                    </InlineStack>
+                  </BlockStack>
                 ) : (
                   <Text as="p" tone="subdued">
                     No collections selected

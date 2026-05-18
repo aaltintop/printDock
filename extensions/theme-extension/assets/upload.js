@@ -1181,7 +1181,7 @@
     };
     const printUrl = successfulFiles[0]?.printReadyFileUrl;
     if (printUrl) {
-      properties["_Print Ready File"] = printUrl;
+      properties["Print Ready File"] = printUrl;
     }
 
     return properties;

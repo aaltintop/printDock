@@ -146,7 +146,7 @@ When a customer visits a product page that has PrintDock configured:
 7. When added to cart, line item properties are injected (all visible on the order in Admin):
    - `_uc_session` — links the cart line to the upload session and powers webhooks.
    - `__pd_price_token` — when dynamic pricing applies, a short-lived signed token so Cart Transform can set the final per-unit price at checkout.
-   - `Artwork` — uploaded file name(s) and optionally `_Print Ready File` for download; see `docs/MERCHANT_FIELDS.md`.
+   - `Artwork` — uploaded file name(s), and optionally `Print Ready File` for direct download; see `docs/MERCHANT_FIELDS.md`.
 
 If a customer uploads files but never adds the item to cart, PrintDock removes those non-converted uploads after about 2 hours.
 

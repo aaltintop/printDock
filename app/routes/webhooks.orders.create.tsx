@@ -116,7 +116,7 @@ export async function action({ request }: ActionFunctionArgs) {
               "__ucToken",
               "_Artwork",
               "Artwork",
-              "_Print Ready File",
+              "Print Ready File",
               "__pd_price_token",
             ].includes(String(p?.name || "")),
           );

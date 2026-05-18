@@ -13,7 +13,7 @@ This document defines the line item properties PrintDock writes so merchants can
 | Field | Visibility | Example | Purpose | Stability |
 |---|---|---|---|---|
 | `_uc_session` | App + support | `8f963f7e-...` | Primary key for webhooks, jobs, and Cart Transform “session present” check. Same UUID merchants can use for support. | Stable |
-| `_Print Ready File` | Merchant (underscore) | `https://{shop}.myshopify.com/apps/printdock/api/proxy/upload/file?token=...` | One-tap download of the stored upload via proxy + short-lived Storage URL (`attachment`). Omitted if no print-ready URL. | Stable |
+| `Print Ready File` | Merchant + customer | `https://{shop}.myshopify.com/apps/printdock/api/proxy/upload/file?token=...` | One-tap download of the stored upload via proxy + short-lived Storage URL (`attachment`). Omitted if no print-ready URL. | Stable (v1.0.3+) |
 | `Artwork` | Merchant + customer | `logo-front.png` | Quick visible list of uploaded file names. | Stable (v1.0.3+; was `_Artwork`) |
 | `__pd_price_token` | Internal (Cart Transform) | `eyJhbGciOiJIUzI1NiIs...` (JWT-shaped) | Short-lived HMAC-signed token encoding the calculated upload fee in shop currency minor units. Cart Transform verifies it and applies `fixedPricePerUnit` on the same line via `lineExpand`. Omitted when dynamic pricing is off or the fee is zero. Not intended for merchant action post-checkout. | Stable (v1.0.2+) |
 
@@ -23,10 +23,10 @@ Some properties were removed from the theme to reduce clutter. Old orders or sta
 
 ## Operational Notes
 
-- If `_Print Ready File` is present, merchants can download the file directly from Shopify Admin line items.
-- Download token in `_Print Ready File` is valid for **7 days** (Storage object lifecycle may differ).
+- If `Print Ready File` is present, merchants and customers can open or download the file directly from line items.
+- Download token in `Print Ready File` is valid for **7 days** (Storage object lifecycle may differ).
 - `_uc_session` must be present for order webhook linkage and billing recognition.
-- `__pd_price_token` is required for checkout pricing logic but is not intended for merchant-side operational use after order creation.
+- `__pd_price_token` is required for checkout pricing logic and should be treated as internal; it is not intended for merchant-side operational use after order creation.
 - For support, the store domain plus **`_uc_session` UUID** and Shopify order name are usually enough to correlate with app data.
 
 ## Troubleshooting Missing Fields
