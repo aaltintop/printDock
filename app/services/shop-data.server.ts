@@ -237,6 +237,38 @@ function normalizeJob(docId: string, shopDomain: string, raw: unknown): OrderJob
       ? (job.lineItemPropsSnapshot as Array<{ name: string; value: string }>)
       : [],
     calculatedPrice: Number(job.calculatedPrice ?? 0),
+    pricingEvidence: isRecord(job.pricingEvidence)
+      ? {
+          hadPriceToken: Boolean(job.pricingEvidence.hadPriceToken),
+          tokenValid: Boolean(job.pricingEvidence.tokenValid),
+          signedMinorPerUnit:
+            job.pricingEvidence.signedMinorPerUnit != null
+              ? Number(job.pricingEvidence.signedMinorPerUnit)
+              : undefined,
+          anomalyReason:
+            typeof job.pricingEvidence.anomalyReason === "string"
+              ? job.pricingEvidence.anomalyReason
+              : undefined,
+        }
+      : undefined,
+    ingestStatus:
+      job.ingestStatus === "pending" ||
+      job.ingestStatus === "processing" ||
+      job.ingestStatus === "complete" ||
+      job.ingestStatus === "failed"
+        ? job.ingestStatus
+        : undefined,
+    ingestEvidence: isRecord(job.ingestEvidence)
+      ? {
+          anomalyReason:
+            typeof job.ingestEvidence.anomalyReason === "string"
+              ? job.ingestEvidence.anomalyReason
+              : undefined,
+          detail:
+            typeof job.ingestEvidence.detail === "string" ? job.ingestEvidence.detail : undefined,
+          recoveredFromShortLink: job.ingestEvidence.recoveredFromShortLink === true,
+        }
+      : undefined,
     warnings: Array.isArray(job.warnings) ? job.warnings.map((value) => String(value)) : [],
     status: String(job.status ?? "uploaded"),
     assignee: job.assignee ? String(job.assignee) : null,
@@ -677,6 +709,29 @@ export async function findJobByLegacySessionUploadPath(
   if (snap.empty) return null;
   const doc = snap.docs[0];
   return normalizeJob(doc.id, shopDomain, doc.data());
+}
+
+const FIRESTORE_IN_QUERY_LIMIT = 30;
+
+/** Jobs referencing any of the given legacy session upload paths (batched `in` queries). */
+export async function findJobsByLegacySessionUploadPaths(
+  shopDomain: string,
+  legacyPaths: string[],
+): Promise<Set<string>> {
+  const protectedPaths = new Set<string>();
+  const unique = [...new Set(legacyPaths.map((p) => p.trim()).filter(Boolean))];
+  for (let i = 0; i < unique.length; i += FIRESTORE_IN_QUERY_LIMIT) {
+    const chunk = unique.slice(i, i + FIRESTORE_IN_QUERY_LIMIT);
+    const snap = await jobsCollection(shopDomain)
+      .where("legacySessionUploadPath", "in", chunk)
+      .get();
+    for (const doc of snap.docs) {
+      const job = normalizeJob(doc.id, shopDomain, doc.data());
+      if (job.legacySessionUploadPath) protectedPaths.add(job.legacySessionUploadPath);
+      if (job.assetSnapshot?.storagePath) protectedPaths.add(job.assetSnapshot.storagePath);
+    }
+  }
+  return protectedPaths;
 }
 
 export async function saveOrderJob(shopDomain: string, job: OrderJob): Promise<void> {

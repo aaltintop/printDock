@@ -10,14 +10,24 @@ Based on the retention cron, uninstall webhook, and Firestore models, there are 
 
 Before normal plan-based retention runs, the cron executes an orphan sweep for sessions that were uploaded but never converted to orders.
 
-- Scope: session statuses `active`, `success`, or `blocked`
-- Condition: `createdAt` older than ~2 hours
+- Scope: session statuses `active`, `success`, or `blocked` (never `converted`)
+- Condition:
+  - **Confirmed uploads** (`success` / `blocked`): `expiresAt` has passed (default **14 days** after confirm — see `CONFIRMED_CART_PROTECTION_DAYS`)
+  - **Unconfirmed** (`active`, no assets): `createdAt` older than ~2 hours
+- **Never deletes** paths under `uploads/{shop}/orders/` or session blobs still needed for a pending order ingest (no verified order copy yet)
+- **May delete** redundant session blobs when a job already has a verified order copy at `assetSnapshot.storagePath`
 - Action:
-  1. delete each referenced storage object for the session
+  1. delete eligible storage objects (and matching `downloadShortLinks` docs)
   2. delete session asset subcollection docs
   3. delete the session document itself (nested + legacy)
 
-This keeps abandoned uploads from lingering for days when a shopper uploads a file but never adds the product to cart.
+### Order ingest (async)
+
+`orders/create` enqueues work to `orderIngestQueue` and returns immediately. A separate cron ([`app/routes/cron.order-ingest.tsx`](../app/routes/cron.order-ingest.tsx)) claims items with lease/retry/dead-letter semantics and copies files to `uploads/{shop}/orders/{orderId}/…`.
+
+### GCS soft-delete backstop
+
+When enabled on the bucket, deleted objects may remain restorable for **`GCS_SOFT_DELETE_RETENTION_DAYS`** (default 7). This is a technical tail distinct from merchant-facing `fileStorageDays`; document in privacy/GDPR materials if required.
 
 ### Layer 1 — Firebase Storage (actual file bytes)
 

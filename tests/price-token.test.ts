@@ -35,6 +35,20 @@ describe("price-token.server", () => {
     expect(verifyPriceToken(broken, KEY, basePayload().iat + 60)).toBeNull();
   });
 
+  it("round-trips mode claim", () => {
+    const p = basePayload({ mode: "buildB" });
+    const token = signPriceToken(p, KEY);
+    const out = verifyPriceToken(token, KEY, p.iat + 60);
+    expect(out?.mode).toBe("buildB");
+  });
+
+  it("omits mode when not set on sign", () => {
+    const p = basePayload();
+    const token = signPriceToken(p, KEY);
+    const out = verifyPriceToken(token, KEY, p.iat + 60);
+    expect(out?.mode).toBeUndefined();
+  });
+
   it("rejects expired token", () => {
     const now = 1_700_000_000;
     const token = signPriceToken(

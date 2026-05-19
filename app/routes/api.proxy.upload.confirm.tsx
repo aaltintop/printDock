@@ -7,9 +7,11 @@ import {
   storageOverageUpgradeReason,
   suggestUpgradeFor,
 } from "../config/plans";
+import { confirmedCartProtectionExpiresAtIso } from "../config/storage-lifecycle";
 import {
   buildShortLinkPublicUrl,
   createShortLink,
+  sanitizePrintReadyPublicHost,
 } from "../services/short-link.server";
 import { deleteFile, getFileBuffer } from "../services/storage.server";
 import { extractMetadata, hasBlockingError } from "../services/validation.server";
@@ -48,6 +50,8 @@ const schema = z.object({
   mimeType: z.string(),
   sizeBytes: z.number(),
   quantity: z.number().int().min(1).optional().default(1),
+  /** Browser `location.hostname` — used to build the short URL on the live storefront host */
+  printReadyPublicHost: z.string().max(253).optional(),
 });
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -65,8 +69,17 @@ export async function action({ request }: ActionFunctionArgs) {
       const parsed = schema.safeParse(body);
       if (!parsed.success) return publicError("bad_request", { status: 400 });
 
-      const { sessionToken, storagePath, originalName, mimeType, sizeBytes, quantity } =
-        parsed.data;
+      const {
+        sessionToken,
+        storagePath,
+        originalName,
+        mimeType,
+        sizeBytes,
+        quantity,
+        printReadyPublicHost,
+      } = parsed.data;
+
+      const printHost = sanitizePrintReadyPublicHost(printReadyPublicHost, shopDomain);
 
       log.event("upload_confirm_requested", {
         sessionToken,
@@ -308,6 +321,7 @@ export async function action({ request }: ActionFunctionArgs) {
         asset: updatedAssets[updatedAssets.length - 1] ?? asset,
         assets: updatedAssets,
         status: sessionBlocked ? "blocked" : "success",
+        expiresAt: confirmedCartProtectionExpiresAtIso(),
       });
 
       // Maintain the running shop-level storage counter:
@@ -323,7 +337,9 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!finalBlocked) {
         try {
           const shortId = await createShortLink(shopDomain, storagePath, originalName);
-          printReadyFileUrl = buildShortLinkPublicUrl(shopDomain, shortId);
+          printReadyFileUrl = buildShortLinkPublicUrl(shopDomain, shortId, {
+            publicHost: printHost ?? undefined,
+          });
         } catch (shortLinkErr) {
           log.error(
             "upload_confirm_short_link_failed",

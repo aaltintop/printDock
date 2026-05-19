@@ -33,12 +33,22 @@ struct TokenPayload {
     exp: i64,
     #[allow(dead_code)]
     iat: i64,
+    #[serde(default)]
+    mode: Option<String>,
 }
+
+const FEE_LINE_EXPAND_TITLE: &str = "Artwork upload fee";
+const BUILD_A_EXPAND_TITLE_DEFAULT: &str = "Upload file";
+
+/// Build A (default): expand lines with `_uc_session` to the signed total (base + upload fee).
+/// Build B (legacy in-flight carts only): when any line has `_pd_fee_for`, expand fee lines only.
 
 #[derive(Deserialize)]
 struct PriceMapEntry {
     sid: String,
     token: String,
+    #[serde(default, rename = "partOfTitle")]
+    part_of_title: Option<String>,
 }
 
 #[shopify_function]
@@ -66,7 +76,7 @@ fn cart_transform_run(
         return Ok(no_changes);
     };
     let hmac_key_bytes = hmac_key.as_bytes();
-    let price_map = merge_price_maps(
+    let price_map_raw = merge_price_maps(
         input
             .cart()
             .price_map_legacy()
@@ -80,6 +90,29 @@ fn cart_transform_run(
             .and_then(|a| a.value())
             .map(|s| s.as_str()),
     );
+    let part_of_titles = part_of_titles_from_maps(
+        input
+            .cart()
+            .price_map_legacy()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|s| s.as_str()),
+        input
+            .cart()
+            .price_map()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|s| s.as_str()),
+    );
+    let price_map: HashMap<String, String> = price_map_raw;
+
+    let uses_fee_lines = input.cart().lines().iter().any(|line| {
+        line.fee_for()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    });
 
     let mut operations: Vec<schema::Operation> = Vec::new();
 
@@ -88,16 +121,31 @@ fn cart_transform_run(
             continue;
         }
 
-        let Some(session_attr) = line.session_token() else {
-            continue;
+        let session_id = if uses_fee_lines {
+            let Some(fee_for_attr) = line.fee_for() else {
+                continue;
+            };
+            let Some(fee_for_str) = fee_for_attr.value() else {
+                continue;
+            };
+            let fee_for = fee_for_str.trim();
+            if fee_for.is_empty() {
+                continue;
+            }
+            fee_for
+        } else {
+            let Some(session_attr) = line.session_token() else {
+                continue;
+            };
+            let Some(session_str) = session_attr.value() else {
+                continue;
+            };
+            let session_id = session_str.trim();
+            if session_id.is_empty() {
+                continue;
+            }
+            session_id
         };
-        let Some(session_str) = session_attr.value() else {
-            continue;
-        };
-        let session_id = session_str.trim();
-        if session_id.is_empty() {
-            continue;
-        }
 
         let Some(token_raw) = price_map.get(session_id) else {
             continue;
@@ -124,10 +172,33 @@ fn cart_transform_run(
         let qty: i32 = qty_raw.max(1).min(i32::MAX as i64) as i32;
         let amount = price_minor_to_f64(payload.p, &payload.c);
 
+        let expand_title = if uses_fee_lines {
+            Some(FEE_LINE_EXPAND_TITLE.to_string())
+        } else {
+            let from_map = part_of_titles
+                .get(session_id)
+                .cloned()
+                .filter(|s| !s.is_empty());
+            Some(
+                from_map.unwrap_or_else(|| BUILD_A_EXPAND_TITLE_DEFAULT.to_string()),
+            )
+        };
+
+        let expanded_attributes = if uses_fee_lines {
+            None
+        } else {
+            let component_attrs = build_part_of_component_attributes(line);
+            if component_attrs.is_empty() {
+                None
+            } else {
+                Some(component_attrs)
+            }
+        };
+
         operations.push(schema::Operation::LineExpand(schema::LineExpandOperation {
             cart_line_id: line.id().to_string(),
             expanded_cart_items: vec![schema::ExpandedItem {
-                attributes: None,
+                attributes: expanded_attributes,
                 merchandise_id: variant_id,
                 price: Some(schema::ExpandedItemPriceAdjustment {
                     adjustment: schema::ExpandedItemPriceAdjustmentValue::FixedPricePerUnit(
@@ -140,7 +211,7 @@ fn cart_transform_run(
             }],
             image: None,
             price: None,
-            title: None,
+            title: expand_title,
         }));
     }
 
@@ -150,10 +221,98 @@ fn cart_transform_run(
     Ok(schema::CartTransformRunResult { operations })
 }
 
+/// Attributes for the expanded (Part of) component only. `__View uploads` stays on the
+/// parent cart line so Admin shows the truncated link above Part of (Upload Center parity).
+fn build_part_of_component_attributes(
+    line: &schema::cart_transform_run::input::cart::Lines,
+) -> Vec<schema::AttributeOutput> {
+    let mut out: Vec<schema::AttributeOutput> = Vec::new();
+    push_trimmed_attr(
+        &mut out,
+        "View uploads",
+        line
+            .view_uploads()
+            .as_ref()
+            .and_then(|a| a.value().map(|s| s.as_str())),
+    );
+    push_trimmed_attr(
+        &mut out,
+        "__ucExp",
+        line.uc_exp()
+            .as_ref()
+            .and_then(|a| a.value().map(|s| s.as_str())),
+    );
+    push_trimmed_attr(
+        &mut out,
+        "__ucToken",
+        line.uc_token()
+            .as_ref()
+            .and_then(|a| a.value().map(|s| s.as_str())),
+    );
+    push_trimmed_attr(
+        &mut out,
+        "Artwork",
+        line.artwork()
+            .as_ref()
+            .and_then(|a| a.value().map(|s| s.as_str())),
+    );
+    push_trimmed_attr(
+        &mut out,
+        "_uc_session",
+        line.session_token()
+            .as_ref()
+            .and_then(|a| a.value().map(|s| s.as_str())),
+    );
+    out
+}
+
+fn push_trimmed_attr(out: &mut Vec<schema::AttributeOutput>, key: &str, value: Option<&str>) {
+    let Some(trimmed) = value.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    out.push(schema::AttributeOutput {
+        key: key.to_string(),
+        value: trimmed.to_string(),
+    });
+}
+
 fn merge_price_maps(legacy: Option<&str>, primary: Option<&str>) -> HashMap<String, String> {
     let mut out = parse_price_map(legacy);
     for (k, v) in parse_price_map(primary) {
         out.insert(k, v);
+    }
+    out
+}
+
+fn part_of_titles_from_maps(legacy: Option<&str>, primary: Option<&str>) -> HashMap<String, String> {
+    let mut out = parse_part_of_titles(legacy);
+    for (k, v) in parse_part_of_titles(primary) {
+        out.insert(k, v);
+    }
+    out
+}
+
+fn parse_part_of_titles(raw: Option<&str>) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(raw_json) = raw else {
+        return out;
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<PriceMapEntry>>(raw_json) else {
+        return out;
+    };
+    for entry in entries {
+        let sid = entry.sid.trim();
+        if sid.is_empty() {
+            continue;
+        }
+        if let Some(title) = entry
+            .part_of_title
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            out.insert(sid.to_string(), title.to_string());
+        }
     }
     out
 }

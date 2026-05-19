@@ -43,6 +43,7 @@ import {
 } from "../config/plans";
 import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
 import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
+import { TargetResourcePickerModal } from "../components/TargetResourcePickerModal";
 import {
   activeFieldParticipatesInTargetOverlap,
   analyzeActiveFieldTargetOverlaps,
@@ -58,10 +59,6 @@ import type {
 import { DEFAULT_FILE_RENAME_PATTERN, previewRenamedFileName } from "../utils/file-rename-pattern";
 import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
-
-function extractNumericId(gid: string): string {
-  return gid.split("/").pop() ?? gid;
-}
 
 function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
   const nowIso = new Date().toISOString();
@@ -108,16 +105,6 @@ type DimensionCard = {
   fixedValue: string;
   rangeMin: string;
   rangeMax: string;
-};
-
-type PickerEntity = {
-  id?: string;
-  title?: string;
-  handle?: string;
-};
-
-type ResourcePickerBridge = {
-  resourcePicker: (options: Record<string, unknown>) => Promise<unknown>;
 };
 
 const SUPPORTED_DIMENSIONS: SupportedDimensionType[] = ["widthInch", "heightInch", "dpi"];
@@ -711,8 +698,8 @@ export default function FieldEditorPage() {
   const [adminTitle, setAdminTitle] = useState(initialState.adminTitle);
   const [targetProducts, setTargetProducts] = useState<FieldTargetProduct[]>(initialState.targetProducts);
   const [targetCollections, setTargetCollections] = useState<FieldTargetCollection[]>(initialState.targetCollections);
-  const [allProductsSelected, setAllProductsSelected] = useState(false);
-  const [allCollectionsSelected, setAllCollectionsSelected] = useState(false);
+  const [productPickerOpen, setProductPickerOpen] = useState(false);
+  const [collectionPickerOpen, setCollectionPickerOpen] = useState(false);
   const [targetVariantIds, setTargetVariantIds] = useState<string[]>(initialState.targetVariantIds);
   const [isActive, setIsActive] = useState(initialState.isActive);
   const [storefrontTitle, setStorefrontTitle] = useState(initialState.storefrontTitle);
@@ -849,64 +836,34 @@ export default function FieldEditorPage() {
     setDimensionRulesSimplified(initialState.dimensionRulesSimplified);
   }, [initialState, planAllowsDynamicPricing]);
 
-  const openProductPicker = useCallback(async () => {
-    const selection = await (appBridge as unknown as ResourcePickerBridge).resourcePicker({
-      type: "product",
-      action: "select",
-      multiple: true,
-      filter: { variants: false },
-    });
-    if (!Array.isArray(selection)) return;
-    const newProducts: FieldTargetProduct[] = selection.map((item) => {
-      const pickerItem = item as PickerEntity;
-      return {
-        id: extractNumericId(String(pickerItem.id)),
-        title: String(pickerItem.title ?? ""),
-        handle: String(pickerItem.handle ?? ""),
-      };
-    });
+  const applyProductPickerSelection = useCallback((selection: FieldTargetProduct[]) => {
     setTargetProducts((prev) => {
-      const existingIds = new Set(prev.map((p) => p.id));
-      const additions = newProducts.filter((p) => !existingIds.has(p.id));
-      return [...prev, ...additions];
+      const byId = new Map(prev.map((p) => [p.id, p]));
+      for (const product of selection) {
+        byId.set(product.id, product);
+      }
+      return Array.from(byId.values());
     });
-  }, [appBridge]);
+    setProductPickerOpen(false);
+  }, []);
 
-  const openCollectionPicker = useCallback(async () => {
-    const selection = await (appBridge as unknown as ResourcePickerBridge).resourcePicker({
-      type: "collection",
-      action: "select",
-      multiple: true,
-    });
-    if (!Array.isArray(selection)) return;
-    const newCollections: FieldTargetCollection[] = selection.map((item) => {
-      const pickerItem = item as PickerEntity;
-      return {
-        id: extractNumericId(String(pickerItem.id)),
-        title: String(pickerItem.title ?? ""),
-      };
-    });
+  const applyCollectionPickerSelection = useCallback((selection: FieldTargetCollection[]) => {
     setTargetCollections((prev) => {
-      const existingIds = new Set(prev.map((c) => c.id));
-      const additions = newCollections.filter((c) => !existingIds.has(c.id));
-      return [...prev, ...additions];
+      const byId = new Map(prev.map((c) => [c.id, c]));
+      for (const collection of selection) {
+        byId.set(collection.id, collection);
+      }
+      return Array.from(byId.values());
     });
-  }, [appBridge]);
+    setCollectionPickerOpen(false);
+  }, []);
 
   const removeProduct = useCallback((id: string) => {
-    setTargetProducts((prev) => {
-      const next = prev.filter((p) => p.id !== id);
-      if (next.length === 0) setAllProductsSelected(false);
-      return next;
-    });
+    setTargetProducts((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
   const removeCollection = useCallback((id: string) => {
-    setTargetCollections((prev) => {
-      const next = prev.filter((c) => c.id !== id);
-      if (next.length === 0) setAllCollectionsSelected(false);
-      return next;
-    });
+    setTargetCollections((prev) => prev.filter((c) => c.id !== id));
   }, []);
 
   // `useNewValueEffect` prevents the error toast from re-firing on every
@@ -1079,36 +1036,16 @@ export default function FieldEditorPage() {
                   <Text as="h3" variant="headingSm">
                     Products
                   </Text>
-                  <Button onClick={openProductPicker}>Browse products</Button>
+                  <Button onClick={() => setProductPickerOpen(true)}>Browse products</Button>
                 </InlineStack>
                 {targetProducts.length > 0 ? (
-                  <BlockStack gap="200">
-                    <InlineStack align="space-between" blockAlign="center">
-                      <Checkbox
-                        label="Select all"
-                        checked={allProductsSelected}
-                        onChange={(checked) => setAllProductsSelected(checked)}
-                      />
-                      {allProductsSelected && (
-                        <Button
-                          tone="critical"
-                          onClick={() => {
-                            setTargetProducts([]);
-                            setAllProductsSelected(false);
-                          }}
-                        >
-                          Remove all
-                        </Button>
-                      )}
-                    </InlineStack>
-                    <InlineStack gap="200" wrap>
-                      {targetProducts.map((product) => (
-                        <Tag key={product.id} onRemove={() => removeProduct(product.id)}>
-                          {product.title || `Product ${product.id}`}
-                        </Tag>
-                      ))}
-                    </InlineStack>
-                  </BlockStack>
+                  <InlineStack gap="200" wrap>
+                    {targetProducts.map((product) => (
+                      <Tag key={product.id} onRemove={() => removeProduct(product.id)}>
+                        {product.title || `Product ${product.id}`}
+                      </Tag>
+                    ))}
+                  </InlineStack>
                 ) : (
                   <Text as="p" tone="subdued">
                     No products selected
@@ -1123,36 +1060,16 @@ export default function FieldEditorPage() {
                   <Text as="h3" variant="headingSm">
                     Collections
                   </Text>
-                  <Button onClick={openCollectionPicker}>Browse collections</Button>
+                  <Button onClick={() => setCollectionPickerOpen(true)}>Browse collections</Button>
                 </InlineStack>
                 {targetCollections.length > 0 ? (
-                  <BlockStack gap="200">
-                    <InlineStack align="space-between" blockAlign="center">
-                      <Checkbox
-                        label="Select all"
-                        checked={allCollectionsSelected}
-                        onChange={(checked) => setAllCollectionsSelected(checked)}
-                      />
-                      {allCollectionsSelected && (
-                        <Button
-                          tone="critical"
-                          onClick={() => {
-                            setTargetCollections([]);
-                            setAllCollectionsSelected(false);
-                          }}
-                        >
-                          Remove all
-                        </Button>
-                      )}
-                    </InlineStack>
-                    <InlineStack gap="200" wrap>
-                      {targetCollections.map((collection) => (
-                        <Tag key={collection.id} onRemove={() => removeCollection(collection.id)}>
-                          {collection.title || `Collection ${collection.id}`}
-                        </Tag>
-                      ))}
-                    </InlineStack>
-                  </BlockStack>
+                  <InlineStack gap="200" wrap>
+                    {targetCollections.map((collection) => (
+                      <Tag key={collection.id} onRemove={() => removeCollection(collection.id)}>
+                        {collection.title || `Collection ${collection.id}`}
+                      </Tag>
+                    ))}
+                  </InlineStack>
                 ) : (
                   <Text as="p" tone="subdued">
                     No collections selected
@@ -1762,6 +1679,21 @@ export default function FieldEditorPage() {
           </div>
         ) : null}
       </Form>
+
+      <TargetResourcePickerModal
+        kind="product"
+        open={productPickerOpen}
+        initialSelection={targetProducts}
+        onClose={() => setProductPickerOpen(false)}
+        onConfirm={(selection) => applyProductPickerSelection(selection as FieldTargetProduct[])}
+      />
+      <TargetResourcePickerModal
+        kind="collection"
+        open={collectionPickerOpen}
+        initialSelection={targetCollections}
+        onClose={() => setCollectionPickerOpen(false)}
+        onConfirm={(selection) => applyCollectionPickerSelection(selection as FieldTargetCollection[])}
+      />
     </Page>
   );
 }

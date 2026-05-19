@@ -1,0 +1,11 @@
+{% comment %} PrintDock: merged cart drawer row + fee/artwork line binding (global app embed). {% endcomment %}
+<link rel="stylesheet" href="{{ 'cart-fee-ui.css' | asset_url }}">
+<script src="{{ 'cart-fee-ui.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "PrintDock Cart",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}

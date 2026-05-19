@@ -141,6 +141,13 @@ export interface OrderJob {
     signedMinorPerUnit?: number;
     anomalyReason?: string;
   };
+  /** Async order-ingest pipeline state (webhook enqueues, worker completes). */
+  ingestStatus?: "pending" | "processing" | "complete" | "failed";
+  ingestEvidence?: {
+    anomalyReason?: string;
+    detail?: string;
+    recoveredFromShortLink?: boolean;
+  };
   warnings: string[];
   status: string;
   assignee: string | null;

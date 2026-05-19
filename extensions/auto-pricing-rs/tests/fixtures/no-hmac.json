@@ -1,0 +1,38 @@
+{
+  "payload": {
+    "export": "cart_transform_run",
+    "target": "cart.transform.run",
+    "input": {
+      "cartTransform": {
+        "pricingHmac": null
+      },
+      "shop": {
+        "shopHmac": null
+      },
+      "cart": {
+        "priceMap": {
+          "value": "[{\"sid\":\"fee-session-1\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoiZmVlLXNlc3Npb24tMSIsInAiOjUwMDAsImMiOiJVU0QiLCJleHAiOjE3MDAwODY0MDAsImlhdCI6MTcwMDAwMDAwMH0.3V9aWlV5BipWO5dpRM_dzRaxunvbINRcOHETb3-y5w8\"}]"
+        },
+        "priceMapLegacy": null,
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/fee",
+            "quantity": 1,
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/999"
+            },
+            "sellingPlanAllocation": null,
+            "sessionToken": null,
+            "feeFor": {
+              "value": "fee-session-1"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

@@ -44,7 +44,7 @@ access.storefront = "none"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_cart_transforms,read_orders,read_products,read_themes,write_cart_transforms"
+scopes = "read_cart_transforms,read_orders,read_products,read_publications,read_themes,write_cart_transforms,write_products,write_publications"
 
 [auth]
 redirect_urls = [

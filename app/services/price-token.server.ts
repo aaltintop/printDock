@@ -6,6 +6,8 @@ import { createHmac, timingSafeEqual } from "crypto";
  * where signature = HMAC-SHA256(header.payload, hmacKey) over UTF-8 bytes of the signing input string.
  */
 
+export type PriceTokenMode = "buildB" | "legacy";
+
 export type PriceTokenPayload = {
   /** Shop domain (prevents naive cross-shop replay in order webhook) */
   shop: string;
@@ -19,6 +21,8 @@ export type PriceTokenPayload = {
   exp: number;
   /** Unix seconds — issued at */
   iat: number;
+  /** buildB = legacy two-line fee cart (deprecated); legacy = Build A single-line expand. */
+  mode?: PriceTokenMode;
 };
 
 const HEADER = { alg: "HS256", typ: "JWT" } as const;
@@ -43,18 +47,18 @@ function fromBase64Url(s: string): Buffer {
 
 export function signPriceToken(payload: PriceTokenPayload, hmacKey: string): string {
   const headerPart = toBase64Url(utf8Bytes(JSON.stringify(HEADER)));
-  const payloadPart = toBase64Url(
-    utf8Bytes(
-      JSON.stringify({
-        shop: payload.shop,
-        sid: payload.sid,
-        p: payload.p,
-        c: payload.c,
-        exp: payload.exp,
-        iat: payload.iat,
-      }),
-    ),
-  );
+  const body: Record<string, unknown> = {
+    shop: payload.shop,
+    sid: payload.sid,
+    p: payload.p,
+    c: payload.c,
+    exp: payload.exp,
+    iat: payload.iat,
+  };
+  if (payload.mode === "buildB" || payload.mode === "legacy") {
+    body.mode = payload.mode;
+  }
+  const payloadPart = toBase64Url(utf8Bytes(JSON.stringify(body)));
   const signingInput = `${headerPart}.${payloadPart}`;
   const sig = createHmac("sha256", utf8Bytes(hmacKey)).update(signingInput, "utf8").digest();
   return `${signingInput}.${toBase64Url(sig)}`;
@@ -96,9 +100,37 @@ export function verifyPriceToken(
   }
   if (nowUnixSeconds > exp) return null;
 
-  return { shop, sid, p, c, exp, iat };
+  const modeRaw = body.mode;
+  const mode =
+    modeRaw === "buildB" || modeRaw === "legacy" ? (modeRaw as PriceTokenMode) : undefined;
+
+  return { shop, sid, p, c, exp, iat, mode };
+}
+
+/** True when a verified token is from the deprecated two-line (Build B) cart model. */
+export function tokenRequiresFeeLine(
+  verified: PriceTokenPayload | null | undefined,
+): boolean {
+  return verified?.mode === "buildB";
 }
 
 export function defaultTokenTtlSeconds(): number {
   return 24 * 60 * 60;
+}
+
+type LineProp = { name: string; value: string };
+
+/** Prefer line `__ucToken`; fall back to order note `_pd_price_map` entry. */
+export function resolveSignedPriceTokenForSession(
+  sessionToken: string,
+  lineProps: LineProp[],
+  signedPriceMapBySession?: Record<string, string>,
+): { token?: string; mapLineMismatch: boolean } {
+  const fromLine = String(
+    lineProps.find((p) => p.name === "__ucToken")?.value || "",
+  ).trim();
+  const fromMap = String(signedPriceMapBySession?.[sessionToken] || "").trim();
+  const mapLineMismatch = Boolean(fromLine && fromMap && fromLine !== fromMap);
+  const token = fromLine || fromMap || undefined;
+  return { token, mapLineMismatch };
 }

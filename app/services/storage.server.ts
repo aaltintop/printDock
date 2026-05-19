@@ -107,6 +107,51 @@ export async function copyFile(sourcePath: string, targetPath: string): Promise<
   await sourceFile.copy(targetFile);
 }
 
+export type CopyFileResult = "copied" | "already_at_target" | "source_missing";
+
+/** List soft-deleted generations and restore the newest, when bucket soft-delete is enabled. */
+export async function restoreFileIfSoftDeleted(storagePath: string): Promise<boolean> {
+  const bucket = storage.bucket();
+  const file = bucket.file(storagePath);
+  try {
+    const [candidates] = await bucket.getFiles({ prefix: storagePath, softDeleted: true });
+    const match = candidates.find((f) => f.name === storagePath);
+    if (!match) return false;
+    const [meta] = await match.getMetadata();
+    const generation = meta.generation;
+    if (generation == null) return false;
+    await file.restore({ generation: Number(generation) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function copyFileIfSourceExists(
+  sourcePath: string,
+  targetPath: string,
+): Promise<CopyFileResult> {
+  if (sourcePath === targetPath) return "already_at_target";
+  if (await fileExists(targetPath)) return "already_at_target";
+
+  if (await fileExists(sourcePath)) {
+    await copyFile(sourcePath, targetPath);
+    return "copied";
+  }
+
+  const restored = await restoreFileIfSoftDeleted(sourcePath);
+  if (restored && (await fileExists(sourcePath))) {
+    await copyFile(sourcePath, targetPath);
+    return "copied";
+  }
+
+  return "source_missing";
+}
+
+export function isOrderStoragePath(storagePath: string, shopDomain: string): boolean {
+  return storagePath.startsWith(`uploads/${shopDomain}/orders/`);
+}
+
 /** Write a UTF-8 JSON (or text) object to Storage — used for compliance exports. */
 export async function saveTextObject(
   storagePath: string,

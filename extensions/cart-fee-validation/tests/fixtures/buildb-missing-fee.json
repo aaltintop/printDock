@@ -1,0 +1,41 @@
+{
+  "payload": {
+    "export": "cart_validations_generate_run",
+    "target": "cart.validations.generate.run",
+    "input": {
+      "shop": {
+        "shopHmac": {
+          "value": "fixture-hmac-key-32bytes-long!!"
+        }
+      },
+      "cart": {
+        "priceMap": {
+          "value": "[{\"sid\":\"sess-b1\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoic2Vzcy1iMSIsInAiOjUwMDAsImMiOiJVU0QiLCJleHAiOjE3MDAwODY0MDAsImlhdCI6MTcwMDAwMDAwMCwibW9kZSI6ImJ1aWxkQiJ9.7gOqqmJ1P8D5LlF9laJ36Dhy5ya0mMleiJVX5VM6EU8\"}]"
+        },
+        "priceMapLegacy": null,
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "sessionToken": { "value": "sess-b1" },
+            "feeFor": null
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "validationAdd": {
+            "errors": [
+              {
+                "message": "Upload pricing is incomplete. Remove this item and add it again from the product page.",
+                "target": "$.cart"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

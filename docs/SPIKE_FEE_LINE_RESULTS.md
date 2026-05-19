@@ -1,4 +1,18 @@
-# Fee-Line Spike Results
+# SUPERCEDED — do not implement from this document
+
+**Status:** Historical spike only (2026-05-11). **Not current architecture.**
+
+PrintDock production pricing uses:
+
+- **Build B (fee line):** hidden `PrintDock Upload Fee` variant + Cart Transform `lineExpand` on the fee line only (`extensions/auto-pricing-rs/`).
+- **Legacy fallback:** single artwork line + `lineExpand` via `_uc_session` when the fee product is unavailable.
+- **Never `lineUpdate` or `linesMerge`** in shipped code.
+
+This spike explored `linesMerge`, denomination variants, and a `_pd_calculated_price` → `lineUpdate` fallback. Those paths were **not adopted**. See `docs/PrintDock_DynamicPricing_Plan.md` and `docs/PRINT_READY_FILE_SHORT_LINKS.md` for the current design.
+
+---
+
+# Fee-Line Spike Results (archived)
 
 Date: 2026-05-11
 
@@ -41,12 +55,14 @@ This spike validates the pre-build unknowns for fee-line dynamic pricing:
 - **Status:** unresolved in remote storefront.
 - **Mitigation implemented:** function emits unique merge titles (`Artwork - design N`) when multiple session groups target the same parent variant, matching known workaround guidance.
 
-## Architecture decision
+## Architecture decision (superseded)
 
 Selected: **Build A** (`merge` + denomination fee variants), with conservative fallback:
 
 - Primary path: merge artwork + fee-denomination lines.
 - Safety net: retain legacy `_pd_calculated_price` -> `lineUpdate` path while rollout is in flight.
+
+**This decision was not shipped.** Production uses Build B + `lineExpand` only.
 
 ## Follow-up verification checklist (manual, merchant browser)
 

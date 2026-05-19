@@ -111,6 +111,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
           code: shopCurrencyCode,
           decimals: shopCurrencyDecimals,
         },
+        /** @deprecated Build A — no separate fee variant; always null. */
+        feeVariantId: null,
       });
     } catch (err) {
       return internalError("upload_config_failed", err);

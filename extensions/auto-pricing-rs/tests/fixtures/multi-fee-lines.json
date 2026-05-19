@@ -1,0 +1,98 @@
+{
+  "payload": {
+    "export": "cart_transform_run",
+    "target": "cart.transform.run",
+    "input": {
+      "cartTransform": {
+        "pricingHmac": {
+          "value": "fixture-hmac-key-32bytes-long!!"
+        }
+      },
+      "shop": {
+        "shopHmac": null
+      },
+      "cart": {
+        "priceMap": {
+          "value": "[{\"sid\":\"fee-session-1\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoiZmVlLXNlc3Npb24tMSIsInAiOjUwMDAsImMiOiJVU0QiLCJleHAiOjE3MDAwODY0MDAsImlhdCI6MTcwMDAwMDAwMH0.3V9aWlV5BipWO5dpRM_dzRaxunvbINRcOHETb3-y5w8\"},{\"sid\":\"fee-session-2\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoiZmVlLXNlc3Npb24tMiIsInAiOjI1MDAsImMiOiJVU0QiLCJleHAiOjE3MDAwODY0MDAsImlhdCI6MTcwMDAwMDAwMH0.Bpoa8NPoGSXfWKdXyCm0a4VMBpXlCRUZTy6Klur18No\"}]"
+        },
+        "priceMapLegacy": null,
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/fee-1",
+            "quantity": 1,
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/901"
+            },
+            "sellingPlanAllocation": null,
+            "sessionToken": null,
+            "feeFor": {
+              "value": "fee-session-1"
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/fee-2",
+            "quantity": 3,
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/902"
+            },
+            "sellingPlanAllocation": null,
+            "sessionToken": null,
+            "feeFor": {
+              "value": "fee-session-2"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "lineExpand": {
+            "cartLineId": "gid://shopify/CartLine/fee-1",
+            "expandedCartItems": [
+              {
+                "attributes": null,
+                "merchandiseId": "gid://shopify/ProductVariant/901",
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": "50.0"
+                    }
+                  }
+                },
+                "quantity": 1
+              }
+            ],
+            "image": null,
+            "price": null,
+            "title": null
+          }
+        },
+        {
+          "lineExpand": {
+            "cartLineId": "gid://shopify/CartLine/fee-2",
+            "expandedCartItems": [
+              {
+                "attributes": null,
+                "merchandiseId": "gid://shopify/ProductVariant/902",
+                "price": {
+                  "adjustment": {
+                    "fixedPricePerUnit": {
+                      "amount": "25.0"
+                    }
+                  }
+                },
+                "quantity": 3
+              }
+            ],
+            "image": null,
+            "price": null,
+            "title": null
+          }
+        }
+      ]
+    }
+  }
+}

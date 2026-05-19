@@ -1,0 +1,26 @@
+{
+  "payload": {
+    "export": "cart_validations_generate_run",
+    "target": "cart.validations.generate.run",
+    "input": {
+      "shop": {
+        "shopHmac": null
+      },
+      "cart": {
+        "priceMap": null,
+        "priceMapLegacy": null,
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 2,
+            "sessionToken": null,
+            "feeFor": null
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

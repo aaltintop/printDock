@@ -6,29 +6,69 @@ export default async () => {
   render(<Extension />, document.body);
 };
 
+const DOWNLOAD_URL_KEYS = new Set([
+  "Print Ready File",
+  "_Print Ready File",
+  "View uploads",
+  "_View uploads",
+  "__View uploads",
+  "_View uploads",
+]);
+const PRINTDOCK_SHORT_URL_RE = /https:\/\/[^\s]+\/apps\/printdock\/f\/[A-Za-z0-9]+/i;
+
+const ORDER_FILES_QUERY = `#graphql
+  query PrintDockOrderFiles($id: ID!) {
+    order(id: $id) {
+      name
+      lineItems(first: 100) {
+        nodes {
+          id
+          title
+          quantity
+          customAttributes {
+            key
+            value
+          }
+          lineItemGroup {
+            id
+            title
+            customAttributes {
+              key
+              value
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 /**
  * PrintDock order file downloads — admin action.
  *
- * Lives in the More actions menu on the Shopify Admin order details page.
- * When opened, it queries the order's line items, reads the `Print Ready File`
- * custom attribute on each line, and renders a tappable Download button per
- * uploaded artwork. Files open via the short URL we set on each line.
+ * More actions → PrintDock files on the order details page.
+ * Reads `Print Ready File` from each line's customAttributes and from
+ * lineItemGroup.customAttributes (native bundles / "Part of:" lines).
  */
 function Extension() {
-  const api = typeof globalThis !== "undefined" ? globalThis.shopify : undefined;
-  const i18n = api?.i18n;
-  const close = api?.close;
-  const data = api?.data;
+  const shopify = typeof globalThis !== "undefined" ? globalThis.shopify : undefined;
+  const i18n = shopify?.i18n;
+  const close = shopify?.close;
 
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const orderId = pickOrderId(data);
-
   useEffect(() => {
-    if (!api) return;
+    if (!shopify?.query) {
+      setError("PrintDock could not access the Shopify admin API.");
+      setLoading(false);
+      return;
+    }
+
+    const orderId = pickOrderId(shopify.data);
     if (!orderId) {
+      setError("Could not determine which order to load. Open this action from an order details page.");
       setLoading(false);
       return;
     }
@@ -39,49 +79,38 @@ function Extension() {
 
     (async () => {
       try {
-        const response = await fetch("shopify:admin/api/graphql.json", {
-          method: "POST",
-          body: JSON.stringify({
-            query: `#graphql
-              query PrintDockOrderFiles($id: ID!) {
-                order(id: $id) {
-                  lineItems(first: 50) {
-                    nodes {
-                      id
-                      title
-                      quantity
-                      customAttributes { key value }
-                    }
-                  }
-                }
-              }
-            `,
-            variables: { id: orderId },
-          }),
+        const { data, errors } = await shopify.query(ORDER_FILES_QUERY, {
+          variables: { id: orderId },
         });
 
-        const json = await response.json();
         if (cancelled) return;
 
-        const nodes = json?.data?.order?.lineItems?.nodes ?? [];
+        if (errors?.length) {
+          setError(errors.map((e) => e.message).filter(Boolean).join("; ") || "GraphQL error");
+          setLoading(false);
+          return;
+        }
+
+        if (!data?.order) {
+          setError("Order not found or not accessible.");
+          setLoading(false);
+          return;
+        }
+
+        const nodes = data.order.lineItems?.nodes ?? [];
         const enriched = nodes
           .map((line) => {
-            const attrs = Array.isArray(line.customAttributes)
-              ? line.customAttributes
-              : [];
-            const printUrl = attrs.find(
-              (attr) =>
-                attr?.key === "Print Ready File" ||
-                attr?.key === "_Print Ready File",
-            )?.value;
-            const artwork = attrs.find((attr) => attr?.key === "Artwork")?.value;
+            const printUrl = findPrintReadyUrl(line.customAttributes)
+              ?? findPrintReadyUrl(line.lineItemGroup?.customAttributes);
+            const artwork = findAttributeValue(line.customAttributes, "Artwork")
+              ?? findAttributeValue(line.lineItemGroup?.customAttributes, "Artwork");
             const fileName =
               artwork || deriveFileNameFromUrl(printUrl) || line.title;
             return {
               id: line.id,
               title: line.title,
               quantity: line.quantity,
-              printUrl: typeof printUrl === "string" ? printUrl : null,
+              printUrl,
               fileName,
             };
           })
@@ -99,7 +128,7 @@ function Extension() {
     return () => {
       cancelled = true;
     };
-  }, [api, orderId]);
+  }, [shopify]);
 
   return (
     <s-admin-action heading={safeTranslate(i18n, "heading", "PrintDock files")}>
@@ -177,13 +206,53 @@ function safeTranslate(i18n, key, fallback) {
   return fallback;
 }
 
+/** Shopify docs: order-details actions use `data.selected[0].id`. */
 function pickOrderId(data) {
   if (!data) return null;
-  const selected = Array.isArray(data.selected) ? data.selected : null;
-  const first = selected?.[0];
-  if (first && typeof first.id === "string") return first.id;
-  if (typeof data.id === "string") return data.id;
+  const selected = Array.isArray(data.selected) ? data.selected : [];
+  const fromSelected = selected[0]?.id;
+  if (typeof fromSelected === "string" && fromSelected.trim()) {
+    return fromSelected.trim();
+  }
+  if (typeof data.id === "string" && data.id.trim()) {
+    return data.id.trim();
+  }
   return null;
+}
+
+function findAttributeValue(attrs, key) {
+  if (!Array.isArray(attrs)) return null;
+  const hit = attrs.find((attr) => attr?.key === key);
+  const value = hit?.value;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function findPrintReadyUrl(attrs) {
+  if (!Array.isArray(attrs)) return null;
+  for (const attr of attrs) {
+    const key = String(attr?.key ?? "").trim();
+    const raw = String(attr?.value ?? "").trim();
+    if (!raw) continue;
+    if (DOWNLOAD_URL_KEYS.has(key)) {
+      const normalized = normalizePrintReadyUrl(raw);
+      if (normalized) return normalized;
+    }
+    const matched = raw.match(PRINTDOCK_SHORT_URL_RE);
+    if (matched) return matched[0];
+  }
+  return null;
+}
+
+function normalizePrintReadyUrl(raw) {
+  let s = String(raw).trim();
+  if (!/^https:\/\//i.test(s)) {
+    const extracted = s.match(PRINTDOCK_SHORT_URL_RE);
+    if (extracted) s = extracted[0];
+  }
+  s = s.replace(/\/+$/, "");
+  if (!/^https:\/\//i.test(s)) return null;
+  if (!/\/apps\/printdock\/f\/[A-Za-z0-9]+$/i.test(s)) return null;
+  return s;
 }
 
 function deriveFileNameFromUrl(url) {

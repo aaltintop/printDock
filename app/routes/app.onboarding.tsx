@@ -13,13 +13,17 @@ import {
   listUploadSessions,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
-import { detectThemeBlockEnabled } from "../services/app-setup-status.server";
+import { detectCartFeeUiEmbedEnabled, detectThemeBlockEnabled } from "../services/app-setup-status.server";
 import {
   detectCartTransformConflict,
   detectPrintDockCartTransform,
   registerPrintDockCartTransform,
   type CartTransformStatusCode,
 } from "../services/cart-transform.server";
+import {
+  detectPrintDockCartValidation,
+  registerPrintDockCartValidation,
+} from "../services/cart-validation.server";
 import { ensureHmacSecret, getHmacSecretFromFirestore } from "../services/shop-secret.server";
 
 type SetupState = {
@@ -37,6 +41,8 @@ type SetupState = {
   pricingSecretConfigured: boolean;
   themeEditorUrl: string;
   reauthUrl: string;
+  cartFeeUiEmbedEnabled: boolean;
+  cartFeeUiEmbedVerified: boolean;
 };
 
 const CART_TRANSFORM_UNAVAILABLE_CODES = new Set<CartTransformStatusCode>([
@@ -66,6 +72,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       const [
         themeStatus,
+        cartFeeUiStatus,
         cartTransformStatus,
         cartTransformConflict,
         fields,
@@ -76,6 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         pricingSecret,
       ] = await Promise.all([
         detectThemeBlockEnabled(admin),
+        detectCartFeeUiEmbedEnabled(admin),
         detectPrintDockCartTransform(admin),
         detectCartTransformConflict(admin),
         listUploadFields(shopDomain),
@@ -115,6 +123,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         themeEditorUrl,
         reauthUrl,
         pricingSecretConfigured,
+        cartFeeUiEmbedEnabled: cartFeeUiStatus.enabled,
+        cartFeeUiEmbedVerified: Boolean(shopSettings.cartFeeUiEmbedVerified),
       };
 
       const themeStepVerified =
@@ -247,6 +257,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return data({ ok: true, intent: "verify_theme_block" });
       }
 
+      if (intent === "verify_cart_fee_embed") {
+        log.event("onboarding_verify_cart_fee_embed", {});
+        await shopDoc.set({ cartFeeUiEmbedVerified: true }, { merge: true });
+        return data({ ok: true, intent: "verify_cart_fee_embed" });
+      }
+
       if (intent === "register_cart_transform") {
         log.event("onboarding_register_cart_transform", {});
         const conflict = await detectCartTransformConflict(admin);
@@ -270,7 +286,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           const rawMessage = String((error as { message?: string })?.message || error || "");
           const friendlyMessage = /^could not mirror hmac secret/i.test(rawMessage)
             ? rawMessage
-            : `Could not store the pricing signing key: ${rawMessage}`;
+            : /^could not (create|configure) upload fee/i.test(rawMessage)
+              ? rawMessage
+              : `Could not set up upload pricing: ${rawMessage}`;
           log.error("onboarding_hmac_setup_failed", error, { shopDomain: session.shop });
           return data({
             ok: false,
@@ -286,6 +304,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           });
         }
         const result = await registerPrintDockCartTransform(admin, session.shop);
+        await registerPrintDockCartValidation(admin);
         const pricingSecretConfigured = Boolean(await getHmacSecretFromFirestore(session.shop));
         const okStatuses: CartTransformStatusCode[] = ["active"];
         return data({
@@ -582,7 +601,44 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                3. Cart Validation
+                3. Cart appearance (app embed)
+              </Text>
+              <StatusBadge
+                enabled={
+                  setup.cartFeeUiEmbedEnabled ||
+                  setup.cartFeeUiEmbedVerified
+                }
+              />
+            </InlineStack>
+            <Text as="p" tone="subdued">
+              Enable the <strong>PrintDock Cart</strong> app embed in Theme settings → App embeds.
+              This merges the upload fee with your product line in the cart drawer and keeps fee
+              lines paired (checkout still shows two lines for transparency).
+            </Text>
+            {setup.cartFeeUiEmbedEnabled || setup.cartFeeUiEmbedVerified ? (
+              <Text as="p" tone="success">
+                Cart embed is enabled.
+              </Text>
+            ) : null}
+            <Button url={setup.themeEditorUrl} target="_blank">
+              Open Theme Editor (App embeds)
+            </Button>
+            {!setup.cartFeeUiEmbedEnabled && !setup.cartFeeUiEmbedVerified ? (
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value="verify_cart_fee_embed" />
+                <Button submit loading={fetcher.state === "submitting"}>
+                  Mark cart embed as verified
+                </Button>
+              </fetcher.Form>
+            ) : null}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between">
+              <Text as="h2" variant="headingMd">
+                4. Cart Validation
               </Text>
               <StatusBadge enabled={setup.cartValidationVerified} />
             </InlineStack>
@@ -612,7 +668,7 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                4. Cart Transform
+                5. Cart Transform
               </Text>
               <CartTransformBadge
                 enabled={liveCartTransformEnabled}
@@ -620,8 +676,8 @@ export default function OnboardingPage() {
               />
             </InlineStack>
             <Text as="p" tone="subdued">
-              Registers PrintDock Cart Transform and stores a shop signing key so checkout can apply
-              your upload fees as a single line item price (no separate fee products).
+              Registers PrintDock Cart Transform, cart validation (fee-line guard), and stores a shop
+              signing key so checkout can apply your upload fee securely.
             </Text>
             {setup.cartTransformConflictMessage ? (
               <Text as="p" tone="critical">

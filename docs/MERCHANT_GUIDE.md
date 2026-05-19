@@ -39,9 +39,11 @@ PrintDock uses a **theme app block** (not an app embed). This means you add it d
 7. Optionally tailor the **look and copy** from the same block settings panel — see Section 11 below for the full list.
 8. Click **Save**.
 
-> **Important:** PrintDock does NOT appear under "App embeds" in the theme editor. It is a section block, not an app embed. You must add it inside a product page section.
+> **Product upload block:** Add the **PrintDock Upload** block inside your product page section (not under App embeds).
 
-Once done, return to the Setup page and the app will detect the block (or you can confirm manually).
+> **Cart drawer + /cart page (optional):** In Theme settings → **App embeds**, enable **PrintDock Cart**. For stores that still have open **two-line** carts from an older release, the embed merges product + fee rows in the drawer. **New uploads** add a **single** cart line; dynamic pricing is applied via Cart Transform on that line. **Checkout** and **Admin → Orders** show one product line with **Part of:** when pricing is enabled; use **View uploads** / **Print Ready File** or **More actions → PrintDock files** to download artwork.
+
+Once done, return to the Setup page and the app will detect the block/embed (or you can confirm manually).
 
 ### Step 2: Cart Validation
 
@@ -145,18 +147,23 @@ When a customer visits a product page that has PrintDock configured:
 6. If the file passes all rules, the **Add to Cart** button is unblocked.
 7. When added to cart, line item properties are injected (all visible on the order in Admin):
    - `_uc_session` — links the cart line to the upload session and powers webhooks.
-   - `Artwork` — uploaded file name(s), and optionally `Print Ready File` for direct download; see `docs/MERCHANT_FIELDS.md`.
+   - `Artwork` — uploaded file name(s); `__View uploads` / `View uploads` for direct download; see `docs/MERCHANT_FIELDS.md`.
    - Dynamic pricing proof is stored in cart attribute `__pd_price_map` (not shown per line item).
 
 If a customer uploads files but never adds the item to cart, PrintDock removes those non-converted uploads after about 2 hours.
 
 ### Dynamic Pricing at Checkout
 
-If dynamic pricing is enabled and setup is complete, the storefront adds a single product line and writes signed pricing proof into cart attribute `__pd_price_map`. At checkout, PrintDock Cart Transform verifies the matching token for that line’s `_uc_session` and sets the line’s **fixed price per unit** to match your calculated base product price plus upload fee. Quantity changes stay on one line; PrintDock does not create hidden fee products in your catalog.
+If dynamic pricing is enabled and setup is complete:
+
+1. The storefront adds **one product line** with `Artwork`, `__View uploads`, `View uploads`, `__ucToken`, and `__ucExp`, and stores signed pricing proof in cart attribute `_pd_price_map`.
+2. **Cart Transform** sets the line’s checkout price to **product base + upload fee** on that same line (Admin shows **Part of: Upload file** or your field title).
+3. **PrintDock Cart** app embed (optional) merges **legacy** two-line carts in the drawer; new uploads are already a single line.
+4. **Cart validation** blocks checkout only for legacy **two-line** carts that still use the old fee-line model (open carts from before v1.0.8).
 
 ### Discounts and Taxes
 
-Upload fees ride on the same line item as the configured product variant, so your normal product discount and tax rules apply to the combined amount. If you need upload fees to behave differently from the base product, use Shopify’s discount and tax tools with that in mind.
+The combined line price is what checkout uses. Discounts and taxes apply per Shopify’s rules on that line item.
 
 ### Selling Plan Limitation
 

@@ -33,6 +33,24 @@ query Input {
       sessionToken: attribute(key: "_uc_session") {
         value
       }
+      viewUploadsLink: attribute(key: "__View uploads") {
+        value
+      }
+      viewUploads: attribute(key: "View uploads") {
+        value
+      }
+      ucExp: attribute(key: "__ucExp") {
+        value
+      }
+      ucToken: attribute(key: "__ucToken") {
+        value
+      }
+      artwork: attribute(key: "Artwork") {
+        value
+      }
+      feeFor: attribute(key: "_pd_fee_for") {
+        value
+      }
     }
   }
 }

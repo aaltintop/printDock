@@ -182,7 +182,14 @@
 }
 
 .printdock-status-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   color: var(--pd-success-strong);
+}
+
+.printdock-status-ok .printdock-status-icon {
+  flex-shrink: 0;
 }
 
 /* `.printdock-error` styling lives further down with the notification rules

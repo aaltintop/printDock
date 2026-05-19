@@ -11,6 +11,49 @@ export type ReleaseNoteEntry = {
 
 export const RELEASE_NOTES: ReleaseNoteEntry[] = [
   {
+    version: "1.0.11",
+    date: "2026-05-20",
+    highlights: [
+      "Shopify Admin now shows __View uploads above Part of (upload link on the product line, details under Part of) — matching other upload apps.",
+      "Requires a new order after deploy; existing orders keep the previous layout.",
+    ],
+  },
+  {
+    version: "1.0.10",
+    date: "2026-05-20",
+    highlights: [
+      "Order lines put __View uploads first so Shopify Admin shows a clickable truncated shop link at the top, like other upload apps.",
+      "Internal Part of title no longer appears as a line property cluttering the order card.",
+    ],
+  },
+  {
+    version: "1.0.9",
+    date: "2026-05-19",
+    highlights: [
+      "Order lines now follow the standard upload-app layout: __View uploads, View uploads, Part of: Upload file, and pricing fields __ucToken / __ucExp.",
+      "Checkout still uses one combined product line with dynamic pricing; no hidden fee product.",
+      "More actions → PrintDock files continues to work for every upload on the order.",
+    ],
+  },
+  {
+    version: "1.0.8",
+    date: "2026-05-19",
+    highlights: [
+      "Upload pricing uses one cart and order line (product + upload fee combined), like other upload apps — no hidden fee product added to your catalog.",
+      "Orders show View uploads and Print Ready File with the same short download link.",
+      "More actions → PrintDock files still lists every upload when Admin does not linkify the URL on a Part of: line.",
+    ],
+  },
+  {
+    version: "1.0.7",
+    date: "2026-05-19",
+    highlights: [
+      "Cart drawer can show one combined product row with a clear upload-fee disclosure when the PrintDock Cart app embed is enabled.",
+      "Checkout blocks orders that are missing the upload fee line when dynamic pricing uses the two-line (Build B) model.",
+      "Fee lines at checkout are labeled Artwork upload fee for clarity.",
+    ],
+  },
+  {
     version: "1.0.6",
     date: "2026-05-18",
     highlights: [

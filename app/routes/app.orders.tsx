@@ -148,6 +148,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         assignee: orderJob.assignee || "",
         internalNotes: orderJob.internalNotes || "",
         tags: orderJob.tags || [],
+        ingestStatus: orderJob.ingestStatus,
+        ingestEvidence: orderJob.ingestEvidence,
       };
     })
     .filter((order) => {
@@ -311,6 +313,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (jobForPath?.assetSnapshot?.storageExpired) {
     return data(
       { error: "This file is no longer stored (retention period ended)." },
+      { status: 410 },
+    );
+  }
+
+  if (
+    jobForPath?.ingestStatus === "pending" ||
+    jobForPath?.ingestStatus === "processing"
+  ) {
+    return data(
+      { error: "Artwork is still importing. Try again in a moment." },
+      { status: 409 },
+    );
+  }
+
+  if (
+    jobForPath?.ingestStatus === "failed" ||
+    jobForPath?.ingestEvidence?.anomalyReason === "artwork_unrecoverable"
+  ) {
+    return data(
+      { error: "Artwork file could not be recovered for this order." },
       { status: 410 },
     );
   }
@@ -496,7 +518,15 @@ export default function Orders() {
                     </Badge>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    {order.asset?.storageExpired ? (
+                    {order.ingestStatus === "pending" || order.ingestStatus === "processing" ? (
+                      <Text as="span" tone="subdued">
+                        Artwork importing…
+                      </Text>
+                    ) : order.ingestEvidence?.anomalyReason === "artwork_unrecoverable" ? (
+                      <Text as="span" tone="critical">
+                        Artwork missing
+                      </Text>
+                    ) : order.asset?.storageExpired ? (
                       <Text as="span" tone="subdued">
                         File no longer stored
                       </Text>
@@ -548,7 +578,13 @@ export default function Orders() {
                           downloadFetcher.state === "submitting" &&
                           downloadingStoragePath === order.asset?.storagePath
                         }
-                        disabled={!order.asset?.storagePath || Boolean(order.asset?.storageExpired)}
+                        disabled={
+                          !order.asset?.storagePath ||
+                          Boolean(order.asset?.storageExpired) ||
+                          order.ingestStatus === "pending" ||
+                          order.ingestStatus === "processing" ||
+                          order.ingestStatus === "failed"
+                        }
                       >
                         {downloadingStoragePath === order.asset?.storagePath
                           ? "Downloading..."

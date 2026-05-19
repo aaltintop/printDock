@@ -25,7 +25,28 @@ Developer reference for how PrintDock builds **short, stable, merchant-friendly*
 - **Name:** `Print Ready File`
 - **Value example:** `https://levyapps.myshopify.com/apps/printdock/f/AbC1d2eF34`
 
-Admin shows this as a normal link on the shop domain. Each click goes through Shopify’s app proxy to PrintDock, then **302** to Google Cloud Storage for the actual file download.
+On the **standard** order line item card, Shopify Admin **auto-linkifies** the property value when it is a bare **`https://…` URL** (no HTML, no extra label text inside the value—the displayed `Print Ready File:` prefix is the **key**, not part of the value). The short app-proxy path keeps the hyperlink line readable.
+
+### Constraints (same as other upload apps)
+
+| Requirement | Reason |
+|-------------|--------|
+| **Value = URL only** | Shopify does not render HTML or `<a>` tags in property values (security). |
+| **No text mixed into the value** | If the value accidentally included `Print Ready File: https://…`, Admin may not detect a single URL. PrintDock stores only the URL string. |
+| **HTTPS** | Values are normalized to `https://…/apps/printdock/f/{id}`. |
+| **No invisible characters** | Zero-width spaces / BOM can break URL detection; we trim and strip common invisible code points in the theme and in `normalizePrintReadyFileUrl` (server). |
+| **Storefront host (optional)** | On confirm, the theme sends `printReadyPublicHost` (`window.location.hostname`). The server builds `https://{that-host}/apps/printdock/f/{id}` when valid (see `sanitizePrintReadyPublicHost`) so the stored URL matches how the shopper reached the store—often the **primary domain** instead of `{shop}.myshopify.com`. App proxy still resolves for any approved shop host. |
+
+### When it still looks like “plain black text”
+
+- **Dynamic pricing (Build A — single line):** Cart Transform `lineExpand`s the product line. **`__View uploads`** stays on the **parent** line (Admin truncated link **above** Part of). **`View uploads`**, tokens, and **`Artwork`** are on the **Part of** component via `ExpandedItem.attributes` (v1.0.11+).
+- **Bundle / “Part of: …” component lines:** `View uploads` under Part of may render as plain text in some Admin layouts; use **`__View uploads`** on the parent row or **More actions → PrintDock files**.
+- **Legacy two-line carts (Build B):** Older open carts may still have a separate **PrintDock Upload Fee** line until they expire; new uploads no longer add that line.
+- **Verify raw data:** Query `order { lineItems { nodes { customAttributes { key value } } } }` — the `Print Ready File` **value** must be exactly the `https://` string.
+
+**Fallbacks (optional):** **More actions → PrintDock files** (app action) uses the same URL as a button; checkout/thank-you extensions can add explicit links where Admin does not.
+
+Each click still goes through Shopify’s app proxy to PrintDock, then **302** to Google Cloud Storage for the file download.
 
 ---
 
@@ -73,7 +94,7 @@ If short-link creation throws, confirm still succeeds but `printReadyFileUrl` is
 `extensions/theme-extension/assets/upload.js`:
 
 1. On successful confirm, stores `fileEntry.printReadyFileUrl` from the API response.
-2. `getCartProperties()` sets `properties["Print Ready File"]` to the first successful file’s URL (with `_uc_session` and `Artwork`).
+2. `getCartProperties()` sets `View uploads` and `__View uploads` to the first successful file’s short URL (with `_uc_session`, `Artwork`, and optional `_pd_part_of_title`).
 3. Add-to-cart sends these as **line item properties**; they persist on the order.
 
 ### Phase 3 — Resolve on click (app proxy)
@@ -204,7 +225,7 @@ The legacy route remains deployed so old orders keep working until embedded toke
 
 ## Admin UI extension (secondary entry)
 
-**More actions → PrintDock files** (`extensions/printdock-order-files`) reads line item custom attributes for `Print Ready File` (and `_Print Ready File`) and opens the same short URLs in a download modal. No separate URL format — one source of truth on the line property.
+**More actions → PrintDock files** (`extensions/printdock-order-files`) reads `View uploads`, `__View uploads`, and legacy `Print Ready File` custom attributes and opens the same short URLs in a download modal.
 
 ---
 
@@ -233,7 +254,7 @@ Use this when adding a new download surface or debugging regressions:
 
 - [ ] Confirm creates Firestore mapping **before** returning URL to theme.
 - [ ] Public URL uses `buildShortLinkPublicUrl` (shop domain + `/apps/printdock/f/`).
-- [ ] Theme writes **`Print Ready File`** (exact spelling) in line properties only when `printReadyFileUrl` is non-null.
+- [ ] Theme writes **`View uploads`** and **`__View uploads`** when `printReadyFileUrl` is non-null (v1.0.9+).
 - [ ] App proxy `subpath` / `prefix` match deployed `shopify.app.toml`.
 - [ ] Remix route exists for `/f/:shortId` and uses `authenticate.public.appProxy`.
 - [ ] Redirect uses `getSignedDownloadUrlAttachment`, not a long-lived public GCS URL on the order.

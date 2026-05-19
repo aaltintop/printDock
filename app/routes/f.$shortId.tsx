@@ -61,10 +61,19 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     }
 
     if (!(await fileExists(storagePath))) {
-      const job = await findJobByLegacySessionUploadPath(shopDomain, storagePath);
+      const legacyLookupPath = record.legacyStoragePath || storagePath;
+      const job = await findJobByLegacySessionUploadPath(shopDomain, legacyLookupPath);
       if (job?.assetSnapshot?.storagePath) {
         storagePath = job.assetSnapshot.storagePath;
         downloadName = job.assetSnapshot.originalName || downloadName;
+      }
+    }
+
+    if (!(await fileExists(storagePath)) && record.storagePath !== storagePath) {
+      const jobAtCurrent = await findJobByLegacySessionUploadPath(shopDomain, record.storagePath);
+      if (jobAtCurrent?.assetSnapshot?.storagePath) {
+        storagePath = jobAtCurrent.assetSnapshot.storagePath;
+        downloadName = jobAtCurrent.assetSnapshot.originalName || downloadName;
       }
     }
 

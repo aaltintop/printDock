@@ -1,0 +1,30 @@
+{
+  "payload": {
+    "export": "cart_validations_generate_run",
+    "target": "cart.validations.generate.run",
+    "input": {
+      "shop": {
+        "shopHmac": {
+          "value": "fixture-hmac-key-32bytes-long!!"
+        }
+      },
+      "cart": {
+        "priceMap": {
+          "value": "[{\"sid\":\"sess-leg\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoic2Vzcy1sZWciLCJwIjo1MDAwLCJjIjoiVVNEIiwiZXhwIjoxNzAwMDg2NDAwLCJpYXQiOjE3MDAwMDAwMDAsIm1vZGUiOiJsZWdhY3kifQ.o59q6oWpKj9526WN7L1CDI8Gtj35oV1Rft9C-KTz0G0\"}]"
+        },
+        "priceMapLegacy": null,
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "sessionToken": { "value": "sess-leg" },
+            "feeFor": null
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

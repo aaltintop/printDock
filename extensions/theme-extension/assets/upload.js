@@ -24,6 +24,7 @@
     dropHeadline: root.dataset.dropHeadline || "Drop your artwork here",
     chooseLabel: root.dataset.chooseLabel || "Choose file",
     checkingLabel: root.dataset.checkingLabel || "Checking file...",
+    uploadedLabel: root.dataset.uploadedLabel || "Uploaded",
     priceLabel: root.dataset.priceLabel || "Calculated upload price:",
   };
   const DEBUG_PRINTDOCK =
@@ -119,6 +120,7 @@
   };
 
   let fieldConfig = { ...DEFAULT_CONFIG };
+  /** Numeric variant id for the hidden PrintDock upload-fee line (dynamic pricing). */
   let isRequired = BLOCK_REQUIRED;
   let configLoadFailed = false;
   let shopCurrencyCode = "USD";
@@ -918,6 +920,10 @@
           mimeType: file.type,
           sizeBytes: file.size,
           quantity: fileEntry.quantity || 1,
+          printReadyPublicHost:
+            typeof window !== "undefined" && window.location && window.location.hostname
+              ? window.location.hostname
+              : undefined,
         }),
       });
 
@@ -1093,15 +1099,21 @@
               itemCount: multiItemPayload.items?.length ?? 0,
             });
             try {
-              const response = await nativeFetch("/cart/add.js", {
+              let response = await nativeFetch("/cart/add.js", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Accept: "application/json" },
                 body: JSON.stringify(multiItemPayload),
                 credentials: "same-origin",
               });
+              response = await reconcileBuildBCartAddResponse(response, multiItemPayload);
               if (!response.ok) {
                 const text = await response.text();
-                throw new Error(text || `Cart add failed (${response.status})`);
+                throw new Error(
+                  text ||
+                    (response.status === 422
+                      ? "Cart add failed: upload lines were not found in the cart after a 422 response."
+                      : `Cart add failed (${response.status})`),
+                );
               }
               resetProductPageUploadSession("form_native_fetch_redirect");
               window.location.assign("/cart");
@@ -1171,20 +1183,69 @@
     }, 0);
   }
 
+  function getPartOfTitleForCartLine() {
+    const raw = fieldConfig && fieldConfig.storefrontTitle;
+    const title = raw != null ? String(raw).trim() : "";
+    return title || "Upload file";
+  }
+
+  /**
+   * All keys are written on the cart line at add/sign time. Cart Transform lineExpand
+   * moves every property except __View uploads onto the Part-of component; Admin then
+   * shows __View uploads above Part of (Upload Center parity). Property order here only
+   * affects checkout/customer display, not Admin parent vs group placement.
+   */
+  function buildCompetitorOrderedLineProperties({
+    printUrl,
+    artwork,
+    ucSession,
+    ucExp,
+    ucToken,
+  }) {
+    const out = {};
+    if (printUrl) {
+      out["__View uploads"] = printUrl;
+      out["View uploads"] = printUrl;
+    }
+    if (ucExp) out.__ucExp = ucExp;
+    if (ucToken) out.__ucToken = ucToken;
+    if (artwork) out.Artwork = artwork;
+    if (ucSession) out._uc_session = ucSession;
+    return out;
+  }
+
   function getCartProperties() {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
     if (!sessionToken || successfulFiles.length === 0) return {};
 
-    const properties = {
-      _uc_session: sessionToken,
-      Artwork: successfulFiles.map((entry) => entry.name).join(", "),
-    };
-    const printUrl = successfulFiles[0]?.printReadyFileUrl;
-    if (printUrl) {
-      properties["Print Ready File"] = printUrl;
-    }
+    const printUrl = normalizePrintReadyUrlForCartProperty(successfulFiles[0]?.printReadyFileUrl);
+    return buildCompetitorOrderedLineProperties({
+      printUrl: printUrl || null,
+      artwork: successfulFiles.map((entry) => entry.name).join(", "),
+      ucSession: sessionToken,
+    });
+  }
 
-    return properties;
+  /**
+   * Keep in sync with `normalizePrintReadyFileUrl` in `app/services/short-link.server.ts`.
+   * Bare https URL only — required for Shopify Admin to auto-linkify line properties.
+   */
+  function normalizePrintReadyUrlForCartProperty(raw) {
+    if (raw == null || raw === "") return "";
+    let s = String(raw)
+      .trim()
+      .replace(/[\u200B\uFEFF\u200C\u200D]/g, "");
+    if (!/^https:\/\//i.test(s)) {
+      const extracted = s.match(/https:\/\/[^\s]+/i);
+      if (extracted) {
+        s = extracted[0].replace(/[\u200B\uFEFF\u200C\u200D]/g, "").trim();
+      }
+    }
+    s = s.replace(/\/+$/, "");
+    if (!/^https:\/\//i.test(s)) return "";
+    if (/^http:\/\//i.test(s)) return "";
+    if (!/\/apps\/printdock\/f\/[A-Za-z0-9]+$/i.test(s)) return "";
+    return s;
   }
 
   const PRICING_SIGN_FAILED_MESSAGE =
@@ -1202,6 +1263,8 @@
         .map((entry) => ({
           sid: String(entry && entry.sid ? entry.sid : "").trim(),
           token: String(entry && entry.token ? entry.token : "").trim(),
+          partOfTitle:
+            entry && entry.partOfTitle != null ? String(entry.partOfTitle).trim() : "",
         }))
         .filter((entry) => entry.sid && entry.token);
     } catch (_err) {
@@ -1223,7 +1286,7 @@
     }
   }
 
-  function upsertPriceMapEntry(priceMap, sid, token) {
+  function upsertPriceMapEntry(priceMap, sid, token, partOfTitle) {
     const nowUnix = Math.floor(Date.now() / 1000);
     const cleaned = priceMap
       .filter((entry) => entry.sid !== sid)
@@ -1231,11 +1294,13 @@
         const exp = readJwtExp(entry.token);
         return !exp || exp > nowUnix;
       });
-    cleaned.push({ sid, token });
+    const row = { sid, token };
+    if (partOfTitle) row.partOfTitle = partOfTitle;
+    cleaned.push(row);
     return cleaned.slice(-10);
   }
 
-  async function upsertCartPriceMapForSessionAsync(sid, token) {
+  async function upsertCartPriceMapForSessionAsync(sid, token, partOfTitle) {
     if (!sid || !token) {
       throw new Error("price_map_invalid_input");
     }
@@ -1252,15 +1317,16 @@
     const currentMap = parsePriceMapJson(
       cartJson && cartJson.attributes ? cartJson.attributes._pd_price_map : "",
     );
-    const nextMap = upsertPriceMapEntry(currentMap, sid, token);
+    const nextMap = upsertPriceMapEntry(currentMap, sid, token, partOfTitle);
+    const attributePatch = {
+      _pd_price_map: JSON.stringify(nextMap),
+    };
     const updateRes = await nativeFetch("/cart/update.js", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
-        attributes: {
-          _pd_price_map: JSON.stringify(nextMap),
-        },
+        attributes: attributePatch,
       }),
     });
     if (!updateRes.ok) {
@@ -1270,8 +1336,7 @@
 
   /**
    * When dynamic pricing + a positive upload fee apply, POST /sign and persist the
-   * signed token in cart attribute `_pd_price_map` keyed by `_uc_session`.
-   * The line-item properties remain merchant-friendly (no per-line token noise).
+   * signed token in cart attribute `_pd_price_map` and on the line as __ucToken / __ucExp.
    */
   async function appendSignedPriceTokenToLinePropertiesAsync(lineProps) {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
@@ -1297,6 +1362,7 @@
         body: JSON.stringify({
           sessionToken,
           priceMinorUnits: priceMinorPerUnit,
+          pricingMode: "legacy",
         }),
       });
       const signText = await signRes.text();
@@ -1312,13 +1378,40 @@
         debugLog("price_sign_failed", { httpStatus: signRes.status, signOk: signRes.ok });
         return null;
       }
-      await upsertCartPriceMapForSessionAsync(String(sessionToken || ""), String(signJson.token || "").trim());
+      const token = String(signJson.token || "").trim();
+      const partOfTitle = getPartOfTitleForCartLine();
+      await upsertCartPriceMapForSessionAsync(
+        String(sessionToken || ""),
+        token,
+        partOfTitle,
+      );
+      const exp =
+        signJson.expiresAt != null && Number.isFinite(Number(signJson.expiresAt))
+          ? String(Math.floor(Number(signJson.expiresAt)))
+          : (() => {
+              const fromJwt = readJwtExp(token);
+              return fromJwt != null ? String(fromJwt) : "";
+            })();
+      const printUrl =
+        lineProps["__View uploads"] ||
+        lineProps["View uploads"] ||
+        normalizePrintReadyUrlForCartProperty(
+          uploadedFiles.find((e) => e.status === "success")?.printReadyFileUrl,
+        );
+      const nextProps = buildCompetitorOrderedLineProperties({
+        printUrl: printUrl || null,
+        artwork: lineProps.Artwork,
+        ucSession: lineProps._uc_session || sessionToken,
+        ucExp: exp || null,
+        ucToken: token,
+      });
       debugLog("price_sign_ok", {
         priceMinorPerUnit,
-        tokenChars: signJson.token.length,
+        tokenChars: token.length,
         mapTargetSession: String(sessionToken || ""),
+        hasUcExp: Boolean(exp),
       });
-      return lineProps;
+      return nextProps;
     } catch (_err) {
       lastCartAddBlockReason = PRICING_SIGN_FAILED_MESSAGE;
       showError(PRICING_SIGN_FAILED_MESSAGE);
@@ -1394,17 +1487,25 @@
     return searchParams;
   }
 
+  function mergeLineItemProperties(existing, incoming) {
+    if (!incoming || typeof incoming !== "object") return existing || {};
+    if (incoming["__View uploads"] || incoming._uc_session) {
+      return { ...incoming };
+    }
+    return { ...(existing || {}), ...incoming };
+  }
+
   function mergePropertiesIntoJsonPayload(payload, properties) {
     if (!payload || typeof payload !== "object") return payload;
     const clonedPayload = { ...payload };
     if (Array.isArray(clonedPayload.items)) {
       clonedPayload.items = clonedPayload.items.map((item) => ({
         ...item,
-        properties: { ...(item?.properties || {}), ...properties },
+        properties: mergeLineItemProperties(item?.properties, properties),
       }));
       return clonedPayload;
     }
-    clonedPayload.properties = { ...(clonedPayload.properties || {}), ...properties };
+    clonedPayload.properties = mergeLineItemProperties(clonedPayload.properties, properties);
     return clonedPayload;
   }
 
@@ -1505,6 +1606,201 @@
    * Shopify JSON cart adds must hit `/cart/add.js` (locale-safe). Posting `{ items }`
    * JSON to `/cart/add` yields responses that break `shop_events_listener` and cart UI.
    */
+  /** Build B: artwork line + hidden PrintDock Upload Fee line (Cart Transform bundle parent). */
+  function isBuildBMultiItemPayload(payload) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.items) || payload.items.length < 2) {
+      return false;
+    }
+    return payload.items.some(
+      (item) => item?.properties && String(item.properties._pd_fee_for || "").trim() !== "",
+    );
+  }
+
+  /**
+   * Recognises the SPECIFIC 422 false-negative for bundle-parent products.
+   * Not a catch-all for HTTP 422. Parses JSON message/description when present.
+   */
+  function isKnownBundleExpandQuirk422Response(status, bodyText) {
+    if (Number(status) !== 422) return false;
+    let desc = String(bodyText || "");
+    try {
+      const json = JSON.parse(bodyText);
+      desc = `${json.message || ""} ${json.description || ""}`;
+    } catch (_err) {
+      /* body was not JSON — fall back to raw-text match below */
+    }
+    desc = desc.toLowerCase();
+    return desc.includes("bundle product") && desc.includes("cannot be added");
+  }
+
+  function cartItemPropertiesObject(rawProps) {
+    if (!rawProps || typeof rawProps !== "object") return {};
+    if (Array.isArray(rawProps)) {
+      const out = {};
+      rawProps.forEach((entry) => {
+        if (entry && entry.name != null) out[String(entry.name)] = String(entry.value ?? "");
+      });
+      return out;
+    }
+    const out = {};
+    Object.entries(rawProps).forEach(([key, value]) => {
+      out[String(key)] = String(value ?? "");
+    });
+    return out;
+  }
+
+  function cartLineMatchesExpectedItem(cartItem, expectedItem) {
+    const expectedVariantId = normalizeVariantIdForCart(expectedItem?.id);
+    if (!expectedVariantId) return false;
+    const cartVariantId = normalizeVariantIdForCart(
+      cartItem?.variant_id ?? cartItem?.variantId ?? cartItem?.id ?? "",
+    );
+    if (cartVariantId !== expectedVariantId) return false;
+
+    const expectedQty = Math.max(1, Number(expectedItem?.quantity || 1));
+    const cartQty = Math.max(1, Number(cartItem?.quantity || 1));
+    if (cartQty !== expectedQty) return false;
+
+    const expectedProps = expectedItem?.properties && typeof expectedItem.properties === "object"
+      ? expectedItem.properties
+      : {};
+    const cartProps = cartItemPropertiesObject(cartItem?.properties);
+
+    const feeFor = String(expectedProps._pd_fee_for || "").trim();
+    if (feeFor) return String(cartProps._pd_fee_for || "").trim() === feeFor;
+
+    const session = String(expectedProps._uc_session || "").trim();
+    if (session) return String(cartProps._uc_session || "").trim() === session;
+
+    return true;
+  }
+
+  async function verifyCartContainsExpectedLines(multiItemPayload, attempt) {
+    if (!isBuildBMultiItemPayload(multiItemPayload)) return false;
+    const tryNumber = attempt ?? 1;
+    try {
+      const cartRes = await nativeFetch("/cart.js", {
+        method: "GET",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      if (!cartRes.ok) {
+        debugLog("cart_add_422_verify_cart_read_failed", { status: cartRes.status, attempt: tryNumber });
+        return false;
+      }
+      const cartJson = await cartRes.json();
+      const cartItems = Array.isArray(cartJson?.items) ? cartJson.items : [];
+      const expectedItems = multiItemPayload.items;
+      const allPresent = expectedItems.every((expectedItem) =>
+        cartItems.some((cartItem) => cartLineMatchesExpectedItem(cartItem, expectedItem)),
+      );
+      debugLog("cart_add_422_verify_cart_result", {
+        allPresent,
+        expectedCount: expectedItems.length,
+        cartItemCount: cartItems.length,
+        attempt: tryNumber,
+      });
+      if (allPresent) return true;
+      if (tryNumber < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return verifyCartContainsExpectedLines(multiItemPayload, tryNumber + 1);
+      }
+      return false;
+    } catch (err) {
+      debugLog("cart_add_422_verify_cart_exception", {
+        error: String(err && err.message ? err.message : err),
+        attempt: tryNumber,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * When Shopify returns the known bundle-parent 422 quirk, confirm the cart
+   * actually contains our lines before treating the add as success.
+   */
+  async function reconcileBuildBCartAddResponse(response, multiItemPayload) {
+    if (!multiItemPayload || !isBuildBMultiItemPayload(multiItemPayload)) return response;
+    if (response.ok) return response;
+    const bodyText = await response.clone().text();
+    if (!isKnownBundleExpandQuirk422Response(response.status, bodyText)) {
+      debugLog("cart_add_422_not_bundle_quirk", { status: response.status });
+      return new Response(bodyText, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+    const verified = await verifyCartContainsExpectedLines(multiItemPayload);
+    if (!verified) {
+      debugLog("cart_add_422_quirk_unverified", { status: response.status });
+      return new Response(bodyText, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+    debugLog("cart_add_422_bundle_quirk_recovered", { status: response.status });
+    console.warn(
+      "[PrintDock] /cart/add.js returned 422 (known bundle quirk); cart verified to contain the expected lines — continuing.",
+    );
+    return new Response(bodyText || "{}", {
+      status: 200,
+      statusText: "OK",
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function patchXhrResponseState(xhr, status, bodyText) {
+    const text = bodyText == null ? "" : String(bodyText);
+    try {
+      Object.defineProperty(xhr, "status", { configurable: true, value: status });
+      Object.defineProperty(xhr, "readyState", { configurable: true, value: 4 });
+      Object.defineProperty(xhr, "response", { configurable: true, value: text });
+      Object.defineProperty(xhr, "responseText", { configurable: true, value: text });
+    } catch (_err) {
+      xhr.status = status;
+      xhr.readyState = 4;
+      xhr.response = text;
+      xhr.responseText = text;
+    }
+  }
+
+  function dispatchXhrCompletion(xhr) {
+    try {
+      xhr.dispatchEvent(new Event("readystatechange"));
+      xhr.dispatchEvent(new Event("load"));
+      xhr.dispatchEvent(new Event("loadend"));
+    } catch (_err) {
+      /* Theme may rely on loadend only */
+    }
+  }
+
+  async function fulfillBuildBCartAddViaFetchForXhr(xhr, url, payloadForMultiItem, reason) {
+    const jsonUrl = cartAddJsonUrl(url);
+    try {
+      let res = await nativeFetch(jsonUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payloadForMultiItem),
+      });
+      res = await reconcileBuildBCartAddResponse(res, payloadForMultiItem);
+      const bodyText = await res.text();
+      if (res.ok) {
+        resetProductPageUploadSession(reason);
+      }
+      patchXhrResponseState(xhr, res.status, bodyText);
+      dispatchXhrCompletion(xhr);
+    } catch (err) {
+      debugLog("cart_add_build_b_xhr_fetch_failed", {
+        error: String(err && err.message ? err.message : err),
+      });
+      patchXhrResponseState(xhr, 0, "");
+      dispatchXhrCompletion(xhr);
+    }
+  }
+
   function cartAddJsonUrl(urlRef) {
     try {
       const u = new URL(urlRef, window.location.href);
@@ -1532,7 +1828,7 @@
       return res;
     }
 
-    const postJsonMultiCartAdd = async (url, fetchInit) => {
+    const postJsonMultiCartAdd = async (url, fetchInit, multiItemPayload) => {
       const jsonUrl = cartAddJsonUrl(url);
       try {
         const before = new URL(url, window.location.href).href;
@@ -1545,7 +1841,11 @@
       } catch (_e) {
         /* ignore compare failures */
       }
-      return finalizeCartAddFetch(nativeFetch(jsonUrl, fetchInit), "fetch_json_multi_ok");
+      let res = await nativeFetch(jsonUrl, fetchInit);
+      if (multiItemPayload) {
+        res = await reconcileBuildBCartAddResponse(res, multiItemPayload);
+      }
+      return finalizeCartAddFetch(Promise.resolve(res), "fetch_json_multi_ok");
     };
 
     window.fetch = async (input, init) => {
@@ -1597,7 +1897,7 @@
                 integrity: input.integrity,
                 keepalive: input.keepalive,
                 signal: input.signal,
-              });
+              }, payloadForMultiItem);
             }
             if (lastCartAddBlockReason) {
               throw new Error(lastCartAddBlockReason);
@@ -1659,7 +1959,7 @@
                 integrity: input.integrity,
                 keepalive: input.keepalive,
                 signal: input.signal,
-              });
+              }, payloadForMultiItem);
             }
             if (lastCartAddBlockReason) {
               throw new Error(lastCartAddBlockReason);
@@ -1710,7 +2010,7 @@
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify(payloadForMultiItem),
-          });
+          }, payloadForMultiItem);
         }
         if (lastCartAddBlockReason) {
           throw new Error(lastCartAddBlockReason);
@@ -1750,7 +2050,7 @@
           payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
           if (payloadForMultiItem) {
             headers.set("content-type", "application/json");
-            return postJsonMultiCartAdd(requestUrl, { ...init, headers, body: JSON.stringify(payloadForMultiItem) });
+            return postJsonMultiCartAdd(requestUrl, { ...init, headers, body: JSON.stringify(payloadForMultiItem) }, payloadForMultiItem);
           }
           if (lastCartAddBlockReason) {
             throw new Error(lastCartAddBlockReason);
@@ -1894,6 +2194,10 @@
         void (async () => {
           const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
           if (payloadForMultiItem) {
+            if (isBuildBMultiItemPayload(payloadForMultiItem)) {
+              void fulfillBuildBCartAddViaFetchForXhr(xhr, url, payloadForMultiItem, "xhr_formdata_json_multi");
+              return;
+            }
             try {
               xhr.setRequestHeader("Content-Type", "application/json");
             } catch (_error) {
@@ -1937,6 +2241,10 @@
         void (async () => {
           const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
           if (payloadForMultiItem) {
+            if (isBuildBMultiItemPayload(payloadForMultiItem)) {
+              void fulfillBuildBCartAddViaFetchForXhr(xhr, url, payloadForMultiItem, "xhr_urlsearch_json_multi");
+              return;
+            }
             try {
               xhr.setRequestHeader("Content-Type", "application/json");
             } catch (_error) {
@@ -1977,6 +2285,10 @@
           void (async () => {
             const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(jsonParsed);
             if (payloadForMultiItem) {
+              if (isBuildBMultiItemPayload(payloadForMultiItem)) {
+                void fulfillBuildBCartAddViaFetchForXhr(xhr, url, payloadForMultiItem, "xhr_string_json_multi");
+                return;
+              }
               try {
                 xhr.setRequestHeader("Content-Type", "application/json");
               } catch (_error) {
@@ -2022,6 +2334,10 @@
             void (async () => {
               const payloadForMultiItem = await buildMultiItemCartAddPayloadAsync(parsed);
               if (payloadForMultiItem) {
+                if (isBuildBMultiItemPayload(payloadForMultiItem)) {
+                  void fulfillBuildBCartAddViaFetchForXhr(xhr, url, payloadForMultiItem, "xhr_encoded_params_json_multi");
+                  return;
+                }
                 try {
                   xhr.setRequestHeader("Content-Type", "application/json");
                 } catch (_error) {
@@ -2358,6 +2674,15 @@
             : "";
         const validatingHtml =
           file.status === "validating" ? `<span class="printdock-status">${escapeHtml(LABELS.checkingLabel)}</span>` : "";
+        const successHtml =
+          file.status === "success"
+            ? `<span class="printdock-status printdock-status-ok" role="status">
+                <svg class="printdock-status-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
+                  <path d="M5 10l3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                ${escapeHtml(LABELS.uploadedLabel)}
+              </span>`
+            : "";
         const thumbnailHtml = file.previewUrl
           ? `<img src="${escapeHtml(file.previewUrl)}" alt="" loading="lazy" />`
           : `
@@ -2377,6 +2702,7 @@
               <div class="printdock-file-props">${propsHtml}</div>
               ${progressHtml}
               ${validatingHtml}
+              ${successHtml}
               ${warningHtml}
               ${file.blocked ? `<div class="printdock-error">${escapeHtml(blockingMessages)}</div>` : ""}
               ${file.status === "error" ? `<div class="printdock-error">${escapeHtml(file.error || "Upload failed")}</div>` : ""}

@@ -2,7 +2,7 @@ import type { CollectionReference } from "firebase-admin/firestore";
 import { db } from "../firebase.server";
 import { getPlan } from "../config/plans";
 import type { OrderJob, UploadAsset, UploadSession } from "../types/printdock";
-import { deleteFile, deleteStorageByPrefix } from "./storage.server";
+import { deleteFile, deleteStorageByPrefix, fileExists, isOrderStoragePath } from "./storage.server";
 import {
   adjustShopStorageUsageBytes,
   fieldsCollection,
@@ -18,6 +18,14 @@ import {
   shopDoc,
   updateUploadSession,
 } from "./shop-data.server";
+import {
+  deleteShortLinksForStoragePaths,
+  purgeDownloadShortLinks,
+} from "./short-link.server";
+import {
+  isPathProtectedFromOrphan,
+  shouldSweepSession,
+} from "./storage-retention-orphan.utils";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -108,56 +116,74 @@ function stripExpiredAsset(asset: UploadAsset): UploadAsset {
 
 export async function sweepOrphanUploadSessions(
   shopDomain: string,
-  options?: { ttlHours?: number },
+  _options?: { ttlHours?: number },
 ): Promise<OrphanUploadSweepReport> {
-  const ttlHours = options?.ttlHours ?? 2;
-  const cutoffMs = Date.now() - Math.max(0, ttlHours) * 60 * 60 * 1000;
+  const nowMs = Date.now();
   const sessions = await listUploadSessions(shopDomain);
   let sessionsDeleted = 0;
   let bytesDeleted = 0;
-
   let billableBytesFreed = 0;
+  const allDeletedPaths: string[] = [];
+
   for (const session of sessions) {
-    const eligibleStatus =
-      session.status === "active" ||
-      session.status === "success" ||
-      session.status === "blocked";
-    if (!eligibleStatus) continue;
-    if (parseTimeMs(session.createdAt) >= cutoffMs) continue;
+    if (!shouldSweepSession(session, nowMs)) continue;
+
+    const candidatePaths = session.assets
+      .map((a) => String(a.storagePath ?? "").trim())
+      .filter((p) => p && isSafeStoragePath(p, shopDomain));
+
+    const blockedPaths = await getSessionPathsBlockedFromOrphanDelete(shopDomain, candidatePaths);
 
     const deletedPaths = new Set<string>();
     for (const asset of session.assets) {
       const path = String(asset.storagePath ?? "").trim();
       if (!path || deletedPaths.has(path) || !isSafeStoragePath(path, shopDomain)) continue;
+
+      if (isPathProtectedFromOrphan(path, shopDomain, blockedPaths)) continue;
+
+      const nestedSessionRef = sessionsCollection(shopDomain).doc(session.id);
+      const freshSnap = await nestedSessionRef.get();
+      if (freshSnap.exists) {
+        const freshStatus = String(freshSnap.data()?.status ?? "");
+        if (freshStatus === "converted") continue;
+      }
+
       await deleteFile(path);
       deletedPaths.add(path);
+      allDeletedPaths.push(path);
       if (Number.isFinite(asset.sizeBytes) && asset.sizeBytes > 0) {
         bytesDeleted += asset.sizeBytes;
       }
     }
 
-    // Counter decrement is per-asset (matches the per-asset sum used when adding)
-    // so it's correct even if multiple assets share the same storagePath.
     for (const asset of session.assets) {
-      if (isBillableStorageAsset(asset)) {
+      if (deletedPaths.has(String(asset.storagePath ?? "").trim()) && isBillableStorageAsset(asset)) {
         billableBytesFreed += Number(asset.sizeBytes) || 0;
       }
     }
 
-    const nestedSessionRef = sessionsCollection(shopDomain).doc(session.id);
-    const nestedSessionSnap = await nestedSessionRef.get();
-    if (nestedSessionSnap.exists) {
-      await deleteCollectionInBatches(sessionAssetsCollection(shopDomain, session.id));
-      await nestedSessionRef.delete();
+    if (deletedPaths.size > 0) {
+      await deleteShortLinksForStoragePaths(shopDomain, deletedPaths);
     }
 
-    const legacySessionRef = db.collection("sessions").doc(session.id);
-    const legacySessionSnap = await legacySessionRef.get();
-    if (legacySessionSnap.exists) {
-      await legacySessionRef.delete();
-    }
+    if (deletedPaths.size > 0 || shouldSweepSession(session, nowMs)) {
+      const nestedSessionRef = sessionsCollection(shopDomain).doc(session.id);
+      const nestedSessionSnap = await nestedSessionRef.get();
+      if (nestedSessionSnap.exists) {
+        const freshStatus = String(nestedSessionSnap.data()?.status ?? "");
+        if (freshStatus !== "converted") {
+          await deleteCollectionInBatches(sessionAssetsCollection(shopDomain, session.id));
+          await nestedSessionRef.delete();
+          sessionsDeleted++;
+        }
+      }
 
-    sessionsDeleted++;
+      const legacySessionRef = db.collection("sessions").doc(session.id);
+      const legacySessionSnap = await legacySessionRef.get();
+      if (legacySessionSnap.exists) {
+        await legacySessionRef.delete();
+      }
+    }
   }
 
   if (billableBytesFreed > 0) {
@@ -196,15 +222,30 @@ export async function runStorageRetentionForShop(
   const anchors = collectPathAnchorsMs(shopDomain, jobs, sessions);
   const pathsToDelete: string[] = [];
   for (const [path, anchorMs] of anchors) {
-    if (anchorMs < cutoffMs) {
-      pathsToDelete.push(path);
+    if (anchorMs >= cutoffMs) continue;
+
+    const jobForLegacy = jobs.find((j) => j.legacySessionUploadPath === path);
+    if (jobForLegacy?.assetSnapshot?.storagePath) {
+      const orderPath = jobForLegacy.assetSnapshot.storagePath;
+      if (
+        isOrderStoragePath(orderPath, shopDomain) &&
+        (await fileExists(orderPath))
+      ) {
+        continue;
+      }
     }
+
+    pathsToDelete.push(path);
   }
 
   const deleted = new Set<string>();
   for (const path of pathsToDelete) {
     await deleteFile(path);
     deleted.add(path);
+  }
+
+  if (deleted.size > 0) {
+    await deleteShortLinksForStoragePaths(shopDomain, deleted);
   }
 
   let jobsUpdated = 0;
@@ -309,6 +350,8 @@ async function purgeShopFirestore(shopDomain: string): Promise<void> {
 
   await deleteCollectionInBatches(shopRef.collection("compliance_data_requests"));
   await deleteCollectionInBatches(shopRef.collection("productCollectionCache"));
+  await purgeDownloadShortLinks(shopDomain);
+  await deleteCollectionInBatches(shopRef.collection("orderIngestQueue"));
 
   const shopSnap = await shopRef.get();
   if (shopSnap.exists) {
@@ -355,6 +398,44 @@ export async function purgeShopStorageAndFirestore(shopDomain: string): Promise<
 }
 
 const FIRESTORE_IN_QUERY_LIMIT = 30;
+
+/** Session upload paths that must not be orphan-deleted (pending order ingest without order copy yet). */
+async function getSessionPathsBlockedFromOrphanDelete(
+  shopDomain: string,
+  candidatePaths: string[],
+): Promise<Set<string>> {
+  const blocked = new Set<string>();
+  const unique = [...new Set(candidatePaths.map((p) => p.trim()).filter(Boolean))];
+
+  for (const path of unique) {
+    if (isOrderStoragePath(path, shopDomain)) blocked.add(path);
+  }
+
+  for (let i = 0; i < unique.length; i += FIRESTORE_IN_QUERY_LIMIT) {
+    const chunk = unique.slice(i, i + FIRESTORE_IN_QUERY_LIMIT);
+    const snap = await jobsCollection(shopDomain)
+      .where("legacySessionUploadPath", "in", chunk)
+      .get();
+    for (const doc of snap.docs) {
+      const raw = doc.data();
+      const legacy = String(raw.legacySessionUploadPath ?? "").trim();
+      const assetSnap = raw.assetSnapshot as { storagePath?: string } | undefined;
+      const orderPath = String(assetSnap?.storagePath ?? "").trim();
+      if (
+        legacy &&
+        orderPath &&
+        isOrderStoragePath(orderPath, shopDomain) &&
+        (await fileExists(orderPath))
+      ) {
+        continue;
+      }
+      if (legacy) blocked.add(legacy);
+      if (orderPath) blocked.add(orderPath);
+    }
+  }
+
+  return blocked;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

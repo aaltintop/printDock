@@ -27,17 +27,13 @@ function isReadThemesScopeError(error: unknown): boolean {
   );
 }
 
-/** Detects whether the theme app upload block appears in the live theme settings. */
-export async function detectThemeBlockEnabled(admin: {
+async function readMainThemeSettings(admin: {
   graphql: (query: string) => Promise<Response>;
-}): Promise<{
-  enabled: boolean;
-  themeId: string | null;
-  verificationUnavailable: boolean;
-  verificationMessage: string | null;
-}> {
-  try {
-    const response = await admin.graphql(`
+}): Promise<
+  | { ok: true; themeId: string; settingsContent: string }
+  | { ok: false; verificationUnavailable: boolean; verificationMessage: string | null }
+> {
+  const response = await admin.graphql(`
     #graphql
     query OnboardingThemeStatus {
       themes(first: 20) {
@@ -64,27 +60,45 @@ export async function detectThemeBlockEnabled(admin: {
     }
   `);
 
-    const json = await response.json();
-    const edges = json?.data?.themes?.edges as Array<{ node?: ThemeNode }> | undefined;
-    const themes: ThemeNode[] = edges?.map((edge) => edge.node).filter((n): n is ThemeNode => Boolean(n)) ?? [];
-    const mainTheme = themes.find((theme) => theme.role === "MAIN") ?? themes[0];
-    if (!mainTheme) {
+  const json = await response.json();
+  const edges = json?.data?.themes?.edges as Array<{ node?: ThemeNode }> | undefined;
+  const themes: ThemeNode[] = edges?.map((edge) => edge.node).filter((n): n is ThemeNode => Boolean(n)) ?? [];
+  const mainTheme = themes.find((theme) => theme.role === "MAIN") ?? themes[0];
+  if (!mainTheme) {
+    return { ok: false, verificationUnavailable: false, verificationMessage: null };
+  }
+
+  const settingsContent = mainTheme.files?.edges?.[0]?.node?.body?.content ?? "";
+  return { ok: true, themeId: mainTheme.id, settingsContent };
+}
+
+/** Detects whether the theme app upload block appears in the live theme settings. */
+export async function detectThemeBlockEnabled(admin: {
+  graphql: (query: string) => Promise<Response>;
+}): Promise<{
+  enabled: boolean;
+  themeId: string | null;
+  verificationUnavailable: boolean;
+  verificationMessage: string | null;
+}> {
+  try {
+    const theme = await readMainThemeSettings(admin);
+    if (!theme.ok) {
       return {
         enabled: false,
         themeId: null,
-        verificationUnavailable: false,
-        verificationMessage: null,
+        verificationUnavailable: theme.verificationUnavailable,
+        verificationMessage: theme.verificationMessage,
       };
     }
 
-    const settingsContent = mainTheme.files?.edges?.[0]?.node?.body?.content ?? "";
     const enabled =
-      settingsContent.includes("shopify://apps/printdock/blocks/upload/") ||
-      settingsContent.includes("printdock-upload");
+      theme.settingsContent.includes("shopify://apps/printdock/blocks/upload/") ||
+      theme.settingsContent.includes("printdock-upload");
 
     return {
       enabled,
-      themeId: mainTheme.id,
+      themeId: theme.themeId,
       verificationUnavailable: false,
       verificationMessage: null,
     };
@@ -105,6 +119,57 @@ export async function detectThemeBlockEnabled(admin: {
       themeId: null,
       verificationUnavailable: true,
       verificationMessage: "Theme block verification failed. Please verify block placement manually.",
+    };
+  }
+}
+
+/** Detects whether the PrintDock cart fee UI app embed is enabled in theme settings. */
+export async function detectCartFeeUiEmbedEnabled(admin: {
+  graphql: (query: string) => Promise<Response>;
+}): Promise<{
+  enabled: boolean;
+  themeId: string | null;
+  verificationUnavailable: boolean;
+  verificationMessage: string | null;
+}> {
+  try {
+    const theme = await readMainThemeSettings(admin);
+    if (!theme.ok) {
+      return {
+        enabled: false,
+        themeId: null,
+        verificationUnavailable: theme.verificationUnavailable,
+        verificationMessage: theme.verificationMessage,
+      };
+    }
+
+    const enabled =
+      theme.settingsContent.includes("shopify://apps/printdock/blocks/cart-fee-ui/") ||
+      theme.settingsContent.includes("printdock-cart-fee-ui");
+
+    return {
+      enabled,
+      themeId: theme.themeId,
+      verificationUnavailable: false,
+      verificationMessage: null,
+    };
+  } catch (error) {
+    if (isReadThemesScopeError(error)) {
+      return {
+        enabled: false,
+        themeId: null,
+        verificationUnavailable: true,
+        verificationMessage:
+          "Automatic cart embed verification is unavailable. Add `read_themes` scope and reauthorize the app.",
+      };
+    }
+
+    log.error("cart_fee_ui_embed_status_check_failed", error, {});
+    return {
+      enabled: false,
+      themeId: null,
+      verificationUnavailable: true,
+      verificationMessage: "Cart embed verification failed. Please verify embed placement manually.",
     };
   }
 }

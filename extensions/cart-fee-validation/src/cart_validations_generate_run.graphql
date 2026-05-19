@@ -1,0 +1,25 @@
+query Input {
+  shop {
+    shopHmac: metafield(namespace: "$app", key: "hmac_secret") {
+      value
+    }
+  }
+  cart {
+    priceMap: attribute(key: "_pd_price_map") {
+      value
+    }
+    priceMapLegacy: attribute(key: "__pd_price_map") {
+      value
+    }
+    lines {
+      id
+      quantity
+      sessionToken: attribute(key: "_uc_session") {
+        value
+      }
+      feeFor: attribute(key: "_pd_fee_for") {
+        value
+      }
+    }
+  }
+}

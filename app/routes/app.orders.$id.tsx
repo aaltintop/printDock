@@ -183,6 +183,26 @@ export default function OrderJobDetailPage() {
   return (
     <Page title={`Order ${job.shopifyOrderName}`} backAction={{ content: "Order jobs", url: "/app/orders" }}>
       <Layout>
+        {job.ingestEvidence?.anomalyReason === "artwork_unrecoverable" ? (
+          <Layout.Section>
+            <Banner tone="critical" title="Artwork file missing">
+              <Text as="p">
+                This paid order&apos;s artwork could not be recovered from storage after checkout. Contact the
+                customer to re-upload, or check Cloud Run logs for order ingest details.
+                {job.ingestEvidence.detail ? ` (${job.ingestEvidence.detail})` : ""}
+              </Text>
+            </Banner>
+          </Layout.Section>
+        ) : null}
+        {job.ingestStatus === "pending" || job.ingestStatus === "processing" ? (
+          <Layout.Section>
+            <Banner tone="info" title="Artwork importing">
+              <Text as="p">
+                PrintDock is copying the customer&apos;s upload into order storage. Download will be available shortly.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        ) : null}
         {job.pricingEvidence?.anomalyReason ? (
           <Layout.Section>
             <Banner tone="warning" title="Upload pricing verification">
@@ -221,7 +241,13 @@ export default function OrderJobDetailPage() {
                 <Button
                   submit
                   loading={isDownloading}
-                  disabled={!job.assetSnapshot?.storagePath || Boolean(job.assetSnapshot?.storageExpired)}
+                  disabled={
+                    !job.assetSnapshot?.storagePath ||
+                    Boolean(job.assetSnapshot?.storageExpired) ||
+                    job.ingestStatus === "pending" ||
+                    job.ingestStatus === "processing" ||
+                    job.ingestStatus === "failed"
+                  }
                   onClick={() => setIsDownloading(true)}
                 >
                   {isDownloading ? "Downloading..." : "Download Original"}

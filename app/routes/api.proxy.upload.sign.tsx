@@ -11,6 +11,7 @@ import { internalError, publicError } from "../lib/api-error.server";
 const schema = z.object({
   sessionToken: z.string().min(1),
   priceMinorUnits: z.number().int().min(0),
+  pricingMode: z.enum(["buildB", "legacy"]).optional(),
 });
 
 type AdminLike = {
@@ -51,7 +52,7 @@ export async function action({ request }: ActionFunctionArgs) {
         return publicError("bad_request", { status: 400 });
       }
 
-      const { sessionToken, priceMinorUnits } = parsed.data;
+      const { sessionToken, priceMinorUnits, pricingMode } = parsed.data;
 
       const uploadSession = await getUploadSession(shopDomain, sessionToken);
       if (!uploadSession) {
@@ -72,6 +73,7 @@ export async function action({ request }: ActionFunctionArgs) {
           c: currencyCode,
           exp,
           iat: now,
+          mode: pricingMode,
         },
         hmacKey,
       );

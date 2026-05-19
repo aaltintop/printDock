@@ -33,6 +33,9 @@ query CartTransformRunInput {
       sessionToken: attribute(key: "_uc_session") {
         value
       }
+      feeFor: attribute(key: "_pd_fee_for") {
+        value
+      }
     }
   }
 }

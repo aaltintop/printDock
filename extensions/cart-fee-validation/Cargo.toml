@@ -1,0 +1,26 @@
+[package]
+name = "cart-fee-validation"
+version = "1.0.6"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[[bin]]
+name = "cart-fee-validation"
+path = "src/main.rs"
+
+[dependencies]
+shopify_function = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+subtle = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

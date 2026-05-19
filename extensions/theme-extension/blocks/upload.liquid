@@ -10,6 +10,7 @@
   data-drop-headline="{{ block.settings.drop_headline | default: 'Drop your artwork here' | escape }}"
   data-choose-label="{{ block.settings.choose_label | default: 'Choose file' | escape }}"
   data-checking-label="{{ block.settings.checking_label | default: 'Checking file...' | escape }}"
+  data-uploaded-label="{{ block.settings.uploaded_label | default: 'Uploaded' | escape }}"
   data-price-label="{{ block.settings.price_label | default: 'Calculated upload price:' | escape }}"
   data-debug="{{ block.settings.enable_debug_logs }}"
 >
@@ -211,6 +212,12 @@
       "id": "checking_label",
       "label": "Validating label",
       "default": "Checking file..."
+    },
+    {
+      "type": "text",
+      "id": "uploaded_label",
+      "label": "Uploaded success label",
+      "default": "Uploaded"
     },
     {
       "type": "text",

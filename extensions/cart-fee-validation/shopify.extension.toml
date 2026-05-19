@@ -1,0 +1,18 @@
+api_version = "2026-04"
+
+[[extensions]]
+name = "t:name"
+handle = "cart-fee-validation"
+type = "function"
+uid = "919006c4-ce9c-d162-ed55-6503b4af6d5a2e19df8a"
+description = "t:description"
+
+  [[extensions.targeting]]
+  target = "cart.validations.generate.run"
+  input_query = "src/cart_validations_generate_run.graphql"
+  export = "cart_validations_generate_run"
+
+  [extensions.build]
+  command = "cargo build --target=wasm32-unknown-unknown --release"
+  path = "target/wasm32-unknown-unknown/release/cart-fee-validation.wasm"
+  watch = ["src/**/*.rs"]

@@ -1,0 +1,40 @@
+{
+  "payload": {
+    "export": "cart_transform_run",
+    "target": "cart.transform.run",
+    "input": {
+      "cartTransform": {
+        "pricingHmac": {
+          "value": "fixture-hmac-key-32bytes-long!!"
+        }
+      },
+      "shop": {
+        "shopHmac": null
+      },
+      "cart": {
+        "priceMap": {
+          "value": "[]"
+        },
+        "priceMapLegacy": null,
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/fee",
+            "quantity": 1,
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/999"
+            },
+            "sellingPlanAllocation": null,
+            "sessionToken": null,
+            "feeFor": {
+              "value": "missing-session"
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}
