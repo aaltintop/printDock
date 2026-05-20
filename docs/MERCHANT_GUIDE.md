@@ -24,6 +24,8 @@ For short definitions of terms (job, session, field, Cart Transform, etc.), see 
 5. In the `npm run dev` terminal output, copy/open the Shopify CLI **installation/preview URL** (the `app-preview` link), then click **Install app** and approve permissions in your development store.
 6. After install, open **Shopify Admin > Apps > PrintDock**.
 
+> **Billing on dev stores:** Paid public plans cannot be approved on development stores. Use $0 private test plans (Partner Dashboard) or the Firestore dev script. See [DEV_STORE_BILLING_TESTING.md](./DEV_STORE_BILLING_TESTING.md).
+
 You will land on the **Setup** page (`/app/onboarding`), which walks through four steps:
 
 ### Step 1: Add the theme block to your product page
@@ -224,16 +226,20 @@ The **Uploads** page (`/app/uploads`) shows all customer upload sessions:
 
 ## 7. Plans and Billing
 
-The **Plans** page (`/app/plans`) shows available tiers:
+The **Plans** page (`/app/plans`) shows your current tier and opens Shopify’s hosted plan selection for upgrades or downgrades.
 
-| Feature | Free | Basic Plus | Pro Plus |
-|---------|------|-----------|----------|
-| Max file size | Limited | Higher | Highest |
-| Monthly uploads | Limited | More | Unlimited |
-| Auto pricing | No | Yes | Yes |
-| Advanced rules | No | No | Yes |
+| Feature | Free | Starter | Pro | Business |
+|---------|------|---------|-----|----------|
+| Max file size | 50 MB | 100 MB | 300 MB | 5 GB |
+| Upload fields | 2 | Unlimited | Unlimited | Unlimited |
+| Total storage cap | 500 MB | 15 GB | 30 GB | 75 GB |
+| File retention | 7 days | 30 days | 30 days | 30 days |
+| Dynamic pricing | No | No | Yes | Yes |
+| Advanced validation / file renaming | No | No | Yes | Yes |
 
-Select a plan to start a Shopify billing subscription. Plan limits are enforced both in the admin UI and on the storefront upload API.
+Plan limits are enforced in the admin UI and on the storefront upload API. Limits and plan names are defined in [`app/config/plans.ts`](../app/config/plans.ts).
+
+**Development stores:** see [DEV_STORE_BILLING_TESTING.md](./DEV_STORE_BILLING_TESTING.md) for testing paid tiers without real charges.
 
 ---
 

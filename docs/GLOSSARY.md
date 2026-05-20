@@ -171,7 +171,7 @@ For setup and day-to-day use, see [MERCHANT_GUIDE.md](./MERCHANT_GUIDE.md). For 
 
 ## Plans & limits
 
-**Plan code** = merchant subscription tier (`free`, etc.) gating features like dynamic pricing and storage caps.
+**Plan code** = merchant subscription tier (`free`, `starter`, `pro`, `business`) gating features like dynamic pricing and storage caps. Dev store billing testing: [DEV_STORE_BILLING_TESTING.md](./DEV_STORE_BILLING_TESTING.md).
 
 **Storage cap** = per-plan limit on total upload bytes tracked on the shop document; uploads blocked when exceeded.
 
@@ -201,6 +201,8 @@ Full matrix: [MERCHANT_FIELDS.md](./MERCHANT_FIELDS.md).
 
 - [MERCHANT_GUIDE.md](./MERCHANT_GUIDE.md) — install, configure, operate
 - [PRINT_READY_FILE_SHORT_LINKS.md](./PRINT_READY_FILE_SHORT_LINKS.md) — short links
+- [APP_STORE_PRICING_AND_BILLING.md](./APP_STORE_PRICING_AND_BILLING.md) — production billing and plan mapping
+- [DEV_STORE_BILLING_TESTING.md](./DEV_STORE_BILLING_TESTING.md) — dev store $0 private plans and override script
 - [PrintDock_DynamicPricing_Plan.md](./PrintDock_DynamicPricing_Plan.md) — pricing architecture
 - [STORAGE_RETENTION_AND_DELETION.md](./STORAGE_RETENTION_AND_DELETION.md) — retention rules
 - [OBSERVABILITY.md](./OBSERVABILITY.md) — logs and events

@@ -85,3 +85,17 @@ The older pattern of **usage line items** (`appSubscriptionCreate` + usage charg
 
 - Use the Partner Dashboard listing **Pricing** section for **plan names and recurring charges**; keep names aligned with `PLAN_SUBSCRIPTION_NAMES`.
 - Enforced limits (file size, fields, retention, total storage, features) live only in **`app/config/plans.ts`** and related routes—do not hardcode limits elsewhere.
+
+---
+
+## Dev store testing
+
+Development stores **cannot** approve paid public plans. To test paid tiers without charging:
+
+1. Create **$0 private test plans** in the Partner Dashboard (one per tier: Starter, Pro, Business).
+2. **Allowlist** each dev store domain on those plans.
+3. Subscribe via PrintDock → **Plans** → hosted plan selection.
+
+For feature testing without the billing UI, use `scripts/set-dev-billing-plan.mjs` (allowlisted dev shops only).
+
+Full workflow, verification matrix, and safety guards: **[DEV_STORE_BILLING_TESTING.md](./DEV_STORE_BILLING_TESTING.md)**.

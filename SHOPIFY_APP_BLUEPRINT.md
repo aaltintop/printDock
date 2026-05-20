@@ -229,7 +229,7 @@ flowchart TB
    ```
 10. **Patch `shopify.app.toml`** with the Cloud Run URL (the deploy script offers to do this interactively).
 11. **`shopify app deploy`**: register URLs, webhook subscriptions, extensions in the Partner Dashboard.
-12. **Verify**: install on dev store, trigger each webhook (Shopify Partner Dashboard → Webhooks → Send test), confirm billing flow with Managed Pricing test charge.
+12. **Verify**: install on dev store, trigger each webhook (Shopify Partner Dashboard → Webhooks → Send test), confirm billing with **$0 private test plans** on allowlisted dev stores (see `docs/DEV_STORE_BILLING_TESTING.md`).
 13. **App Store prep** ([Section 12](#12-app-store-submission-checklist)).
 
 ---

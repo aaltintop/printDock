@@ -1,7 +1,7 @@
 /**
  * Shopify Billing helpers.
  *
- * PrintDock uses **Managed Pricing** (Partner Dashboard hosted plan selection).
+ * PrintDock uses **Shopify App Pricing** (Partner Dashboard hosted plan selection).
  * There are no in-app Billing API subscription or usage-charge mutations today.
  * Plan changes happen on Shopify's pricing page
  * (`getManagedPricingPlanSelectionUrl` in `app/config/billing.ts`).
@@ -12,7 +12,5 @@
  * - `app/routes/app.tsx` — reconciles activeSubscriptions from Admin API
  * - `app/shopify.server.ts` — no billing config on shopifyApp()
  *
- * Any future Billing API mutation MUST pass `test` / `isTest` from
- * {@link resolveBillingTestMode} — never hardcode boolean test flags.
+ * Dev store tier testing: see `docs/DEV_STORE_BILLING_TESTING.md`.
  */
-export { resolveBillingTestMode, type BillingTestModeDeps } from "./billing-test-mode.server";

@@ -2,6 +2,7 @@ import { data, useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import {
   Badge,
+  Banner,
   BlockStack,
   Button,
   Card,
@@ -18,6 +19,7 @@ import {
 } from "../config/billing";
 import { getPlan } from "../config/plans";
 import { getEffectiveBillingPlan } from "../services/shop-data.server";
+import { isPartnerDevelopmentStore } from "../services/shop-plan.server";
 import { authenticate } from "../shopify.server";
 import {
   log,
@@ -27,7 +29,7 @@ import {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
-    const { session } = await authenticate.admin(request);
+    const { admin, session } = await authenticate.admin(request);
     setLogShopDomain(session.shop);
     const billingPlan = await getEffectiveBillingPlan(session.shop);
     const plan = getPlan(billingPlan.planCode);
@@ -35,13 +37,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       session.shop,
       getAppAdminHandle(),
     );
+    const isDevStore = await isPartnerDevelopmentStore(admin);
     log.event("plans_page_view", {
       currentPlanCode: billingPlan.planCode,
       billingStatus: billingPlan.status,
+      isDevStore,
       url: managedPricingUrl,
     });
     return data({
       managedPricingUrl,
+      isDevStore,
       currentPlan: {
         planCode: billingPlan.planCode,
         displayName: plan.displayName,
@@ -57,7 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function PlansPage() {
-  const { managedPricingUrl, currentPlan } = useLoaderData<typeof loader>();
+  const { managedPricingUrl, isDevStore, currentPlan } = useLoaderData<typeof loader>();
   const planStatusTone =
     currentPlan.planCode === "free"
       ? "success"
@@ -74,6 +79,21 @@ export default function PlansPage() {
   return (
     <Page title="Plans">
       <BlockStack gap="400">
+        {isDevStore ? (
+          <Banner tone="info" title="Development store billing">
+            <p>
+              Development stores cannot approve paid public plans. To test paid tiers, subscribe to
+              a <strong>$0 private test plan</strong> allowlisted for this store in the Partner
+              Dashboard (Pricing → Private plans). Plan names must match Starter, Pro, or Business.
+            </p>
+            <p>
+              For feature testing without the billing round-trip, use{" "}
+              <code>scripts/set-dev-billing-plan.mjs</code> (allowlisted dev shops only). See{" "}
+              <code>docs/DEV_STORE_BILLING_TESTING.md</code>.
+            </p>
+          </Banner>
+        ) : null}
+
         <Card>
           <BlockStack gap="300">
             <InlineStack align="space-between" blockAlign="center">

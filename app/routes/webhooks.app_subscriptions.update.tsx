@@ -51,6 +51,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           planCode: "free",
           status: "active",
           subscriptionId: null,
+          source: "shopify",
         });
         log.event("webhook_processed", { topic: "APP_SUBSCRIPTIONS_UPDATE", shopDomain: shop });
         return new Response("OK", { status: 200 });
@@ -75,6 +76,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           planCode,
           status: "active",
           subscriptionId,
+          source: "shopify",
         });
       } else if (status === "PENDING") {
         if (
@@ -92,6 +94,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           planCode,
           status: "trial",
           subscriptionId,
+          source: "shopify",
         });
       } else {
         log.warn("subscription_update_unhandled_status", `Unhandled subscription status: ${status}`, {

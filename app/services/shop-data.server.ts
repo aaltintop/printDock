@@ -894,20 +894,26 @@ export async function getBillingPlan(shopDomain: string): Promise<BillingPlan> {
   const nestedDoc = await shopDoc(shopDomain).collection("billing").doc("plan").get();
   if (nestedDoc.exists) {
     const raw = nestedDoc.data() as Record<string, unknown>;
-    return {
-      ...DEFAULT_BILLING_PLAN,
-      ...raw,
-      planCode: migratePlanCode(String(raw?.planCode ?? "free")),
-    };
+    return normalizeBillingPlanDoc(raw);
   }
 
   const legacyDoc = await db.collection("billingPlans").doc(shopDomain).get();
   if (!legacyDoc.exists) return DEFAULT_BILLING_PLAN;
   const raw = legacyDoc.data() as Record<string, unknown>;
+  return normalizeBillingPlanDoc(raw);
+}
+
+function normalizeBillingPlanSource(raw: unknown): BillingPlan["source"] {
+  if (raw === "shopify" || raw === "dev_override") return raw;
+  return undefined;
+}
+
+function normalizeBillingPlanDoc(raw: Record<string, unknown>): BillingPlan {
   return {
     ...DEFAULT_BILLING_PLAN,
     ...raw,
     planCode: migratePlanCode(String(raw?.planCode ?? "free")),
+    source: normalizeBillingPlanSource(raw?.source),
   };
 }
 
@@ -962,7 +968,8 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
     const changed =
       current.planCode !== planCode ||
       current.status !== "active" ||
-      (current.subscriptionId ?? null) !== subscriptionId;
+      (current.subscriptionId ?? null) !== subscriptionId ||
+      current.source !== "shopify";
 
     if (!changed) return;
 
@@ -980,9 +987,12 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       planCode,
       status: "active",
       subscriptionId,
+      source: "shopify",
     });
     return;
   }
+
+  if (current.source === "dev_override") return;
 
   const shouldFallbackToFreeActive =
     current.planCode !== "free" ||
@@ -1003,6 +1013,7 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       planCode: "free",
       status: "active",
       subscriptionId: null,
+      source: "shopify",
     });
   }
 }

@@ -180,10 +180,14 @@ export interface AppSettings {
   updatedAt: string;
 }
 
+export type BillingPlanSource = "shopify" | "dev_override";
+
 export interface BillingPlan {
   planCode: import("../config/plans").PlanCode;
   status: "active" | "inactive" | "trial";
   subscriptionId: string | null;
+  /** How planCode was set: Shopify subscription sync vs dev-only Firestore script. */
+  source?: BillingPlanSource;
   updatedAt: string;
 }
 
