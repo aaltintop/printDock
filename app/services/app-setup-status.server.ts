@@ -123,57 +123,6 @@ export async function detectThemeBlockEnabled(admin: {
   }
 }
 
-/** Detects whether the PrintDock cart fee UI app embed is enabled in theme settings. */
-export async function detectCartFeeUiEmbedEnabled(admin: {
-  graphql: (query: string) => Promise<Response>;
-}): Promise<{
-  enabled: boolean;
-  themeId: string | null;
-  verificationUnavailable: boolean;
-  verificationMessage: string | null;
-}> {
-  try {
-    const theme = await readMainThemeSettings(admin);
-    if (!theme.ok) {
-      return {
-        enabled: false,
-        themeId: null,
-        verificationUnavailable: theme.verificationUnavailable,
-        verificationMessage: theme.verificationMessage,
-      };
-    }
-
-    const enabled =
-      theme.settingsContent.includes("shopify://apps/printdock/blocks/cart-fee-ui/") ||
-      theme.settingsContent.includes("printdock-cart-fee-ui");
-
-    return {
-      enabled,
-      themeId: theme.themeId,
-      verificationUnavailable: false,
-      verificationMessage: null,
-    };
-  } catch (error) {
-    if (isReadThemesScopeError(error)) {
-      return {
-        enabled: false,
-        themeId: null,
-        verificationUnavailable: true,
-        verificationMessage:
-          "Automatic cart embed verification is unavailable. Add `read_themes` scope and reauthorize the app.",
-      };
-    }
-
-    log.error("cart_fee_ui_embed_status_check_failed", error, {});
-    return {
-      enabled: false,
-      themeId: null,
-      verificationUnavailable: true,
-      verificationMessage: "Cart embed verification failed. Please verify embed placement manually.",
-    };
-  }
-}
-
 /** True when theme step, first field, cart validation, and cart transform are all satisfied (matches onboarding `setupComplete`). */
 export async function isAppSetupComplete(
   admin: {

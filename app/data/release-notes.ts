@@ -11,6 +11,14 @@ export type ReleaseNoteEntry = {
 
 export const RELEASE_NOTES: ReleaseNoteEntry[] = [
   {
+    version: "1.0.14",
+    date: "2026-05-20",
+    highlights: [
+      "Setup no longer includes a PrintDock Cart app embed step.",
+      "The legacy PrintDock Cart theme embed was removed; upload pricing uses one cart line via Cart Transform.",
+    ],
+  },
+  {
     version: "1.0.13",
     date: "2026-05-20",
     highlights: [

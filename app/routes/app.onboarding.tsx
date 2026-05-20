@@ -13,7 +13,7 @@ import {
   listUploadSessions,
 } from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
-import { detectCartFeeUiEmbedEnabled, detectThemeBlockEnabled } from "../services/app-setup-status.server";
+import { detectThemeBlockEnabled } from "../services/app-setup-status.server";
 import {
   detectCartTransformConflict,
   detectPrintDockCartTransform,
@@ -41,8 +41,6 @@ type SetupState = {
   pricingSecretConfigured: boolean;
   themeEditorUrl: string;
   reauthUrl: string;
-  cartFeeUiEmbedEnabled: boolean;
-  cartFeeUiEmbedVerified: boolean;
 };
 
 const CART_TRANSFORM_UNAVAILABLE_CODES = new Set<CartTransformStatusCode>([
@@ -72,7 +70,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       const [
         themeStatus,
-        cartFeeUiStatus,
         cartTransformStatus,
         cartTransformConflict,
         fields,
@@ -83,7 +80,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         pricingSecret,
       ] = await Promise.all([
         detectThemeBlockEnabled(admin),
-        detectCartFeeUiEmbedEnabled(admin),
         detectPrintDockCartTransform(admin),
         detectCartTransformConflict(admin),
         listUploadFields(shopDomain),
@@ -123,8 +119,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         themeEditorUrl,
         reauthUrl,
         pricingSecretConfigured,
-        cartFeeUiEmbedEnabled: cartFeeUiStatus.enabled,
-        cartFeeUiEmbedVerified: Boolean(shopSettings.cartFeeUiEmbedVerified),
       };
 
       const themeStepVerified =
@@ -255,12 +249,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         log.event("onboarding_verify_theme_block", {});
         await shopDoc.set({ themeBlockVerified: true }, { merge: true });
         return data({ ok: true, intent: "verify_theme_block" });
-      }
-
-      if (intent === "verify_cart_fee_embed") {
-        log.event("onboarding_verify_cart_fee_embed", {});
-        await shopDoc.set({ cartFeeUiEmbedVerified: true }, { merge: true });
-        return data({ ok: true, intent: "verify_cart_fee_embed" });
       }
 
       if (intent === "register_cart_transform") {
@@ -601,44 +589,7 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                3. Cart appearance (app embed)
-              </Text>
-              <StatusBadge
-                enabled={
-                  setup.cartFeeUiEmbedEnabled ||
-                  setup.cartFeeUiEmbedVerified
-                }
-              />
-            </InlineStack>
-            <Text as="p" tone="subdued">
-              Enable the <strong>PrintDock Cart</strong> app embed in Theme settings → App embeds.
-              This merges the upload fee with your product line in the cart drawer and keeps fee
-              lines paired (checkout still shows two lines for transparency).
-            </Text>
-            {setup.cartFeeUiEmbedEnabled || setup.cartFeeUiEmbedVerified ? (
-              <Text as="p" tone="success">
-                Cart embed is enabled.
-              </Text>
-            ) : null}
-            <Button url={setup.themeEditorUrl} target="_blank">
-              Open Theme Editor (App embeds)
-            </Button>
-            {!setup.cartFeeUiEmbedEnabled && !setup.cartFeeUiEmbedVerified ? (
-              <fetcher.Form method="post">
-                <input type="hidden" name="intent" value="verify_cart_fee_embed" />
-                <Button submit loading={fetcher.state === "submitting"}>
-                  Mark cart embed as verified
-                </Button>
-              </fetcher.Form>
-            ) : null}
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between">
-              <Text as="h2" variant="headingMd">
-                4. Cart Validation
+                3. Cart Validation
               </Text>
               <StatusBadge enabled={setup.cartValidationVerified} />
             </InlineStack>
@@ -668,7 +619,7 @@ export default function OnboardingPage() {
           <BlockStack gap="300">
             <InlineStack align="space-between">
               <Text as="h2" variant="headingMd">
-                5. Cart Transform
+                4. Cart Transform
               </Text>
               <CartTransformBadge
                 enabled={liveCartTransformEnabled}

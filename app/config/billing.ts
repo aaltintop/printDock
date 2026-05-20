@@ -1,6 +1,9 @@
 /**
  * Managed app pricing (Partner Dashboard) uses Shopify-hosted plan selection.
  *
+ * Billing `test` / `isTest` for any future Billing API calls: use
+ * {@link resolveBillingTestMode} from `app/services/billing.server.ts`.
+ *
  * @see https://shopify.dev/docs/apps/launch/billing/managed-pricing
  */
 

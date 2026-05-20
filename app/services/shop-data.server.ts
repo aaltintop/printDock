@@ -637,24 +637,40 @@ export async function updateUploadSession(
   await db.collection("sessions").doc(sessionToken).set(payload, { merge: true });
 }
 
-export async function listUploadSessions(shopDomain: string): Promise<UploadSession[]> {
-  const nestedSnapshot = await sessionsCollection(shopDomain).get();
-  if (!nestedSnapshot.empty) {
-    return nestedSnapshot.docs.map((doc) => normalizeSession(doc.id, shopDomain, doc.data()));
+/** Merge nested + legacy shop docs; nested wins when the same id exists in both. */
+function mergeShopScopedDocs<T extends { id: string }>(legacy: T[], nested: T[]): T[] {
+  const byId = new Map<string, T>();
+  for (const item of legacy) {
+    byId.set(item.id, item);
   }
+  for (const item of nested) {
+    byId.set(item.id, item);
+  }
+  return [...byId.values()];
+}
 
-  const legacySnapshot = await db.collection("sessions").where("shopDomain", "==", shopDomain).get();
-  return legacySnapshot.docs.map((doc) => normalizeSession(doc.id, shopDomain, doc.data()));
+export async function listUploadSessions(shopDomain: string): Promise<UploadSession[]> {
+  const [nestedSnapshot, legacySnapshot] = await Promise.all([
+    sessionsCollection(shopDomain).get(),
+    db.collection("sessions").where("shopDomain", "==", shopDomain).get(),
+  ]);
+  const nested = nestedSnapshot.docs.map((doc) =>
+    normalizeSession(doc.id, shopDomain, doc.data()),
+  );
+  const legacy = legacySnapshot.docs.map((doc) =>
+    normalizeSession(doc.id, shopDomain, doc.data()),
+  );
+  return mergeShopScopedDocs(legacy, nested);
 }
 
 export async function listOrderJobs(shopDomain: string): Promise<OrderJob[]> {
-  const nestedSnapshot = await jobsCollection(shopDomain).get();
-  if (!nestedSnapshot.empty) {
-    return nestedSnapshot.docs.map((doc) => normalizeJob(doc.id, shopDomain, doc.data()));
-  }
-
-  const legacySnapshot = await db.collection("jobs").where("shopDomain", "==", shopDomain).get();
-  return legacySnapshot.docs.map((doc) => normalizeJob(doc.id, shopDomain, doc.data()));
+  const [nestedSnapshot, legacySnapshot] = await Promise.all([
+    jobsCollection(shopDomain).get(),
+    db.collection("jobs").where("shopDomain", "==", shopDomain).get(),
+  ]);
+  const nested = nestedSnapshot.docs.map((doc) => normalizeJob(doc.id, shopDomain, doc.data()));
+  const legacy = legacySnapshot.docs.map((doc) => normalizeJob(doc.id, shopDomain, doc.data()));
+  return mergeShopScopedDocs(legacy, nested);
 }
 
 const SHOPIFY_ORDER_ID_IN_QUERY_LIMIT = 30;

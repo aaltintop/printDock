@@ -41,9 +41,7 @@ PrintDock uses a **theme app block** (not an app embed). This means you add it d
 
 > **Product upload block:** Add the **PrintDock Upload** block inside your product page section (not under App embeds).
 
-> **Cart drawer + /cart page (optional):** In Theme settings → **App embeds**, enable **PrintDock Cart**. For stores that still have open **two-line** carts from an older release, the embed merges product + fee rows in the drawer. **New uploads** add a **single** cart line; dynamic pricing is applied via Cart Transform on that line. **Checkout** and **Admin → Orders** show one product line with **Part of:** when pricing is enabled; use **View uploads** / **Print Ready File** or **More actions → PrintDock files** to download artwork.
-
-Once done, return to the Setup page and the app will detect the block/embed (or you can confirm manually).
+Once done, return to the Setup page and the app will detect the block (or you can confirm manually).
 
 ### Step 2: Cart Validation
 
@@ -158,8 +156,7 @@ If dynamic pricing is enabled and setup is complete:
 
 1. The storefront adds **one product line** with `Artwork`, `__View uploads`, and `View uploads`, and stores signed pricing proof in cart attribute `_pd_price_map`.
 2. **Cart Transform** sets the line’s checkout price to **product base + upload fee** on that same line (Admin shows **Part of: Upload file** or your field title).
-3. **PrintDock Cart** app embed (optional) merges **legacy** two-line carts in the drawer; new uploads are already a single line.
-4. **Cart validation** blocks checkout only for legacy **two-line** carts that still use the old fee-line model (open carts from before v1.0.8).
+3. **Cart validation** blocks checkout only for legacy **two-line** carts that still use the old fee-line model (open carts from before v1.0.8).
 
 ### Discounts and Taxes
 

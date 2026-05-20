@@ -1,7 +1,9 @@
 # SPIKE: Expanded cart `/cart.js` shape (Build B)
 
+> **Historical:** The `cart-fee-ui` theme embed that implemented drawer merge for Build B was removed. Build A uses a single cart line + Cart Transform. This spike remains for reference on legacy two-line cart shapes.
+
 **Date:** 2026-05-19  
-**Status:** Assumption documented for embed implementation; verify on merchant store before release.
+**Status:** Historical (embed removed).
 
 ## Question
 
@@ -10,7 +12,7 @@ After Cart Transform `lineExpand` on the fee line, does storefront `/cart.js` st
 1. Line item property `_pd_fee_for` on the fee row?
 2. Stable `key` matching theme DOM `data-key`?
 
-## Working assumption (implemented in `cart-fee-ui.js`)
+## Working assumption (was implemented in removed `cart-fee-ui.js`)
 
 - Fee and artwork remain **separate line items** in `/cart.js`.
 - Properties set at add time (`_pd_fee_for`, `_uc_session`) survive on their respective lines.
