@@ -14,7 +14,7 @@ Which line item property key/value makes Shopify Admin show a **clickable trunca
 | Admin layout | `__View uploads` **above** Part-of chevron (`s-internal-link`) | `__View uploads` **inside** Part-of block |
 | Cart Transform | Unknown (likely same split) | `ExpandedItem.attributes: None` → all props under Part of |
 
-**Fix (v1.0.11):** [`extensions/auto-pricing-rs/src/main.rs`](../extensions/auto-pricing-rs/src/main.rs) sets `ExpandedItem.attributes` to View uploads, `__ucExp`, `__ucToken`, Artwork, `_uc_session` only. **`__View uploads` is excluded** so it remains on the parent cart line.
+**Fix (v1.0.11):** [`extensions/auto-pricing-rs/src/main.rs`](../extensions/auto-pricing-rs/src/main.rs) sets `ExpandedItem.attributes` to View uploads, Artwork, `_uc_session` only (v1.0.12+ no longer copies `__ucToken` / `__ucExp`). **`__View uploads` is excluded** so it remains on the parent cart line.
 
 Shopify documents assigning bundle vs component attributes via [Cart Transform Expand (2024-04)](https://shopify.dev/changelog/set-lineitem-attributes-using-carttransform).
 
@@ -59,7 +59,7 @@ Requires `__View uploads` on the **parent** line with a full `https://` URL valu
 ## Decisions
 
 1. **`__View uploads`** + **`View uploads`**: same short URL at cart add.
-2. **Component bucket** (Part of): View uploads, tokens, Artwork, `_uc_session`.
+2. **Component bucket** (Part of): View uploads, Artwork, `_uc_session`.
 3. **Parent bucket**: `__View uploads` only (for Admin top link).
 4. **`partOfTitle`**: cart `_pd_price_map` JSON only (not a line property).
 

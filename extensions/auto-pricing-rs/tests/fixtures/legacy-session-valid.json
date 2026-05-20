@@ -13,7 +13,7 @@
       },
       "cart": {
         "priceMap": {
-          "value": "[{\"sid\":\"legacy-s1\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoibGVnYWN5LXMxIiwicCI6MTI5OSwiYyI6IlVTRCIsImV4cCI6MTcwMDA4NjQwMCwiaWF0IjoxNzAwMDAwMDAwfQ.6bxC9sGv_B3bet3SYfWm1PZXyS7VyLeqa2P78Wp3gmA\",\"partOfTitle\":\"Upload file\"}]"
+          "value": "[{\"sid\":\"legacy-s1\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoibGVnYWN5LXMxIiwicCI6MTI5OSwiYyI6IlVTRCIsImV4cCI6MTcwMDA4NjQwMCwiaWF0IjoxNzAwMDAwMDAwfQ.6bxC9sGv_B3bet3SYfWm1PZXyS7VyLeqa2P78Wp3gmA\",\"partOfTitle\":\"Upload file\",\"artwork\":\"logo.png\"}]"
         },
         "priceMapLegacy": null,
         "lines": [
@@ -34,15 +34,6 @@
             "viewUploads": {
               "value": "https://test.myshopify.com/apps/printdock/f/AbC12dEf34"
             },
-            "ucExp": {
-              "value": "1700086400"
-            },
-            "ucToken": {
-              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoibGVnYWN5LXMxIiwicCI6MTI5OSwiYyI6IlVTRCIsImV4cCI6MTcwMDA4NjQwMCwiaWF0IjoxNzAwMDAwMDAwfQ.6bxC9sGv_B3bet3SYfWm1PZXyS7VyLeqa2P78Wp3gmA"
-            },
-            "artwork": {
-              "value": "logo.png"
-            },
             "feeFor": null
           }
         ]
@@ -59,14 +50,6 @@
                   {
                     "key": "View uploads",
                     "value": "https://test.myshopify.com/apps/printdock/f/AbC12dEf34"
-                  },
-                  {
-                    "key": "__ucExp",
-                    "value": "1700086400"
-                  },
-                  {
-                    "key": "__ucToken",
-                    "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaG9wIjoidGVzdC5teXNob3BpZnkuY29tIiwic2lkIjoibGVnYWN5LXMxIiwicCI6MTI5OSwiYyI6IlVTRCIsImV4cCI6MTcwMDA4NjQwMCwiaWF0IjoxNzAwMDAwMDAwfQ.6bxC9sGv_B3bet3SYfWm1PZXyS7VyLeqa2P78Wp3gmA"
                   },
                   {
                     "key": "Artwork",

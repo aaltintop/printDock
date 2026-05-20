@@ -11,6 +11,20 @@ export type ReleaseNoteEntry = {
 
 export const RELEASE_NOTES: ReleaseNoteEntry[] = [
   {
+    version: "1.0.13",
+    date: "2026-05-20",
+    highlights: [
+      "Shopify Admin order lines no longer show Artwork above Part of on dynamic-pricing orders — the file name appears only under Part of.",
+    ],
+  },
+  {
+    version: "1.0.12",
+    date: "2026-05-20",
+    highlights: [
+      "Cleaner order lines in Shopify Admin — signed pricing tokens no longer appear as __ucToken / __ucExp on each line (pricing proof stays in order details via _pd_price_map).",
+    ],
+  },
+  {
     version: "1.0.11",
     date: "2026-05-20",
     highlights: [

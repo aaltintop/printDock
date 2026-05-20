@@ -156,7 +156,7 @@ If a customer uploads files but never adds the item to cart, PrintDock removes t
 
 If dynamic pricing is enabled and setup is complete:
 
-1. The storefront adds **one product line** with `Artwork`, `__View uploads`, `View uploads`, `__ucToken`, and `__ucExp`, and stores signed pricing proof in cart attribute `_pd_price_map`.
+1. The storefront adds **one product line** with `Artwork`, `__View uploads`, and `View uploads`, and stores signed pricing proof in cart attribute `_pd_price_map`.
 2. **Cart Transform** sets the line’s checkout price to **product base + upload fee** on that same line (Admin shows **Part of: Upload file** or your field title).
 3. **PrintDock Cart** app embed (optional) merges **legacy** two-line carts in the drawer; new uploads are already a single line.
 4. **Cart validation** blocks checkout only for legacy **two-line** carts that still use the old fee-line model (open carts from before v1.0.8).

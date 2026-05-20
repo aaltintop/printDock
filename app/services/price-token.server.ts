@@ -120,7 +120,7 @@ export function defaultTokenTtlSeconds(): number {
 
 type LineProp = { name: string; value: string };
 
-/** Prefer line `__ucToken`; fall back to order note `_pd_price_map` entry. */
+/** Resolve signed price from order `_pd_price_map`; legacy orders may still have line `__ucToken`. */
 export function resolveSignedPriceTokenForSession(
   sessionToken: string,
   lineProps: LineProp[],

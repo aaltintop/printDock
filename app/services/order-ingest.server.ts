@@ -272,7 +272,7 @@ export async function processOrderIngestItem(
     options?.signedPriceMapBySession,
   );
   if (mapLineMismatch) {
-    log.warn("pricing_token_map_mismatch", "Line __ucToken differs from cart price map", {
+    log.warn("pricing_token_map_mismatch", "Legacy line __ucToken differs from cart price map", {
       sessionToken,
     });
   }

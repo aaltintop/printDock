@@ -1110,9 +1110,9 @@
                 const text = await response.text();
                 throw new Error(
                   text ||
-                    (response.status === 422
-                      ? "Cart add failed: upload lines were not found in the cart after a 422 response."
-                      : `Cart add failed (${response.status})`),
+                  (response.status === 422
+                    ? "Cart add failed: upload lines were not found in the cart after a 422 response."
+                    : `Cart add failed (${response.status})`),
                 );
               }
               resetProductPageUploadSession("form_native_fetch_redirect");
@@ -1195,23 +1195,29 @@
    * shows __View uploads above Part of (Upload Center parity). Property order here only
    * affects checkout/customer display, not Admin parent vs group placement.
    */
-  function buildCompetitorOrderedLineProperties({
-    printUrl,
-    artwork,
-    ucSession,
-    ucExp,
-    ucToken,
-  }) {
+  function buildCompetitorOrderedLineProperties({ printUrl, artwork, ucSession }) {
     const out = {};
     if (printUrl) {
       out["__View uploads"] = printUrl;
-      out["View uploads"] = printUrl;
+      // out["View uploads"] = printUrl;
     }
-    if (ucExp) out.__ucExp = ucExp;
-    if (ucToken) out.__ucToken = ucToken;
     if (artwork) out.Artwork = artwork;
     if (ucSession) out._uc_session = ucSession;
     return out;
+  }
+
+  function getArtworkLabelForLineProperty() {
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    if (!successfulFiles.length) return null;
+    const label = successfulFiles.map((entry) => entry.name).join(", ").trim();
+    return label || null;
+  }
+
+  /** Dynamic pricing + fee: Artwork lives in `_pd_price_map` and Part-of component only (not parent line). */
+  function shouldOmitArtworkFromCartLine() {
+    if (!fieldConfig.pricing || !fieldConfig.pricing.enabled) return false;
+    const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
+    return getUnitFeeMinorUnitsForSuccessfulFiles(successfulFiles) > 0;
   }
 
   function getCartProperties() {
@@ -1219,9 +1225,10 @@
     if (!sessionToken || successfulFiles.length === 0) return {};
 
     const printUrl = normalizePrintReadyUrlForCartProperty(successfulFiles[0]?.printReadyFileUrl);
+    const artwork = shouldOmitArtworkFromCartLine() ? null : getArtworkLabelForLineProperty();
     return buildCompetitorOrderedLineProperties({
       printUrl: printUrl || null,
-      artwork: successfulFiles.map((entry) => entry.name).join(", "),
+      artwork,
       ucSession: sessionToken,
     });
   }
@@ -1265,6 +1272,7 @@
           token: String(entry && entry.token ? entry.token : "").trim(),
           partOfTitle:
             entry && entry.partOfTitle != null ? String(entry.partOfTitle).trim() : "",
+          artwork: entry && entry.artwork != null ? String(entry.artwork).trim() : "",
         }))
         .filter((entry) => entry.sid && entry.token);
     } catch (_err) {
@@ -1286,7 +1294,7 @@
     }
   }
 
-  function upsertPriceMapEntry(priceMap, sid, token, partOfTitle) {
+  function upsertPriceMapEntry(priceMap, sid, token, partOfTitle, artwork) {
     const nowUnix = Math.floor(Date.now() / 1000);
     const cleaned = priceMap
       .filter((entry) => entry.sid !== sid)
@@ -1296,11 +1304,12 @@
       });
     const row = { sid, token };
     if (partOfTitle) row.partOfTitle = partOfTitle;
+    if (artwork) row.artwork = artwork;
     cleaned.push(row);
     return cleaned.slice(-10);
   }
 
-  async function upsertCartPriceMapForSessionAsync(sid, token, partOfTitle) {
+  async function upsertCartPriceMapForSessionAsync(sid, token, partOfTitle, artwork) {
     if (!sid || !token) {
       throw new Error("price_map_invalid_input");
     }
@@ -1317,7 +1326,7 @@
     const currentMap = parsePriceMapJson(
       cartJson && cartJson.attributes ? cartJson.attributes._pd_price_map : "",
     );
-    const nextMap = upsertPriceMapEntry(currentMap, sid, token, partOfTitle);
+    const nextMap = upsertPriceMapEntry(currentMap, sid, token, partOfTitle, artwork);
     const attributePatch = {
       _pd_price_map: JSON.stringify(nextMap),
     };
@@ -1336,7 +1345,7 @@
 
   /**
    * When dynamic pricing + a positive upload fee apply, POST /sign and persist the
-   * signed token in cart attribute `_pd_price_map` and on the line as __ucToken / __ucExp.
+   * signed token in cart attribute `_pd_price_map` (Cart Transform source of truth).
    */
   async function appendSignedPriceTokenToLinePropertiesAsync(lineProps) {
     const successfulFiles = uploadedFiles.filter((entry) => entry.status === "success");
@@ -1380,18 +1389,13 @@
       }
       const token = String(signJson.token || "").trim();
       const partOfTitle = getPartOfTitleForCartLine();
+      const artworkLabel = getArtworkLabelForLineProperty();
       await upsertCartPriceMapForSessionAsync(
         String(sessionToken || ""),
         token,
         partOfTitle,
+        artworkLabel,
       );
-      const exp =
-        signJson.expiresAt != null && Number.isFinite(Number(signJson.expiresAt))
-          ? String(Math.floor(Number(signJson.expiresAt)))
-          : (() => {
-              const fromJwt = readJwtExp(token);
-              return fromJwt != null ? String(fromJwt) : "";
-            })();
       const printUrl =
         lineProps["__View uploads"] ||
         lineProps["View uploads"] ||
@@ -1400,16 +1404,12 @@
         );
       const nextProps = buildCompetitorOrderedLineProperties({
         printUrl: printUrl || null,
-        artwork: lineProps.Artwork,
         ucSession: lineProps._uc_session || sessionToken,
-        ucExp: exp || null,
-        ucToken: token,
       });
       debugLog("price_sign_ok", {
         priceMinorPerUnit,
         tokenChars: token.length,
         mapTargetSession: String(sessionToken || ""),
-        hasUcExp: Boolean(exp),
       });
       return nextProps;
     } catch (_err) {

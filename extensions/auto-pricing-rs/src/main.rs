@@ -49,6 +49,8 @@ struct PriceMapEntry {
     token: String,
     #[serde(default, rename = "partOfTitle")]
     part_of_title: Option<String>,
+    #[serde(default)]
+    artwork: Option<String>,
 }
 
 #[shopify_function]
@@ -91,6 +93,20 @@ fn cart_transform_run(
             .map(|s| s.as_str()),
     );
     let part_of_titles = part_of_titles_from_maps(
+        input
+            .cart()
+            .price_map_legacy()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|s| s.as_str()),
+        input
+            .cart()
+            .price_map()
+            .as_ref()
+            .and_then(|a| a.value())
+            .map(|s| s.as_str()),
+    );
+    let artwork_by_session = artwork_from_maps(
         input
             .cart()
             .price_map_legacy()
@@ -187,7 +203,8 @@ fn cart_transform_run(
         let expanded_attributes = if uses_fee_lines {
             None
         } else {
-            let component_attrs = build_part_of_component_attributes(line);
+            let component_attrs =
+                build_part_of_component_attributes(line, session_id, &artwork_by_session);
             if component_attrs.is_empty() {
                 None
             } else {
@@ -225,37 +242,29 @@ fn cart_transform_run(
 /// parent cart line so Admin shows the truncated link above Part of (Upload Center parity).
 fn build_part_of_component_attributes(
     line: &schema::cart_transform_run::input::cart::Lines,
+    session_id: &str,
+    artwork_by_session: &HashMap<String, String>,
 ) -> Vec<schema::AttributeOutput> {
     let mut out: Vec<schema::AttributeOutput> = Vec::new();
-    push_trimmed_attr(
-        &mut out,
-        "View uploads",
-        line
-            .view_uploads()
-            .as_ref()
-            .and_then(|a| a.value().map(|s| s.as_str())),
-    );
-    push_trimmed_attr(
-        &mut out,
-        "__ucExp",
-        line.uc_exp()
-            .as_ref()
-            .and_then(|a| a.value().map(|s| s.as_str())),
-    );
-    push_trimmed_attr(
-        &mut out,
-        "__ucToken",
-        line.uc_token()
-            .as_ref()
-            .and_then(|a| a.value().map(|s| s.as_str())),
-    );
-    push_trimmed_attr(
-        &mut out,
-        "Artwork",
-        line.artwork()
-            .as_ref()
-            .and_then(|a| a.value().map(|s| s.as_str())),
-    );
+    let view_uploads = line
+        .view_uploads()
+        .as_ref()
+        .and_then(|a| a.value().map(|s| s.as_str()))
+        .or_else(|| {
+            line.view_uploads_link()
+                .as_ref()
+                .and_then(|a| a.value().map(|s| s.as_str()))
+        });
+    push_trimmed_attr(&mut out, "View uploads", view_uploads);
+    let artwork = artwork_by_session
+        .get(session_id)
+        .map(|s| s.as_str())
+        .or_else(|| {
+            line.artwork()
+                .as_ref()
+                .and_then(|a| a.value().map(|s| s.as_str()))
+        });
+    push_trimmed_attr(&mut out, "Artwork", artwork);
     push_trimmed_attr(
         &mut out,
         "_uc_session",
@@ -288,6 +297,39 @@ fn part_of_titles_from_maps(legacy: Option<&str>, primary: Option<&str>) -> Hash
     let mut out = parse_part_of_titles(legacy);
     for (k, v) in parse_part_of_titles(primary) {
         out.insert(k, v);
+    }
+    out
+}
+
+fn artwork_from_maps(legacy: Option<&str>, primary: Option<&str>) -> HashMap<String, String> {
+    let mut out = parse_artwork_by_session(legacy);
+    for (k, v) in parse_artwork_by_session(primary) {
+        out.insert(k, v);
+    }
+    out
+}
+
+fn parse_artwork_by_session(raw: Option<&str>) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(raw_json) = raw else {
+        return out;
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<PriceMapEntry>>(raw_json) else {
+        return out;
+    };
+    for entry in entries {
+        let sid = entry.sid.trim();
+        if sid.is_empty() {
+            continue;
+        }
+        if let Some(label) = entry
+            .artwork
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            out.insert(sid.to_string(), label.to_string());
+        }
     }
     out
 }

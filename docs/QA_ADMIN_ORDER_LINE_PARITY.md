@@ -12,4 +12,5 @@
 | Webhook | `orders/create` log | Job enqueued; no `orders_create_missing_uc_session` |
 | Legacy order (pre-1.0.11) | Old order | May still show all props under Part of — expected |
 | Legacy Build B cart | Two-line open cart | Fee-line transform unchanged |
-| Checkout customer | Customer order status | `__uc*` hidden; `Artwork` + `View uploads` per Shopify rules |
+| Checkout customer | Customer order status | `Artwork` + `View uploads` visible; no JWT on line (v1.0.12+) |
+| No line JWT (v1.0.12+) | New order with dynamic pricing | No `__ucToken` / `__ucExp` on line; `_pd_price_map` on order |

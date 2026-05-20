@@ -39,12 +39,6 @@ query Input {
       viewUploads: attribute(key: "View uploads") {
         value
       }
-      ucExp: attribute(key: "__ucExp") {
-        value
-      }
-      ucToken: attribute(key: "__ucToken") {
-        value
-      }
       artwork: attribute(key: "Artwork") {
         value
       }
