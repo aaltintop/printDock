@@ -164,5 +164,6 @@ export function isPathExemptFromSetupRedirect(pathname: string): boolean {
   if (pathname === "/app/fields" || pathname.startsWith("/app/fields/")) return true;
   if (pathname === "/app/plans" || pathname.startsWith("/app/plans/")) return true;
   if (pathname === "/app/release-notes" || pathname.startsWith("/app/release-notes/")) return true;
+  if (pathname === "/app/glossary" || pathname.startsWith("/app/glossary/")) return true;
   return false;
 }

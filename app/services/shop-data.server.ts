@@ -63,6 +63,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Firestore rejects `undefined`; strip recursively before writes. */
+function stripUndefinedDeep<T>(value: T): T {
+  if (value === undefined) return value;
+  if (value === null) return value;
+  if (typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+  if (typeof (value as { toDate?: unknown }).toDate === "function") return value;
+  if (value instanceof FieldValue) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedDeep(item)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (nested === undefined) continue;
+    out[key] = stripUndefinedDeep(nested);
+  }
+  return out as T;
+}
+
 function normalizeAsset(id: string, raw: unknown): UploadAsset {
   const asset = isRecord(raw) ? raw : {};
   return {
@@ -231,6 +250,9 @@ function normalizeJob(docId: string, shopDomain: string, raw: unknown): OrderJob
     productId: String(job.productId ?? ""),
     variantId: String(job.variantId ?? ""),
     assetSnapshot: job.assetSnapshot ? normalizeAsset("asset_snapshot", job.assetSnapshot) : null,
+    ingestPreviewAsset: job.ingestPreviewAsset
+      ? normalizeAsset("ingest_preview", job.ingestPreviewAsset)
+      : null,
     legacySessionUploadPath:
       typeof job.legacySessionUploadPath === "string" ? job.legacySessionUploadPath : undefined,
     lineItemPropsSnapshot: Array.isArray(job.lineItemPropsSnapshot)
@@ -663,6 +685,19 @@ export async function listUploadSessions(shopDomain: string): Promise<UploadSess
   return mergeShopScopedDocs(legacy, nested);
 }
 
+/** Nested shop job doc if present, otherwise legacy top-level `jobs` doc. */
+export async function getOrderJob(shopDomain: string, jobId: string): Promise<OrderJob | null> {
+  const nestedDoc = await jobsCollection(shopDomain).doc(jobId).get();
+  if (nestedDoc.exists) {
+    return normalizeJob(jobId, shopDomain, nestedDoc.data());
+  }
+  const legacyDoc = await db.collection("jobs").doc(jobId).get();
+  if (legacyDoc.exists) {
+    return normalizeJob(jobId, shopDomain, legacyDoc.data());
+  }
+  return null;
+}
+
 export async function listOrderJobs(shopDomain: string): Promise<OrderJob[]> {
   const [nestedSnapshot, legacySnapshot] = await Promise.all([
     jobsCollection(shopDomain).get(),
@@ -752,41 +787,58 @@ export async function findJobsByLegacySessionUploadPaths(
 
 export async function saveOrderJob(shopDomain: string, job: OrderJob): Promise<void> {
   await jobsCollection(shopDomain).doc(job.id).set(
-    {
+    stripUndefinedDeep({
       ...job,
       updatedAt: new Date().toISOString(),
       createdAt: job.createdAt || new Date().toISOString(),
       shopDomain,
-    },
+    }),
     { merge: true },
   );
 }
 
-/** Patch order job on nested path if present, otherwise top-level legacy `jobs` collection. */
+/**
+ * Patch an order job on nested `shops/{shop}/jobs` when present, else legacy top-level `jobs`.
+ * Creates a new nested job when neither exists (e.g. orders/create placeholder).
+ */
 export async function mergeOrderJob(shopDomain: string, jobId: string, patch: Partial<OrderJob>): Promise<void> {
   const nowIso = new Date().toISOString();
   const nestedRef = jobsCollection(shopDomain).doc(jobId);
   const nestedDoc = await nestedRef.get();
   if (nestedDoc.exists) {
     await nestedRef.set(
-      {
+      stripUndefinedDeep({
         ...patch,
         updatedAt: nowIso,
         shopDomain,
-      },
+      }),
       { merge: true },
     );
     return;
   }
   const legacyRef = db.collection("jobs").doc(jobId);
   const legacyDoc = await legacyRef.get();
-  if (!legacyDoc.exists) return;
-  await legacyRef.set(
-    {
+  if (legacyDoc.exists) {
+    await legacyRef.set(
+      stripUndefinedDeep({
+        ...patch,
+        updatedAt: nowIso,
+        shopDomain,
+      }),
+      { merge: true },
+    );
+    return;
+  }
+  const createdAt =
+    typeof patch.createdAt === "string" && patch.createdAt.trim() ? patch.createdAt : nowIso;
+  await nestedRef.set(
+    stripUndefinedDeep({
       ...patch,
+      id: patch.id ?? jobId,
       updatedAt: nowIso,
+      createdAt,
       shopDomain,
-    },
+    }),
     { merge: true },
   );
 }

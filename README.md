@@ -1,6 +1,24 @@
+# PrintDock
+
+Shopify app for product-page uploads, dynamic upload pricing (Cart Transform), and order job management for print-on-demand workflows.
+
+## Project documentation
+
+| Doc | Audience |
+|-----|----------|
+| [docs/GLOSSARY.md](docs/GLOSSARY.md) | **Term definitions** (job, session, field, Cart Transform, Firestore paths, etc.) |
+| [docs/MERCHANT_GUIDE.md](docs/MERCHANT_GUIDE.md) | Merchants — install, configure, operate |
+| [docs/MERCHANT_FIELDS.md](docs/MERCHANT_FIELDS.md) | Line item properties and Admin display |
+| [docs/PRINT_READY_FILE_SHORT_LINKS.md](docs/PRINT_READY_FILE_SHORT_LINKS.md) | Short download links |
+| [docs/DEPLOY_CLOUD_RUN.md](docs/DEPLOY_CLOUD_RUN.md) | Production deploy |
+
+In the embedded admin app, merchants can open **Glossary** (`/app/glossary`) from the nav or Release notes page.
+
+---
+
 # Shopify App Template - React Router
 
-This is a template for building a [Shopify app](https://shopify.dev/docs/apps/getting-started) using [React Router](https://reactrouter.com/). It was forked from the [Shopify Remix app template](https://github.com/Shopify/shopify-app-template-remix) and converted to React Router.
+This app is built on the [Shopify app template](https://shopify.dev/docs/apps/getting-started) using [React Router](https://reactrouter.com/). It was forked from the [Shopify Remix app template](https://github.com/Shopify/shopify-app-template-remix) and converted to React Router.
 
 Rather than cloning this repo, follow the [Quick Start steps](https://github.com/Shopify/shopify-app-template-react-router#quick-start).
 

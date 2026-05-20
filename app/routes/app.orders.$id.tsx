@@ -23,6 +23,12 @@ import {
 } from "../services/shop-data.server";
 import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import {
+  canApproveWorkflowStatus,
+  displayAssetForJob,
+  isIngestInProgress,
+  workflowStatusConflictsWithIngest,
+} from "../utils/order-job-ingest";
 
 function normalizeStatus(status: string) {
   return status === "ready_for_production" ? "approved" : status;
@@ -102,6 +108,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       if (intent === "update_status") {
         log.event("order_job_status_updated", { jobId });
         const status = normalizeStatus(String(formData.get("status") || job.status));
+        if (status === "approved" && !canApproveWorkflowStatus(job)) {
+          return data(
+            { error: "Cannot approve until artwork import finishes (or fails)." },
+            { status: 409 },
+          );
+        }
         await saveOrderJob(session.shop, { ...job, status });
         await appendOrderJobAuditEvent(session.shop, jobId, {
           eventType: "job_updated",
@@ -145,6 +157,9 @@ export default function OrderJobDetailPage() {
   const [status, setStatus] = useState(normalizeStatus(job.status));
   const [internalNotes, setInternalNotes] = useState(job.internalNotes || "");
   const [isDownloading, setIsDownloading] = useState(false);
+  const displayAsset = displayAssetForJob(job);
+  const orderAsset = job.assetSnapshot;
+  const statusApprovedBlocked = status === "approved" && !canApproveWorkflowStatus(job);
 
   // `useNewValueEffect` runs once per new fetcher response, so the download
   // doesn't start twice and toasts don't stutter when the page re-renders.
@@ -153,7 +168,7 @@ export default function OrderJobDetailPage() {
       const downloadUrl = String(fetcherData.downloadUrl);
       void downloadFileWithoutNavigation(
         downloadUrl,
-        job.assetSnapshot?.originalName || "PrintDock-file",
+        orderAsset?.originalName || displayAsset?.originalName || "PrintDock-file",
       )
         .then(() => {
           setIsDownloading(false);
@@ -194,11 +209,23 @@ export default function OrderJobDetailPage() {
             </Banner>
           </Layout.Section>
         ) : null}
-        {job.ingestStatus === "pending" || job.ingestStatus === "processing" ? (
+        {workflowStatusConflictsWithIngest(job.status, job.ingestStatus) ? (
+          <Layout.Section>
+            <Banner tone="warning" title="Approved before import finished">
+              <Text as="p">
+                Workflow status is Approved, but artwork is still importing. Download stays disabled until import
+                completes. Change status or wait for import to finish.
+              </Text>
+            </Banner>
+          </Layout.Section>
+        ) : null}
+        {isIngestInProgress(job.ingestStatus) ? (
           <Layout.Section>
             <Banner tone="info" title="Artwork importing">
               <Text as="p">
-                PrintDock is copying the customer&apos;s upload into order storage. Download will be available shortly.
+                PrintDock is copying the customer&apos;s upload into order storage. Download will be available when
+                import completes.
+                {displayAsset?.originalName ? ` File: ${displayAsset.originalName}.` : ""}
               </Text>
             </Banner>
           </Layout.Section>
@@ -226,26 +253,25 @@ export default function OrderJobDetailPage() {
                   your history.
                 </Text>
               ) : null}
-              <Text as="p">{job.assetSnapshot?.originalName || "No file attached"}</Text>
+              <Text as="p">{displayAsset?.originalName || "No file attached"}</Text>
               <Text as="p" tone="subdued">
-                {(job.assetSnapshot?.widthInch || 0).toFixed(1)}&quot; x {(job.assetSnapshot?.heightInch || 0).toFixed(1)}
-                &quot; | {job.assetSnapshot?.dpi || "N/A"} DPI
+                {(displayAsset?.widthInch || 0).toFixed(1)}&quot; x {(displayAsset?.heightInch || 0).toFixed(1)}
+                &quot; | {displayAsset?.dpi || "N/A"} DPI
               </Text>
               <Text as="p" tone="subdued">
-                {((job.assetSnapshot?.sizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB |{" "}
-                {job.assetSnapshot?.fileExtension?.toUpperCase() || "N/A"}
+                {((displayAsset?.sizeBytes || 0) / (1024 * 1024)).toFixed(2)} MB |{" "}
+                {displayAsset?.fileExtension?.toUpperCase() || "N/A"}
               </Text>
               <downloadFetcher.Form method="post">
                 <input type="hidden" name="intent" value="download" />
-                <input type="hidden" name="storagePath" value={job.assetSnapshot?.storagePath || ""} />
+                <input type="hidden" name="storagePath" value={orderAsset?.storagePath || ""} />
                 <Button
                   submit
                   loading={isDownloading}
                   disabled={
-                    !job.assetSnapshot?.storagePath ||
-                    Boolean(job.assetSnapshot?.storageExpired) ||
-                    job.ingestStatus === "pending" ||
-                    job.ingestStatus === "processing" ||
+                    !orderAsset?.storagePath ||
+                    Boolean(orderAsset?.storageExpired) ||
+                    isIngestInProgress(job.ingestStatus) ||
                     job.ingestStatus === "failed"
                   }
                   onClick={() => setIsDownloading(true)}
@@ -275,11 +301,19 @@ export default function OrderJobDetailPage() {
                       options={[
                         { label: "Uploaded", value: "uploaded" },
                         { label: "Pending review", value: "pending_review" },
-                        { label: "Approved", value: "approved" },
+                        {
+                          label: canApproveWorkflowStatus(job)
+                            ? "Approved"
+                            : "Approved (wait for import)",
+                          value: "approved",
+                          disabled: !canApproveWorkflowStatus(job),
+                        },
                       ]}
                       onChange={setStatus}
                     />
-                    <Button submit>Save status</Button>
+                    <Button submit disabled={statusApprovedBlocked}>
+                      Save status
+                    </Button>
                   </BlockStack>
                 </actionFetcher.Form>
               </BlockStack>

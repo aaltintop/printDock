@@ -2,6 +2,8 @@
 
 This document explains how merchants install, configure, and use PrintDock in their Shopify store.
 
+For short definitions of terms (job, session, field, Cart Transform, etc.), see [GLOSSARY.md](./GLOSSARY.md).
+
 ---
 
 ## 1. Installation and Setup

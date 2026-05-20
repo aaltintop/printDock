@@ -136,6 +136,7 @@ export default function App() {
           <a href="/app/orders">Orders</a>
           <a href="/app/plans">Plans</a>
           <a href="/app/release-notes">Release notes</a>
+          <a href="/app/glossary">Glossary</a>
         </ui-nav-menu>
         <Outlet />
       </PolarisAppProvider>

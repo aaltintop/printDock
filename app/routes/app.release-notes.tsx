@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import {
   BlockStack,
+  Button,
   Card,
   Divider,
   InlineStack,
@@ -94,6 +95,20 @@ export default function ReleaseNotesPage() {
                 Runtime: {release.nodeEnv}
               </Text>
             </BlockStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h2" variant="headingMd">
+              Terminology
+            </Text>
+            <Text as="p" tone="subdued">
+              <strong>Job</strong> = one uploaded artwork on one order line (Orders page).{" "}
+              <strong>Field</strong> = upload rules for products.{" "}
+              <strong>Session</strong> = customer upload before checkout.
+            </Text>
+            <Button url="/app/glossary">Open full glossary</Button>
           </BlockStack>
         </Card>
 

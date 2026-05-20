@@ -13,9 +13,9 @@ import {
 } from "./price-token.server";
 import {
   appendOrderJobAuditEvent,
+  getOrderJob,
   getUploadField,
   getUploadSession,
-  jobsCollection,
   mergeOrderJob,
   updateUploadSession,
 } from "./shop-data.server";
@@ -201,6 +201,32 @@ function orderHasFeeLineForSession(
   return false;
 }
 
+/** Metadata-only copy for list/detail UI while ingest has not finished. */
+export function buildIngestPreviewAsset(asset: UploadAsset): UploadAsset {
+  return {
+    ...asset,
+    storagePath: "",
+    blocked: false,
+  };
+}
+
+export async function enrichJobWithIngestPreview(
+  shopDomain: string,
+  jobId: string,
+  sessionToken: string,
+  lineItemProps: LineProps,
+): Promise<void> {
+  const resolved = await resolveSessionAssetsForIngest(shopDomain, sessionToken, lineItemProps);
+  if (!resolved?.assets[0]) return;
+  await mergeOrderJob(shopDomain, jobId, {
+    ingestPreviewAsset: buildIngestPreviewAsset(resolved.assets[0]),
+  });
+}
+
+async function resetIngestPendingAfterRetry(shopDomain: string, jobId: string): Promise<void> {
+  await mergeOrderJob(shopDomain, jobId, { ingestStatus: "pending" });
+}
+
 export async function markJobArtworkUnrecoverable(
   shopDomain: string,
   jobId: string,
@@ -236,19 +262,35 @@ export async function processOrderIngestItem(
   const shopifyOrderId = queueItem.shopifyOrderId;
   const shopifyLineItemId = queueItem.shopifyLineItemId;
 
-  const existing = await jobsCollection(shopDomain).doc(jobId).get();
-  const existingData = existing.data();
+  const existingJob = await getOrderJob(shopDomain, jobId);
   if (
-    existingData?.ingestStatus === "complete" &&
-    existingData?.assetSnapshot &&
-    isOrderStoragePath(String((existingData.assetSnapshot as UploadAsset).storagePath ?? ""), shopDomain) &&
-    (await fileExists(String((existingData.assetSnapshot as UploadAsset).storagePath)))
+    existingJob?.ingestStatus === "complete" &&
+    existingJob.assetSnapshot &&
+    isOrderStoragePath(String(existingJob.assetSnapshot.storagePath ?? ""), shopDomain) &&
+    (await fileExists(String(existingJob.assetSnapshot.storagePath)))
   ) {
     await completeOrderIngestItem(shopDomain, queueItem.id);
     return "complete";
   }
 
-  await mergeOrderJob(shopDomain, jobId, { ingestStatus: "processing" });
+  if (!existingJob) {
+    await mergeOrderJob(
+      shopDomain,
+      jobId,
+      buildPlaceholderJob({
+        shopDomain,
+        jobId,
+        shopifyOrderId,
+        shopifyOrderName: queueItem.shopifyOrderName,
+        shopifyLineItemId,
+        sessionToken,
+        lineItemProps: props,
+      }),
+    );
+    await enrichJobWithIngestPreview(shopDomain, jobId, sessionToken, props);
+  } else {
+    await mergeOrderJob(shopDomain, jobId, { ingestStatus: "processing" });
+  }
 
   const resolved = await resolveSessionAssetsForIngest(shopDomain, sessionToken, props);
   if (!resolved) {
@@ -257,6 +299,7 @@ export async function processOrderIngestItem(
       await failOrderIngestItem(shopDomain, queueItem.id, "unrecoverable");
       return "failed";
     }
+    await resetIngestPendingAfterRetry(shopDomain, jobId);
     return "retry";
   }
 
@@ -348,6 +391,7 @@ export async function processOrderIngestItem(
       await failOrderIngestItem(shopDomain, queueItem.id, "copy_source_missing");
       return "failed";
     }
+    await resetIngestPendingAfterRetry(shopDomain, jobId);
     return "retry";
   }
 
@@ -376,6 +420,7 @@ export async function processOrderIngestItem(
 
   await mergeOrderJob(shopDomain, jobId, {
     assetSnapshot: renamedAsset,
+    ingestPreviewAsset: null,
     legacySessionUploadPath: assets[0]?.storagePath,
     productId: sessionData?.productId ?? "",
     variantId: sessionData?.variantId ?? "",

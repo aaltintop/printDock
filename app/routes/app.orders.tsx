@@ -17,31 +17,50 @@ import {
   Tooltip,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
+import type { OrderJob } from "../types/printdock";
 import { authenticate } from "../shopify.server";
 import { getSignedDownloadUrl } from "../services/storage.server";
 import {
   appendOrderJobAuditEvent,
   listOrderJobAuditEvents,
   listOrderJobs,
+  mergeOrderJob,
   saveOrderJob,
 } from "../services/shop-data.server";
 import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
+import { kickOrderIngestForJob } from "../services/order-ingest-kick.server";
+import {
+  canApproveWorkflowStatus,
+  displayAssetForJob,
+  formatJobDimensions,
+  ingestFileColumnLabel,
+  isIngestInProgress,
+  workflowStatusConflictsWithIngest,
+} from "../utils/order-job-ingest";
 
 function normalizeStatus(status: string) {
   return status === "ready_for_production" ? "approved" : status;
 }
 
-function getStatusLabel(status: string) {
+function getStatusLabel(status: string, ingestStatus?: string) {
   const normalized = normalizeStatus(status);
-  if (normalized === "pending_review") return "Pending review";
-  if (normalized === "approved") return "Approved";
-  if (normalized === "uploaded") return "Uploaded";
-  if (normalized === "reviewed") return "Reviewed";
-  return normalized.replaceAll("_", " ");
+  let label: string;
+  if (normalized === "pending_review") label = "Pending review";
+  else if (normalized === "approved") label = "Approved";
+  else if (normalized === "uploaded") label = "Uploaded";
+  else if (normalized === "reviewed") label = "Reviewed";
+  else label = normalized.replaceAll("_", " ");
+  if (workflowStatusConflictsWithIngest(status, ingestStatus as OrderJob["ingestStatus"])) {
+    return `${label} · importing`;
+  }
+  return label;
 }
 
-function getStatusTone(status: string) {
+function getStatusTone(status: string, ingestStatus?: string) {
+  if (workflowStatusConflictsWithIngest(status, ingestStatus as OrderJob["ingestStatus"])) {
+    return "warning";
+  }
   const normalized = normalizeStatus(status);
   if (normalized === "approved") return "success";
   if (normalized === "pending_review" || normalized === "reviewed") return "warning";
@@ -131,10 +150,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const allOrders = (await listOrderJobs(session.shop))
     .map((orderJob) => {
-      const dimensions =
-        orderJob.assetSnapshot?.widthInch && orderJob.assetSnapshot?.heightInch
-          ? `${orderJob.assetSnapshot.widthInch.toFixed(1)}" × ${orderJob.assetSnapshot.heightInch.toFixed(1)}"`
-          : "N/A";
+      const displayAsset = displayAssetForJob(orderJob);
       return {
         id: orderJob.id,
         orderId: orderJob.shopifyOrderId,
@@ -142,8 +158,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         lineItemId: orderJob.shopifyLineItemId,
         status: normalizeStatus(orderJob.status),
         createdAt: orderJob.createdAt,
-        asset: orderJob.assetSnapshot || null,
-        dimensions,
+        asset: displayAsset,
+        dimensions: formatJobDimensions(displayAsset),
         calculatedPrice: orderJob.calculatedPrice || 0,
         assignee: orderJob.assignee || "",
         internalNotes: orderJob.internalNotes || "",
@@ -220,6 +236,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const formData = await request.formData();
   const intent = String(formData.get("intent") || "download");
 
+  if (intent === "retry_ingest") {
+    const jobId = String(formData.get("jobId") || "");
+    const existing = (await listOrderJobs(session.shop)).find((order) => order.id === jobId);
+    if (!existing) {
+      return data({ error: "Order job not found" }, { status: 404 });
+    }
+    if (!isIngestInProgress(existing.ingestStatus)) {
+      return data({ error: "Import is not in progress for this job." }, { status: 400 });
+    }
+    await kickOrderIngestForJob(session.shop, existing.shopifyOrderId, existing.shopifyLineItemId);
+    return data({ ok: true, message: "Artwork import retried" });
+  }
+
   if (intent === "bulk_update") {
     const jobIds = String(formData.get("jobIds") || "")
       .split(",")
@@ -233,11 +262,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     for (const jobId of jobIds) {
       const existing = allOrders.find((order) => order.id === jobId);
       if (!existing) continue;
-      await saveOrderJob(session.shop, {
-        ...existing,
-        status: nextStatus,
-        updatedAt: new Date().toISOString(),
-      });
+      if (nextStatus === "approved" && !canApproveWorkflowStatus({ ingestStatus: existing.ingestStatus })) {
+        return data(
+          { error: "Cannot approve until artwork import finishes (or fails)." },
+          { status: 409 },
+        );
+      }
+      await mergeOrderJob(session.shop, jobId, { status: nextStatus });
       await appendOrderJobAuditEvent(session.shop, jobId, {
         eventType: "job_updated",
         message: `status: ${existing.status} -> ${nextStatus}`,
@@ -257,6 +288,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!existing) return data({ error: "Order job not found" }, { status: 404 });
 
     const nextStatus = String(formData.get("status") || existing.status);
+    if (nextStatus === "approved" && !canApproveWorkflowStatus({ ingestStatus: existing.ingestStatus })) {
+      return data(
+        { error: "Cannot approve until artwork import finishes (or fails)." },
+        { status: 409 },
+      );
+    }
     const nextAssignee = String(formData.get("assignee") || "").trim() || null;
     const nextNotes = String(formData.get("internalNotes") || existing.internalNotes || "");
     const nextTags = String(formData.get("tags") || "")
@@ -317,10 +354,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  if (
-    jobForPath?.ingestStatus === "pending" ||
-    jobForPath?.ingestStatus === "processing"
-  ) {
+  if (jobForPath && isIngestInProgress(jobForPath.ingestStatus)) {
     return data(
       { error: "Artwork is still importing. Try again in a moment." },
       { status: 409 },
@@ -415,6 +449,10 @@ export default function Orders() {
     setDownloadedStoragePath(null);
     setDownloadingFileName(fileName || "PrintDock-file");
     downloadFetcher.submit({ storagePath }, { method: "POST" });
+  };
+
+  const handleRetryIngest = (jobId: string) => {
+    actionFetcher.submit({ intent: "retry_ingest", jobId }, { method: "post" });
   };
 
   const handleStatusUpdate = (jobId: string, nextStatus: "pending_review" | "approved") => {
@@ -513,15 +551,28 @@ export default function Orders() {
                     )}
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    <Badge tone={getStatusTone(order.status)}>
-                      {getStatusLabel(order.status)}
+                    <Badge tone={getStatusTone(order.status, order.ingestStatus)}>
+                      {getStatusLabel(order.status, order.ingestStatus)}
                     </Badge>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    {order.ingestStatus === "pending" || order.ingestStatus === "processing" ? (
-                      <Text as="span" tone="subdued">
-                        Artwork importing…
-                      </Text>
+                    {isIngestInProgress(order.ingestStatus) ? (
+                      order.asset?.originalName ? (
+                        <BlockStack gap="100">
+                          <Text as="span">
+                            {order.asset.originalName.length > 40
+                              ? `${order.asset.originalName.slice(0, 40)}...`
+                              : order.asset.originalName}
+                          </Text>
+                          <Text as="span" tone="subdued">
+                            {ingestFileColumnLabel(order.ingestStatus)}
+                          </Text>
+                        </BlockStack>
+                      ) : (
+                        <Text as="span" tone="subdued">
+                          {ingestFileColumnLabel(order.ingestStatus)}
+                        </Text>
+                      )
                     ) : order.ingestEvidence?.anomalyReason === "artwork_unrecoverable" ? (
                       <Text as="span" tone="critical">
                         Artwork missing
@@ -550,7 +601,7 @@ export default function Orders() {
                   <IndexTable.Cell>{new Date(order.createdAt).toLocaleString()}</IndexTable.Cell>
                   <IndexTable.Cell>
                     <InlineStack gap="200">
-                      {order.status !== "approved" ? (
+                      {order.status !== "approved" && canApproveWorkflowStatus({ ingestStatus: order.ingestStatus }) ? (
                         <Button
                           variant="plain"
                           onClick={() => handleStatusUpdate(order.id, "approved")}
@@ -568,6 +619,11 @@ export default function Orders() {
                           Mark review
                         </Button>
                       ) : null}
+                      {isIngestInProgress(order.ingestStatus) ? (
+                        <Button variant="plain" onClick={() => handleRetryIngest(order.id)}>
+                          Retry import
+                        </Button>
+                      ) : null}
                       <Button
                         onClick={() =>
                           order.asset?.storagePath &&
@@ -581,8 +637,7 @@ export default function Orders() {
                         disabled={
                           !order.asset?.storagePath ||
                           Boolean(order.asset?.storageExpired) ||
-                          order.ingestStatus === "pending" ||
-                          order.ingestStatus === "processing" ||
+                          isIngestInProgress(order.ingestStatus) ||
                           order.ingestStatus === "failed"
                         }
                       >

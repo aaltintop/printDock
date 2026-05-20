@@ -130,6 +130,8 @@ export interface OrderJob {
   productId: string;
   variantId: string;
   assetSnapshot: UploadAsset | null;
+  /** Session file metadata for UI while order ingest is pending (not order-scoped storage). */
+  ingestPreviewAsset?: UploadAsset | null;
   /** Pre-rename upload path; used to resolve Print Ready links after copy to orders/… */
   legacySessionUploadPath?: string;
   lineItemPropsSnapshot: Array<{ name: string; value: string }>;

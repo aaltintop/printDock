@@ -7,7 +7,8 @@ import {
   buildOrderIngestId,
   enqueueOrderIngest,
 } from "../services/order-ingest-queue.server";
-import { buildPlaceholderJob } from "../services/order-ingest.server";
+import { kickOrderIngestItem } from "../services/order-ingest-kick.server";
+import { buildPlaceholderJob, enrichJobWithIngestPreview } from "../services/order-ingest.server";
 
 type OrderLineProperty = {
   name?: string;
@@ -131,6 +132,7 @@ export async function action({ request }: ActionFunctionArgs) {
           lineItemProps: snapshot,
         });
         await mergeOrderJob(shopDomain, jobId, placeholder);
+        await enrichJobWithIngestPreview(shopDomain, jobId, String(sessionToken), snapshot);
 
         await enqueueOrderIngest({
           id: ingestId,
@@ -154,6 +156,8 @@ export async function action({ request }: ActionFunctionArgs) {
           ingestId,
           jobId,
         });
+
+        void kickOrderIngestItem(shopDomain, ingestId);
       }
 
       log.event("webhook_processed", { topic: "ORDERS_CREATE", shopDomain });
