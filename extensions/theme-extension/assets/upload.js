@@ -638,6 +638,85 @@
   }
 
   let variantChangeInFlight = false;
+  let variantRevalidateTimer = null;
+
+  function hasRevalidatableFiles() {
+    return uploadedFiles.some((entry) => entry.status === "success" || entry.status === "blocked");
+  }
+
+  function applyRevalidatedAssets(serverAssets) {
+    if (!Array.isArray(serverAssets) || serverAssets.length === 0) return;
+
+    for (const serverAsset of serverAssets) {
+      const storagePath = serverAsset.storagePath || "";
+      const assetId = serverAsset.id || "";
+      const fileEntry = uploadedFiles.find(
+        (entry) =>
+          (storagePath && entry.storagePath === storagePath) ||
+          (assetId && entry.assetId === assetId),
+      );
+      if (!fileEntry) continue;
+
+      fileEntry.validationResults = Array.isArray(serverAsset.validationResults)
+        ? serverAsset.validationResults
+        : [];
+      fileEntry.blocked = Boolean(serverAsset.blocked);
+      fileEntry.status = fileEntry.blocked ? "blocked" : "success";
+      if (serverAsset.id) fileEntry.assetId = serverAsset.id;
+    }
+  }
+
+  async function revalidateSessionForVariant(variantId) {
+    if (!sessionToken || !variantId || !hasRevalidatableFiles()) return;
+
+    try {
+      const res = await fetch(`${PROXY_URL}/api/proxy/upload/revalidate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionToken, variantId: String(variantId) }),
+      });
+
+      const text = await res.text();
+      let payload = null;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = null;
+      }
+
+      if (!res.ok) {
+        debugLog("variant_revalidate_failed", {
+          status: res.status,
+          code: payload?.error,
+        });
+        return;
+      }
+
+      applyRevalidatedAssets(payload?.assets);
+      renderFileList();
+      updateCartState();
+      debugLog("variant_revalidate_ok", {
+        variantId: String(variantId),
+        sessionBlocked: Boolean(payload?.sessionBlocked),
+      });
+    } catch (err) {
+      debugLog("variant_revalidate_error", {
+        variantId: String(variantId),
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  }
+
+  function scheduleVariantRevalidation(variantId) {
+    if (variantRevalidateTimer) {
+      clearTimeout(variantRevalidateTimer);
+    }
+    variantRevalidateTimer = setTimeout(() => {
+      variantRevalidateTimer = null;
+      void revalidateSessionForVariant(variantId);
+    }, 300);
+  }
+
   async function handleVariantChange(newVariantId) {
     if (!newVariantId) return;
     const normalized = String(newVariantId);
@@ -652,6 +731,7 @@
       const newBase = await fetchVariantBasePrice(normalized);
       if (newBase !== null) currentBaseVariantPrice = newBase;
       updatePriceDisplay();
+      scheduleVariantRevalidation(normalized);
       updateCartState();
     } finally {
       variantChangeInFlight = false;

@@ -27,10 +27,12 @@ export interface ValidationRule {
 
 export interface ValidationResult {
   ruleId: string;
+  ruleCode?: string;
   severity: "blocking" | "warning";
   message: string;
   actual: number | null;
   expected: number;
+  details?: Record<string, unknown>;
 }
 
 const MAX_FILE_SIZE_MB = 500;

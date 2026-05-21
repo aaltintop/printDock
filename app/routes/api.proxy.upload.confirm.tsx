@@ -19,6 +19,7 @@ import { calculatePrice } from "../services/pricing.server";
 import { inferCurrencyDecimals } from "../services/currency.server";
 import { buildDimensionRuleMessages } from "../services/dimension-rule-message";
 import type { DimensionRuleInput } from "../services/dimension-rule-message";
+import { evaluateVariantMaxDimensionsForAsset } from "../services/variant-dimension-validation.server";
 import { authenticate, unauthenticated } from "../shopify.server";
 import {
   adjustShopStorageUsageBytes,
@@ -217,6 +218,16 @@ export async function action({ request }: ActionFunctionArgs) {
           actual: Math.round((sizeBytes / (1024 * 1024)) * 100) / 100,
           expected: field.maxFileMB,
         });
+      }
+
+      const variantMaxDimensionsResult = evaluateVariantMaxDimensionsForAsset(
+        metadata,
+        field,
+        sessionData.productId,
+        sessionData.variantId,
+      );
+      if (variantMaxDimensionsResult) {
+        validationResults.push(variantMaxDimensionsResult);
       }
 
       const blocked = hasBlockingError(validationResults);

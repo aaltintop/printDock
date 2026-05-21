@@ -1,4 +1,16 @@
-import type { FieldTargetProduct, FieldTargetProductVariant } from "../types/printdock";
+import type {
+  FieldTargetProduct,
+  FieldTargetProductVariant,
+  UploadFieldConfig,
+} from "../types/printdock";
+
+function extractNumericId(id: string): string {
+  return id.split("/").pop() ?? id;
+}
+
+function idsMatch(a: string, b: string): boolean {
+  return extractNumericId(a.trim()) === extractNumericId(b.trim());
+}
 
 export const VARIANT_DIMENSION_INCH_LIMITS = { min: 0.01, max: 500 } as const;
 
@@ -176,4 +188,29 @@ export function formatVariantDimensionSummary(width?: number, height?: number): 
 
 export function variantInputHasSavedDimensions(input: { width: string; height: string }): boolean {
   return Boolean(input.width.trim() || input.height.trim());
+}
+
+export function lookupSavedVariantDimensions(
+  field: UploadFieldConfig,
+  productId: string,
+  variantId: string,
+): { maxWidthInch?: number; maxHeightInch?: number } | null {
+  const normalizedProductId = productId.trim();
+  const normalizedVariantId = variantId.trim();
+  if (!normalizedProductId || !normalizedVariantId) return null;
+
+  const product = field.targetProducts.find((entry) => idsMatch(entry.id, normalizedProductId));
+  if (!product) return null;
+
+  const variant = product.variants?.find((entry) => idsMatch(entry.variantId, normalizedVariantId));
+  if (!variant) return null;
+
+  const maxWidthInch = variant.width;
+  const maxHeightInch = variant.height;
+  if (maxWidthInch == null && maxHeightInch == null) return null;
+
+  const limits: { maxWidthInch?: number; maxHeightInch?: number } = {};
+  if (maxWidthInch != null) limits.maxWidthInch = maxWidthInch;
+  if (maxHeightInch != null) limits.maxHeightInch = maxHeightInch;
+  return limits;
 }

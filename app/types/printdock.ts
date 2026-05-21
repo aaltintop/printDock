@@ -96,10 +96,12 @@ export interface UploadAsset {
   pageCount: number | null;
   validationResults: Array<{
     ruleId: string;
+    ruleCode?: string;
     severity: "blocking" | "warning";
     message: string;
     actual: number | null;
     expected: number;
+    details?: Record<string, unknown>;
   }>;
   pricing: {
     filePrice: number;
