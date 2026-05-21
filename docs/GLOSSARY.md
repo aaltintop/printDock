@@ -1,12 +1,12 @@
-# PrintDock glossary
+# PrintDock developer glossary
 
-Plain-language definitions for terms used in code, Firestore, and merchant docs. Each entry follows:
+**Audience:** developers working on this repository. Merchants use the in-app **Glossary** (`/app/glossary`), maintained in `app/data/merchant-glossary.ts` — do not copy developer-only terms there.
+
+Plain-language definitions for terms used in code, Firestore, and internal docs. Each entry follows:
 
 **Term** = one-sentence meaning in this project (not generic Shopify jargon).
 
-For setup and day-to-day use, see [MERCHANT_GUIDE.md](./MERCHANT_GUIDE.md). For line-item property keys, see [MERCHANT_FIELDS.md](./MERCHANT_FIELDS.md).
-
-**In the admin app:** open **Glossary** from the nav (`/app/glossary`) or the Release notes page. In-app copy is maintained in `app/data/glossary.ts` — update both files when adding terms.
+For setup and day-to-day merchant operations, see [MERCHANT_GUIDE.md](./MERCHANT_GUIDE.md). For line-item property keys, see [MERCHANT_FIELDS.md](./MERCHANT_FIELDS.md).
 
 ---
 

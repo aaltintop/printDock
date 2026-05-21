@@ -6,13 +6,13 @@ Shopify app for product-page uploads, dynamic upload pricing (Cart Transform), a
 
 | Doc | Audience |
 |-----|----------|
-| [docs/GLOSSARY.md](docs/GLOSSARY.md) | **Term definitions** (job, session, field, Cart Transform, Firestore paths, etc.) |
+| [docs/GLOSSARY.md](docs/GLOSSARY.md) | **Developers** — code, Firestore, architecture terms |
 | [docs/MERCHANT_GUIDE.md](docs/MERCHANT_GUIDE.md) | Merchants — install, configure, operate |
 | [docs/MERCHANT_FIELDS.md](docs/MERCHANT_FIELDS.md) | Line item properties and Admin display |
 | [docs/PRINT_READY_FILE_SHORT_LINKS.md](docs/PRINT_READY_FILE_SHORT_LINKS.md) | Short download links |
 | [docs/DEPLOY_CLOUD_RUN.md](docs/DEPLOY_CLOUD_RUN.md) | Production deploy |
 
-In the embedded admin app, merchants can open **Glossary** (`/app/glossary`) from the nav or Release notes page.
+Merchants can open **Glossary** (`/app/glossary`) from the admin app nav. Developer terms stay in `docs/GLOSSARY.md` only.
 
 ---
 

@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { BlockStack, Card, Divider, Page, Text } from "@shopify/polaris";
-import { GLOSSARY_SECTIONS } from "../data/glossary";
+import { MERCHANT_GLOSSARY_SECTIONS } from "../data/merchant-glossary";
 import { authenticate } from "../shopify.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
@@ -10,7 +10,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const { session } = await authenticate.admin(request);
     setLogShopDomain(session.shop);
     log.event("admin_page_view", { path: "/app/glossary" });
-    return { sections: GLOSSARY_SECTIONS };
+    return { sections: MERCHANT_GLOSSARY_SECTIONS };
   });
 };
 
@@ -24,13 +24,6 @@ export default function GlossaryPage() {
       backAction={{ content: "Dashboard", url: "/app" }}
     >
       <BlockStack gap="400">
-        <Card>
-          <Text as="p" tone="subdued">
-            Each term is defined for this app only. Developers can read the full glossary in{" "}
-            <code>docs/GLOSSARY.md</code> in the project repository.
-          </Text>
-        </Card>
-
         {sections.map((section) => (
           <Card key={section.id}>
             <BlockStack gap="300">
