@@ -19,6 +19,7 @@ import type {
   UploadFieldConfig,
   UploadSession,
 } from "../types/printdock";
+import { normalizeTargetProductVariants } from "../utils/field-target-product-variants";
 
 const DEFAULT_ALLOWED_EXTENSIONS = ["png", "jpg", "jpeg", "pdf"];
 
@@ -128,11 +129,15 @@ function normalizeField(docId: string, raw: unknown): UploadFieldConfig {
   const targetProducts: UploadFieldConfig["targetProducts"] = Array.isArray(field.targetProducts)
     ? field.targetProducts
         .filter((p): p is Record<string, unknown> => isRecord(p))
-        .map((p) => ({
-          id: String(p.id ?? ""),
-          title: String(p.title ?? ""),
-          handle: String(p.handle ?? ""),
-        }))
+        .map((p) => {
+          const normalized = {
+            id: String(p.id ?? ""),
+            title: String(p.title ?? ""),
+            handle: String(p.handle ?? ""),
+          };
+          const variants = normalizeTargetProductVariants(p.variants);
+          return variants ? { ...normalized, variants } : normalized;
+        })
     : [];
   const targetCollections: UploadFieldConfig["targetCollections"] = Array.isArray(field.targetCollections)
     ? field.targetCollections

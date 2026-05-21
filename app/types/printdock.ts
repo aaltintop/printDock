@@ -31,10 +31,17 @@ export interface UploadFieldPricing {
   roundingEnabled: boolean;
 }
 
+export interface FieldTargetProductVariant {
+  variantId: string;
+  width?: number;
+  height?: number;
+}
+
 export interface FieldTargetProduct {
   id: string;
   title: string;
   handle: string;
+  variants?: FieldTargetProductVariant[];
 }
 
 export interface FieldTargetCollection {

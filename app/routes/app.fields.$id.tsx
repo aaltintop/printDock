@@ -44,6 +44,8 @@ import {
 import { getEffectiveBillingPlan, getUploadField, listUploadFields, saveUploadField } from "../services/shop-data.server";
 import { FieldTargetOverlapBannerContent } from "../components/FieldTargetOverlapBannerContent";
 import { TargetResourcePickerModal } from "../components/TargetResourcePickerModal";
+import { VariantDimensionsEditor } from "../components/VariantDimensionsEditor";
+import { buildKnownVariantIdsByProduct } from "../utils/field-target-product-variants-ui";
 import {
   activeFieldParticipatesInTargetOverlap,
   analyzeActiveFieldTargetOverlaps,
@@ -57,6 +59,15 @@ import type {
   UploadFieldDimensionRule,
 } from "../types/printdock";
 import { DEFAULT_FILE_RENAME_PATTERN, previewRenamedFileName } from "../utils/file-rename-pattern";
+import {
+  applyVariantInputsToProducts,
+  buildVariantInputsFromProducts,
+  mergeVariantDimensionIntoProducts,
+  normalizeTargetProductsForSave,
+  normalizeVariantDimensionValue,
+  type VariantDimensionInputs,
+} from "../utils/field-target-product-variants";
+import type { ShopifyVariantRow } from "../utils/field-target-product-variants-ui";
 import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
@@ -461,6 +472,27 @@ function parseJsonArray<T>(raw: string, fallback: T[]): T[] {
   }
 }
 
+function findInvalidVariantDimensionInput(raw: unknown): string | null {
+  if (!Array.isArray(raw)) return null;
+  for (const product of raw) {
+    if (!product || typeof product !== "object") continue;
+    const variants = (product as { variants?: unknown }).variants;
+    if (!Array.isArray(variants)) continue;
+    for (const variant of variants) {
+      if (!variant || typeof variant !== "object") continue;
+      const record = variant as Record<string, unknown>;
+      for (const field of ["width", "height"] as const) {
+        const value = record[field];
+        if (value === undefined || value === null || value === "") continue;
+        if (normalizeVariantDimensionValue(value) === undefined) {
+          return "Variant width and height must be positive numbers in inches.";
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     try {
@@ -468,13 +500,86 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       setLogShopDomain(session.shop);
       const formData = await request.formData();
       const id = params.id || "new";
+      const intent = String(formData.get("intent") || "");
+
+      if (intent === "save_variant_dimensions") {
+        if (id === "new") {
+          return data(
+            { error: "Save the field before saving variant dimensions." },
+            { status: 400 },
+          );
+        }
+
+        const existingField = await getUploadField(session.shop, id);
+        if (!existingField) {
+          return data({ error: "This field no longer exists or was removed." }, { status: 404 });
+        }
+
+        const productId = String(formData.get("productId") || "").trim();
+        const variantId = String(formData.get("variantId") || "").trim();
+        if (!productId || !variantId) {
+          return data({ error: "Product and variant are required." }, { status: 400 });
+        }
+
+        const widthText = String(formData.get("width") ?? "").trim();
+        const heightText = String(formData.get("height") ?? "").trim();
+        const width = widthText ? normalizeVariantDimensionValue(widthText) : undefined;
+        const height = heightText ? normalizeVariantDimensionValue(heightText) : undefined;
+
+        if ((widthText && width === undefined) || (heightText && height === undefined)) {
+          return data(
+            { error: "Variant width and height must be positive numbers in inches." },
+            { status: 400 },
+          );
+        }
+
+        const isClear = !widthText && !heightText;
+        if (!isClear && width === undefined && height === undefined) {
+          return data({ error: "Enter at least one dimension before saving." }, { status: 400 });
+        }
+
+        const { products: nextTargetProducts, variant } = mergeVariantDimensionIntoProducts(
+          existingField.targetProducts,
+          productId,
+          variantId,
+          width,
+          height,
+        );
+
+        const nextField: UploadFieldConfig = {
+          ...existingField,
+          targetProducts: nextTargetProducts,
+          targetProductIds: nextTargetProducts.map((product) => product.id).filter(Boolean),
+          updatedAt: new Date().toISOString(),
+        };
+
+        await saveUploadField(session.shop, nextField);
+        log.event("field_variant_dimensions_saved", { fieldId: id, productId, variantId });
+
+        return data({
+          ok: true,
+          variant: variant
+            ? {
+                variantId,
+                width: variant.width,
+                height: variant.height,
+              }
+            : null,
+        });
+      }
+
       const nowIso = new Date().toISOString();
       const billingPlan = await getEffectiveBillingPlan(session.shop);
 
-      const targetProducts: FieldTargetProduct[] = parseJsonArray(
+      const targetProductsRaw = parseJsonArray<unknown>(
         String(formData.get("targetProducts") || "[]"),
         [],
       );
+      const variantDimensionError = findInvalidVariantDimensionInput(targetProductsRaw);
+      if (variantDimensionError) {
+        return data({ error: variantDimensionError }, { status: 400 });
+      }
+      const targetProducts: FieldTargetProduct[] = normalizeTargetProductsForSave(targetProductsRaw);
       const targetCollections: FieldTargetCollection[] = parseJsonArray(
         String(formData.get("targetCollections") || "[]"),
         [],
@@ -674,9 +779,10 @@ export default function FieldEditorPage() {
 
     return {
       adminTitle: field.adminTitle,
-      targetProducts: field.targetProducts,
+      targetProducts: field.targetProducts.map(({ id, title, handle }) => ({ id, title, handle })),
       targetCollections: field.targetCollections,
       targetVariantIds: field.targetVariantIds,
+      savedVariantInputs: buildVariantInputsFromProducts(field.targetProducts),
       isActive: field.isActive,
       storefrontTitle: field.storefrontTitle,
       storefrontDescription: field.storefrontDescription,
@@ -723,6 +829,24 @@ export default function FieldEditorPage() {
   const [dimensionRulesSimplified, setDimensionRulesSimplified] = useState(
     initialState.dimensionRulesSimplified,
   );
+  const [savedVariantInputs, setSavedVariantInputs] = useState<VariantDimensionInputs>(
+    initialState.savedVariantInputs,
+  );
+  const [shopifyVariants, setShopifyVariants] = useState<ShopifyVariantRow[]>([]);
+
+  const targetProductsForSubmit = useMemo(
+    () =>
+      applyVariantInputsToProducts(
+        targetProducts,
+        savedVariantInputs,
+        buildKnownVariantIdsByProduct(shopifyVariants, targetProducts),
+      ),
+    [shopifyVariants, targetProducts, savedVariantInputs],
+  );
+
+  const handleShopifyVariantsChange = useCallback((variants: ShopifyVariantRow[]) => {
+    setShopifyVariants(variants);
+  }, []);
 
   const targetOverlapFromEditor = useMemo(() => {
     const current = fieldWithEditorTargets(field, isActive, targetProducts, targetCollections);
@@ -834,6 +958,7 @@ export default function FieldEditorPage() {
     setDimensionCards(initialState.dimensionCards);
     setLegacyDimensionRules(initialState.legacyDimensionRules);
     setDimensionRulesSimplified(initialState.dimensionRulesSimplified);
+    setSavedVariantInputs(initialState.savedVariantInputs);
   }, [initialState, planAllowsDynamicPricing]);
 
   const applyProductPickerSelection = useCallback((selection: FieldTargetProduct[]) => {
@@ -860,7 +985,18 @@ export default function FieldEditorPage() {
 
   const removeProduct = useCallback((id: string) => {
     setTargetProducts((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+    setSavedVariantInputs((prev) => {
+      const variantIdsToRemove = new Set(
+        shopifyVariants.filter((variant) => variant.productId === id).map((variant) => variant.variantId),
+      );
+      if (variantIdsToRemove.size === 0) return prev;
+      const next = { ...prev };
+      for (const variantId of variantIdsToRemove) {
+        delete next[variantId];
+      }
+      return next;
+    });
+  }, [shopifyVariants]);
 
   const removeCollection = useCallback((id: string) => {
     setTargetCollections((prev) => prev.filter((c) => c.id !== id));
@@ -968,7 +1104,7 @@ export default function FieldEditorPage() {
           if (fieldCreationBlocked) event.preventDefault();
         }}
       >
-        <input type="hidden" name="targetProducts" value={JSON.stringify(targetProducts)} />
+        <input type="hidden" name="targetProducts" value={JSON.stringify(targetProductsForSubmit)} />
         <input type="hidden" name="targetCollections" value={JSON.stringify(targetCollections)} />
         <input type="hidden" name="targetVariantIds" value={JSON.stringify(targetVariantIds)} />
         <input type="hidden" name="allowedExtensions" value={contentTypeRestricted ? allowedExtensions.join(",") : ""} />
@@ -1051,6 +1187,15 @@ export default function FieldEditorPage() {
                     No products selected
                   </Text>
                 )}
+
+                <VariantDimensionsEditor
+                  fieldId={field.id}
+                  isNew={isNew}
+                  targetProducts={targetProducts}
+                  savedVariantInputs={savedVariantInputs}
+                  onSavedVariantInputsChange={setSavedVariantInputs}
+                  onShopifyVariantsChange={handleShopifyVariantsChange}
+                />
               </BlockStack>
 
               <Divider />
