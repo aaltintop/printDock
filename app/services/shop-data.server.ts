@@ -13,6 +13,7 @@ import { computeFrozenGraceUntil } from "./billing-gate.server";
 import type {
   AppSettings,
   BillingPlan,
+  BillingPlanHistoryEntry,
   DashboardStats,
   OrderJob,
   OrderJobAuditEvent,
@@ -49,6 +50,7 @@ export const DEFAULT_BILLING_PLAN: BillingPlan = {
   subscriptionId: null,
   lastVerifiedAt: null,
   graceUntil: null,
+  planStartedAt: null,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -928,6 +930,10 @@ function normalizeBillingPlanDoc(raw: Record<string, unknown>): BillingPlan {
         : String(raw.lastVerifiedAt),
     graceUntil:
       raw?.graceUntil == null || raw.graceUntil === "" ? null : String(raw.graceUntil),
+    planStartedAt:
+      raw?.planStartedAt == null || raw.planStartedAt === ""
+        ? null
+        : String(raw.planStartedAt),
   };
 }
 
@@ -951,6 +957,17 @@ export type ShopifySubscriptionRow = {
   status?: string;
 };
 
+/** Keeps the original start date while the plan code is unchanged, resets on a switch. */
+function nextPlanStartedAt(
+  current: BillingPlan,
+  nextPlanCode: PlanCode,
+  nowIso: string,
+): string {
+  return current.planCode === nextPlanCode && current.planStartedAt
+    ? current.planStartedAt
+    : nowIso;
+}
+
 /**
  * Align Firestore `shops/{shop}/billing/plan` with Shopify Admin
  * `currentAppInstallation.activeSubscriptions` (and equivalent rows from webhooks/cron).
@@ -970,7 +987,11 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
   const current = await getEffectiveBillingPlan(shopDomain);
 
   if (current.source === "dev_override" || current.source === "reviewer_bypass") {
+    // Spread `current` so the DEFAULT_BILLING_PLAN merge inside saveBillingPlan
+    // cannot reset the overridden plan back to free/inactive.
     await saveBillingPlan(shopDomain, {
+      ...current,
+      planStartedAt: current.planStartedAt ?? nowIso,
       lastVerifiedAt: nowIso,
     });
     return getEffectiveBillingPlan(shopDomain);
@@ -1025,7 +1046,20 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       source: "shopify",
       lastVerifiedAt: nowIso,
       graceUntil: null,
+      planStartedAt: nextPlanStartedAt(current, planCode, nowIso),
     });
+    if (changed) {
+      await appendBillingPlanHistory(shopDomain, {
+        fromPlanCode: current.planCode,
+        fromStatus: current.status,
+        planCode,
+        status: "active",
+        source: "shopify",
+        subscriptionId,
+        reconcileSource,
+        changedAt: nowIso,
+      });
+    }
     return getEffectiveBillingPlan(shopDomain);
   }
 
@@ -1064,6 +1098,7 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       source: "shopify",
       lastVerifiedAt: nowIso,
       graceUntil,
+      planStartedAt: nextPlanStartedAt(current, planCode, nowIso),
     });
     return getEffectiveBillingPlan(shopDomain);
   }
@@ -1095,7 +1130,20 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
     source: "shopify",
     lastVerifiedAt: nowIso,
     graceUntil: null,
+    planStartedAt: null,
   });
+  if (shouldWriteInactive) {
+    await appendBillingPlanHistory(shopDomain, {
+      fromPlanCode: current.planCode,
+      fromStatus: current.status,
+      planCode: "free",
+      status: "inactive",
+      source: "shopify",
+      subscriptionId: null,
+      reconcileSource,
+      changedAt: nowIso,
+    });
+  }
   return getEffectiveBillingPlan(shopDomain);
 }
 
@@ -1108,6 +1156,57 @@ export async function saveBillingPlan(shopDomain: string, plan: Partial<BillingP
     },
     { merge: true },
   );
+}
+
+/** Append-only plan change trail under `shops/{shop}`, read by the ops dashboard. */
+export const BILLING_HISTORY_COLLECTION = "billingHistory";
+
+function billingHistoryCollection(shopDomain: string) {
+  return shopDoc(shopDomain).collection(BILLING_HISTORY_COLLECTION);
+}
+
+/**
+ * Records a plan transition. Best-effort: an audit write must never fail a
+ * billing reconcile, which runs on the admin load path.
+ */
+async function appendBillingPlanHistory(
+  shopDomain: string,
+  entry: Omit<BillingPlanHistoryEntry, "id">,
+): Promise<void> {
+  try {
+    await billingHistoryCollection(shopDomain).add(stripUndefinedDeep(entry));
+  } catch (err) {
+    log.error("billing_history_append_failed", err, { shopDomain });
+  }
+}
+
+export async function listBillingPlanHistory(
+  shopDomain: string,
+  limit = 20,
+): Promise<BillingPlanHistoryEntry[]> {
+  try {
+    const snap = await billingHistoryCollection(shopDomain)
+      .orderBy("changedAt", "desc")
+      .limit(Math.max(1, Math.min(100, limit)))
+      .get();
+    return snap.docs.map((doc) => {
+      const raw = (doc.data() ?? {}) as Record<string, unknown>;
+      return {
+        id: doc.id,
+        fromPlanCode: String(raw.fromPlanCode ?? ""),
+        fromStatus: String(raw.fromStatus ?? ""),
+        planCode: String(raw.planCode ?? ""),
+        status: String(raw.status ?? ""),
+        source: raw.source == null ? null : String(raw.source),
+        subscriptionId: raw.subscriptionId == null ? null : String(raw.subscriptionId),
+        reconcileSource: String(raw.reconcileSource ?? ""),
+        changedAt: toIsoDate(raw.changedAt, new Date(0).toISOString()),
+      };
+    });
+  } catch (err) {
+    log.error("billing_history_read_failed", err, { shopDomain });
+    return [];
+  }
 }
 
 export async function getAppSettings(shopDomain: string): Promise<AppSettings> {

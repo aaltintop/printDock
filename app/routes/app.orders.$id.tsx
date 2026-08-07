@@ -21,6 +21,7 @@ import {
   listOrderJobs,
   saveOrderJob,
 } from "../services/shop-data.server";
+import { recordDownloadEvent } from "../services/ops-usage.server";
 import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 import {
@@ -102,6 +103,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       );
     }
         const downloadUrl = await getSignedDownloadUrl(storagePath);
+        await recordDownloadEvent(session.shop, "admin_order");
         return data({ downloadUrl, storagePath });
       }
 

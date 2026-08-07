@@ -2,6 +2,7 @@ import { redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { findJobByLegacySessionUploadPath } from "../services/shop-data.server";
+import { recordDownloadEvent } from "../services/ops-usage.server";
 import {
   fileExists,
   getSignedDownloadUrlAttachment,
@@ -90,6 +91,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
         downloadName,
         600,
       );
+      await recordDownloadEvent(shopDomain, "short_link");
       return redirect(signedUrl);
     } catch (err) {
       return internalError("short_link_redirect_failed", err, {

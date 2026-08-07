@@ -201,7 +201,27 @@ export interface BillingPlan {
   lastVerifiedAt?: string | null;
   /** ISO timestamp when access remains allowed despite no ACTIVE row (FROZEN / ON_HOLD grace). */
   graceUntil?: string | null;
+  /**
+   * ISO timestamp when the shop started the current `planCode` with a live
+   * subscription. Null while there is no active subscription. Reset whenever
+   * `planCode` changes, so it answers "since when on this plan".
+   */
+  planStartedAt?: string | null;
   updatedAt: string;
+}
+
+/** One row of `shops/{shop}/billingHistory`, appended only when the plan actually changes. */
+export interface BillingPlanHistoryEntry {
+  id: string;
+  fromPlanCode: string;
+  fromStatus: string;
+  planCode: string;
+  status: string;
+  source: string | null;
+  subscriptionId: string | null;
+  /** What triggered the reconcile: admin_load, cron, webhook, plan_handle. */
+  reconcileSource: string;
+  changedAt: string;
 }
 
 export interface DashboardStats {

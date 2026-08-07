@@ -2,6 +2,7 @@ import { redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { findJobByLegacySessionUploadPath } from "../services/shop-data.server";
+import { recordDownloadEvent } from "../services/ops-usage.server";
 import { verifyPrintReadyFileToken } from "../services/file-download-token.server";
 import { fileExists, getSignedDownloadUrlAttachment } from "../services/storage.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
@@ -53,6 +54,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         downloadName,
         600,
       );
+      await recordDownloadEvent(session.shop, "proxy_token");
       return redirect(signedUrl);
     } catch (err) {
       return internalError("upload_file_redirect_failed", err, {
