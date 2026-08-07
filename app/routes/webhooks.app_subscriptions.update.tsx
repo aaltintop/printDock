@@ -2,9 +2,19 @@ import type { ActionFunctionArgs } from "react-router";
 import { isRecognizedSubscriptionName, planCodeFromSubscriptionName } from "../config/plans";
 import { authenticate } from "../shopify.server";
 import { rethrowIfShopifyWebhookResponse } from "../lib/webhook-action.server";
-import { saveBillingPlan, updateShopPlan } from "../services/shop-data.server";
+import {
+  getEffectiveBillingPlan,
+  reconcileBillingPlanFromShopifySubscriptions,
+  saveBillingPlan,
+  updateShopPlan,
+} from "../services/shop-data.server";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
+/**
+ * Secondary push path for subscription changes.
+ * Admin GraphQL reconcile on `/app` load is the synchronous source of truth for the billing gate.
+ * Empirically this webhook still fires for PrintDock as of 2026-08 — see docs/BILLING_SPIKE_SOURCE_OF_TRUTH.md.
+ */
 export const action = async ({ request }: ActionFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     try {
@@ -31,6 +41,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const subscriptionName = String(sub.name ?? "");
       const status = String(sub.status ?? "").toUpperCase();
       const subscriptionId = sub.admin_graphql_api_id ?? null;
+      const nowIso = new Date().toISOString();
 
       log.event("subscription_update_received", {
         shopDomain: shop,
@@ -39,19 +50,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         subscriptionId: subscriptionId ?? "",
       });
 
+      const current = await getEffectiveBillingPlan(shop);
+      if (current.source === "dev_override" || current.source === "reviewer_bypass") {
+        await saveBillingPlan(shop, { lastVerifiedAt: nowIso });
+        log.event("webhook_processed", { topic: "APP_SUBSCRIPTIONS_UPDATE", shopDomain: shop });
+        return new Response("OK", { status: 200 });
+      }
+
+      if (status === "FROZEN" || status === "ON_HOLD") {
+        await reconcileBillingPlanFromShopifySubscriptions(
+          shop,
+          [{ id: subscriptionId ?? undefined, name: subscriptionName, status }],
+          { source: "webhook" },
+        );
+        log.event("webhook_processed", { topic: "APP_SUBSCRIPTIONS_UPDATE", shopDomain: shop });
+        return new Response("OK", { status: 200 });
+      }
+
       if (
         status === "CANCELLED" ||
         status === "DECLINED" ||
-        status === "EXPIRED" ||
-        status === "FROZEN" ||
-        status === "ON_HOLD"
+        status === "EXPIRED"
       ) {
         await updateShopPlan(shop, "free");
         await saveBillingPlan(shop, {
           planCode: "free",
-          status: "active",
+          status: "inactive",
           subscriptionId: null,
           source: "shopify",
+          lastVerifiedAt: nowIso,
+          graceUntil: null,
         });
         log.event("webhook_processed", { topic: "APP_SUBSCRIPTIONS_UPDATE", shopDomain: shop });
         return new Response("OK", { status: 200 });
@@ -77,6 +105,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           status: "active",
           subscriptionId,
           source: "shopify",
+          lastVerifiedAt: nowIso,
+          graceUntil: null,
         });
       } else if (status === "PENDING") {
         if (
@@ -95,6 +125,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           status: "trial",
           subscriptionId,
           source: "shopify",
+          lastVerifiedAt: nowIso,
+          graceUntil: null,
         });
       } else {
         log.warn("subscription_update_unhandled_status", `Unhandled subscription status: ${status}`, {

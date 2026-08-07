@@ -90,7 +90,7 @@ Cleaner cart line properties and simpler order job quantities.
 
 ## [1.0.2] — 2026-05-18
 
-Signed-token dynamic pricing on all Shopify plans; removes the hidden fee-product model.
+Signed-token dynamic pricing via Cart Transform on all Shopify **store** plans (including non-Plus); removes the hidden fee-product model. (PrintDock billing tiers still gate dynamic pricing to Pro and Business.)
 
 ### Added
 

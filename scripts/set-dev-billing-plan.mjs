@@ -96,9 +96,11 @@ const updatedAt = new Date().toISOString();
 if (args.clear) {
   const payload = {
     planCode: "free",
-    status: "active",
+    status: "inactive",
     subscriptionId: null,
     source: FieldValue.delete(),
+    lastVerifiedAt: null,
+    graceUntil: null,
     updatedAt,
   };
   if (args.dryRun) {
@@ -106,7 +108,7 @@ if (args.clear) {
     process.exit(0);
   }
   await planRef.set(payload, { merge: true });
-  console.log("Cleared dev billing override; shop is on free/active.");
+  console.log("Cleared dev billing override; shop is on free/inactive until Shopify sync.");
   process.exit(0);
 }
 
@@ -115,6 +117,8 @@ const payload = {
   status: args.status,
   subscriptionId: null,
   source: "dev_override",
+  lastVerifiedAt: updatedAt,
+  graceUntil: null,
   updatedAt,
 };
 

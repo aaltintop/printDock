@@ -4,6 +4,7 @@ import { Badge, Banner, BlockStack, Button, Card, InlineStack, List, Page, Text,
 import { authenticate } from "../shopify.server";
 import { getPlan } from "../config/plans";
 import { getDynamicPricingPlanMismatch } from "../utils/dynamic-pricing-plan";
+import { hasActiveSubscription } from "../services/billing-gate.server";
 import { db } from "../firebase.server";
 import {
   computeDashboardStats,
@@ -169,8 +170,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         {
           id: "plans",
           label: "Billing plan selected",
-          help: "A billing plan is active for this store.",
-          pass: Boolean(billingPlan.planCode),
+          help: "An active Shopify subscription (including Free) is required.",
+          pass: hasActiveSubscription(billingPlan),
         },
         {
           id: "settings",

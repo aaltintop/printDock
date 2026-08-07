@@ -18,6 +18,10 @@ import {
   getManagedPricingPlanSelectionUrl,
 } from "../config/billing";
 import { getPlan } from "../config/plans";
+import {
+  hasActiveSubscription,
+  shouldEnforceBillingGate,
+} from "../services/billing-gate.server";
 import { getEffectiveBillingPlan } from "../services/shop-data.server";
 import { isPartnerDevelopmentStore } from "../services/shop-plan.server";
 import { authenticate } from "../shopify.server";
@@ -38,15 +42,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       getAppAdminHandle(),
     );
     const isDevStore = await isPartnerDevelopmentStore(admin);
+    const url = new URL(request.url);
+    const billingLockedParam = url.searchParams.get("billingLocked") === "1";
+    const billingLocked =
+      billingLockedParam || shouldEnforceBillingGate(billingPlan);
     log.event("plans_page_view", {
       currentPlanCode: billingPlan.planCode,
       billingStatus: billingPlan.status,
+      billingLocked,
       isDevStore,
       url: managedPricingUrl,
     });
     return data({
       managedPricingUrl,
       isDevStore,
+      billingLocked,
+      hasSubscription: hasActiveSubscription(billingPlan),
       currentPlan: {
         planCode: billingPlan.planCode,
         displayName: plan.displayName,
@@ -62,29 +73,45 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function PlansPage() {
-  const { managedPricingUrl, isDevStore, currentPlan } = useLoaderData<typeof loader>();
+  const { managedPricingUrl, isDevStore, billingLocked, hasSubscription, currentPlan } =
+    useLoaderData<typeof loader>();
   const planStatusTone =
-    currentPlan.planCode === "free"
-      ? "success"
-      : currentPlan.status === "active"
-      ? "success"
-      : currentPlan.status === "trial"
-        ? "attention"
-        : "critical";
-  const planStatusLabel =
-    currentPlan.planCode === "free"
+    !hasSubscription
+      ? "critical"
+      : currentPlan.planCode === "free"
+        ? "success"
+        : currentPlan.status === "active"
+          ? "success"
+          : currentPlan.status === "trial"
+            ? "attention"
+            : "critical";
+  const planStatusLabel = !hasSubscription
+    ? "No plan selected"
+    : currentPlan.planCode === "free"
       ? "Free"
       : currentPlan.status;
 
   return (
     <Page title="Plans">
       <BlockStack gap="400">
+        {billingLocked ? (
+          <Banner tone="warning" title="Select a plan to use PrintDock">
+            <p>
+              Every store needs an active PrintDock plan — including the Free plan. Open Shopify
+              plan selection, choose a plan, then return here. The rest of the app stays locked
+              until a plan is active. Your storefront upload widget keeps working under Free limits
+              for customers.
+            </p>
+          </Banner>
+        ) : null}
+
         {isDevStore ? (
           <Banner tone="info" title="Development store billing">
             <p>
               Development stores cannot approve paid public plans. To test paid tiers, subscribe to
               a <strong>$0 private test plan</strong> allowlisted for this store in the Partner
-              Dashboard (Pricing → Private plans). Plan names must match Starter, Pro, or Business.
+              Dashboard (Pricing → Private plans). Plan names must match Free, Starter, Pro, or
+              Business.
             </p>
             <p>
               For feature testing without the billing round-trip, use{" "}
@@ -103,22 +130,32 @@ export default function PlansPage() {
               <Badge tone={planStatusTone}>{planStatusLabel}</Badge>
             </InlineStack>
             <Text as="p" variant="headingLg">
-              {currentPlan.displayName}
+              {hasSubscription ? currentPlan.displayName : "None"}
             </Text>
             <Divider />
-            <Text as="p" tone="subdued">
-              Upload fields:{" "}
-              {currentPlan.maxUploadFields === -1 ? "Unlimited" : currentPlan.maxUploadFields}
-            </Text>
-            <Text as="p" tone="subdued">
-              Max file size: {currentPlan.maxFileSizeMB} MB
-            </Text>
-            <Text as="p" tone="subdued">
-              Total storage cap: {currentPlan.maxTotalStorageGB} GB
-            </Text>
-            <Text as="p" tone="subdued">
-              File retention: {currentPlan.fileStorageDays} days
-            </Text>
+            {hasSubscription ? (
+              <>
+                <Text as="p" tone="subdued">
+                  Upload fields:{" "}
+                  {currentPlan.maxUploadFields === -1
+                    ? "Unlimited"
+                    : currentPlan.maxUploadFields}
+                </Text>
+                <Text as="p" tone="subdued">
+                  Max file size: {currentPlan.maxFileSizeMB} MB
+                </Text>
+                <Text as="p" tone="subdued">
+                  Total storage cap: {currentPlan.maxTotalStorageGB} GB
+                </Text>
+                <Text as="p" tone="subdued">
+                  File retention: {currentPlan.fileStorageDays} days
+                </Text>
+              </>
+            ) : (
+              <Text as="p" tone="subdued">
+                Choose Free or a paid plan in Shopify to unlock the PrintDock admin.
+              </Text>
+            )}
           </BlockStack>
         </Card>
 

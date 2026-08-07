@@ -148,6 +148,16 @@ Set `STORAGE_RETENTION_CRON_SECRET` in the environment to a long random string. 
 
 The handler iterates documents in the Firestore `shops` collection and runs retention per shop. Shops that only have legacy top-level `sessions` / `jobs` rows without a `shops/{shop}` document are not processed by this job; those tenants are rare and can be migrated or handled separately.
 
+### Billing reconcile cron
+
+To refresh subscription state without waiting for an admin visit (cancellations, freezes), schedule a periodic HTTP `POST` (or `GET`) to:
+
+`https://<your-app-host>/cron/billing-reconcile`
+
+Auth uses `BILLING_RECONCILE_CRON_SECRET` if set, otherwise the same `STORAGE_RETENTION_CRON_SECRET` (`Authorization: Bearer …` or `X-Cron-Secret`).
+
+Optional: `BILLING_GATE_BYPASS_SHOPS` — comma-separated shop domains that skip the mandatory-plan admin gate (App Store review / emergency).
+
 ## Hosting
 
 When you're ready to set up your app in production, you can follow [our deployment documentation](https://shopify.dev/docs/apps/launch/deployment) to host it externally. From there, you have a few options:

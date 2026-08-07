@@ -245,15 +245,12 @@ Plan limits are enforced in the admin UI and on the storefront upload API. Limit
 
 ## 8. Settings
 
-The **Settings** page (`/app/settings`) configures global app behavior:
+PrintDock does **not** ship a separate `/app/settings` page today. Global behavior is driven by:
 
-- **Language:** Default language for storefront content.
-- **Style preset:** Visual style of the upload widget.
-- **Upload retention days:** How long uploaded files are kept in storage.
-  - Non-converted uploads are cleaned separately with a short (~2 hour) orphan sweep.
-- **Default order status:** Initial status for new order jobs.
-- **Auto-assignment:** Automatically assign order jobs to a team member based on email domain matching.
-- **Theme block health check:** Verify your theme block is properly installed.
+- **Plan retention** — how long uploaded files stay in Storage comes from your billing plan’s `fileStorageDays` (Free: 7 days; Starter / Pro / Business: 30 days). See [Plans and Billing](#7-plans-and-billing).
+- **Orphan sweep** — uploads that never convert to an order are cleaned on a short (~2 hour) TTL, separate from plan retention.
+- **Setup / onboarding** — theme block health, Cart Transform, and related checks live on **Setup** (`/app/onboarding`).
+- **Fields** — per-product upload rules, validation, and dynamic pricing live on **Fields**.
 
 ---
 

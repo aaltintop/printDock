@@ -14,6 +14,12 @@ import {
   isPathExemptFromSetupRedirect,
 } from "../services/app-setup-status.server";
 import {
+  hasActiveSubscription,
+  isBillingGateBypassShop,
+  isPathExemptFromBillingRedirect,
+  shouldEnforceBillingGate,
+} from "../services/billing-gate.server";
+import {
   getEffectiveBillingPlan,
   reconcileBillingPlanFromShopifySubscriptions,
 } from "../services/shop-data.server";
@@ -24,23 +30,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     setLogShopDomain(session.shop);
     const currentUrl = new URL(request.url);
     const path = currentUrl.pathname;
-    log.event("admin_page_view", { path });
+    const planHandle = currentUrl.searchParams.get("plan_handle");
+    log.event("admin_page_view", { path, ...(planHandle ? { planHandle } : {}) });
 
-    if (session.shop && !isPathExemptFromSetupRedirect(path)) {
-      const setupComplete = await isAppSetupComplete(admin, session.shop);
-      if (!setupComplete) {
-        // Preserve the embedded-app query string (`embedded`, `host`, `shop`,
-        // `id_token`, `hmac`, etc). Stripping it forces the next request to
-        // `/app/onboarding` to authenticate without any shop hint, which makes
-        // `authenticate.admin()` bounce to `/auth/login` and shows the public
-        // shop-domain form inside the admin iframe.
-        const onboardingUrl = new URL(`/app/onboarding${currentUrl.search}`, currentUrl.origin);
-        onboardingUrl.searchParams.set("returnTo", `${path}${currentUrl.search}`);
-        throw redirect(`${onboardingUrl.pathname}${onboardingUrl.search}`);
-      }
-    }
-
-    // Query currentAppInstallation for scopes and active subscriptions
+    // Query currentAppInstallation for scopes and active subscriptions BEFORE gates
+    // so reconcile can update Firestore for the billing check.
     const response = await admin.graphql(`
     #graphql
     query {
@@ -58,16 +52,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   `);
 
-  const data = await response.json();
-  const appInstallation = data.data?.currentAppInstallation;
+    const data = await response.json();
+    const appInstallation = data.data?.currentAppInstallation;
 
+    let billingVerificationFailed = false;
     if (session.shop) {
       try {
         await reconcileBillingPlanFromShopifySubscriptions(
           session.shop,
           appInstallation?.activeSubscriptions,
+          { source: planHandle ? "plan_handle" : "admin_load" },
         );
+        if (planHandle) {
+          log.event("billing_plan_handle_received", {
+            shopDomain: session.shop,
+            planHandle,
+          });
+        }
       } catch (reconcileErr) {
+        billingVerificationFailed = true;
         log.error("billing_reconcile_failed", reconcileErr, { shopDomain: session.shop });
       }
 
@@ -80,10 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         return st === "ACTIVE" || st === "ACCEPTED";
       });
       const billingStatus =
-        hasShopifyActiveRow ||
-        (billingAfter.status === "active" && billingAfter.planCode !== "free")
-          ? "active"
-          : "trial";
+        hasShopifyActiveRow || hasActiveSubscription(billingAfter) ? "active" : "trial";
 
       await db.collection("shops").doc(session.shop).set(
         {
@@ -95,6 +95,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
         { merge: true },
       );
+
+      // Billing gate: fail open if reconcile threw; otherwise require verified active subscription.
+      if (
+        !billingVerificationFailed &&
+        !isBillingGateBypassShop(session.shop) &&
+        !isPathExemptFromBillingRedirect(path)
+      ) {
+        try {
+          if (shouldEnforceBillingGate(billingAfter)) {
+            const plansUrl = new URL(`/app/plans${currentUrl.search}`, currentUrl.origin);
+            plansUrl.searchParams.set("returnTo", `${path}${currentUrl.search}`);
+            plansUrl.searchParams.set("billingLocked", "1");
+            throw redirect(`${plansUrl.pathname}${plansUrl.search}`);
+          }
+        } catch (err) {
+          if (err instanceof Response) throw err;
+          log.error("billing_gate_check_failed", err, { shopDomain: session.shop });
+          // fail open
+        }
+      }
+    }
+
+    if (session.shop && !isPathExemptFromSetupRedirect(path)) {
+      const setupComplete = await isAppSetupComplete(admin, session.shop);
+      if (!setupComplete) {
+        // Preserve the embedded-app query string (`embedded`, `host`, `shop`,
+        // `id_token`, `hmac`, etc). Stripping it forces the next request to
+        // `/app/onboarding` to authenticate without any shop hint, which makes
+        // `authenticate.admin()` bounce to `/auth/login` and shows the public
+        // shop-domain form inside the admin iframe.
+        const onboardingUrl = new URL(`/app/onboarding${currentUrl.search}`, currentUrl.origin);
+        onboardingUrl.searchParams.set("returnTo", `${path}${currentUrl.search}`);
+        throw redirect(`${onboardingUrl.pathname}${onboardingUrl.search}`);
+      }
     }
 
     // eslint-disable-next-line no-undef

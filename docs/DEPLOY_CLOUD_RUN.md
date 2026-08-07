@@ -53,6 +53,10 @@ requests. Does not host any code.
 | `FIREBASE_STORAGE_BUCKET` | Firebase Console → Storage bucket name |
 | `NODE_ENV` | Set to `production` |
 | `LOG_LEVEL` | `info` in production (set by deploy script). Use `debug` locally in `.env` for verbose JSON logs. |
+| `STORAGE_RETENTION_CRON_SECRET` | Shared secret for `/cron/storage-retention` (and billing reconcile if dedicated secret unset) |
+| `BILLING_RECONCILE_CRON_SECRET` | Optional dedicated secret for `/cron/billing-reconcile` |
+| `BILLING_GATE_BYPASS_SHOPS` | Optional comma-separated shop domains that skip the mandatory plan gate |
+| `SHOPIFY_APP_HANDLE` | Optional; defaults to `printdock` for Managed Pricing URLs |
 
 `FIREBASE_SERVICE_ACCOUNT_JSON` is **not required** when Cloud Run and Firebase
 share the same GCP project. ADC handles authentication automatically.

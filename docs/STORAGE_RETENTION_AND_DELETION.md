@@ -34,7 +34,7 @@ When enabled on the bucket, deleted objects may remain restorable for **`GCS_SOF
 Physical files are removed from Firebase Storage by the **storage retention** logic in [`app/services/storage-retention.server.ts`](../app/services/storage-retention.server.ts), invoked on a schedule from [`app/routes/cron.storage-retention.tsx`](../app/routes/cron.storage-retention.tsx). It:
 
 1. Iterates upload sessions (and related job paths) per shop.
-2. Anchors each `storagePath` to the oldest relevant `createdAt` and compares it to the shop’s effective plan **`fileStorageDays`** (see [`app/config/plans.ts`](../app/config/plans.ts) — e.g. Free & Starter: 7 days; Pro & Business: 30 days).
+2. Anchors each `storagePath` to the oldest relevant `createdAt` and compares it to the shop’s effective plan **`fileStorageDays`** (see [`app/config/plans.ts`](../app/config/plans.ts) — Free: 7 days; Starter, Pro & Business: 30 days).
 3. When expired — deletes the object in Firebase Storage for that path.
 4. Then calls **`stripExpiredAsset()`** in the same file, which **does not delete the Firestore document** — it clears file pointers and sets **`storageExpired: true`**, **`storagePath` empty**, and zeroes size where appropriate so the UI can show “file no longer stored” while keeping historical metadata (filename, dimensions, dates, etc.).
 

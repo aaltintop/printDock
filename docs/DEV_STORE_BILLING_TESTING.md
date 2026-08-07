@@ -52,7 +52,7 @@ After approval, confirm:
 | Firestore | `shops/{shopDomain}/billing/plan` has `planCode` matching tier and `source: "shopify"` |
 | Feature limits | Limits from [`plans.ts`](../app/config/plans.ts) unlock (file size, fields, dynamic pricing, storage cap) |
 | Name mapping | If `planCode` stays `free`, inspect webhook payload `name` vs [`planCodeFromSubscriptionName`](../app/config/plans.ts). Watch for `subscription_name_unrecognized` in [OBSERVABILITY.md](./OBSERVABILITY.md) |
-| Clean-down | Cancel test subscription → `planCode: "free"`, `source: "shopify"` |
+| Clean-down | Cancel test subscription → `planCode: "free"`, `status: "inactive"`, `source: "shopify"` |
 | Tier change | Switch Pro → Starter on hosted page → `planCode: "starter"` |
 
 **Override → subscribe → cancel** (regression for stale `dev_override`):
@@ -120,12 +120,13 @@ On development stores (`Shop.plan.partnerDevelopment === true`), the **Plans** p
 | Script `--plan business` (no Shopify sub) | Limits unlock; survives admin reload; `source: "dev_override"` |
 | Script with non-allowlisted `--shop` | Exit 1, no write |
 | Script startup | Firebase `projectId` logged |
-| Cancel $0 private plan | `planCode: "free"`, `source: "shopify"` |
+| Cancel $0 private plan | `planCode: "free"`, `status: "inactive"`, `source: "shopify"` |
 | Override → subscribe → cancel | Ends at `free` (no stale override) |
 | Tier change Pro → Starter | `planCode: "starter"`, `source: "shopify"` |
 | Banner on dev store | Visible |
 | Banner on production store | Not rendered |
-| Script `--clear` | `free`, `source` removed |
+| Script `--clear` | `free` / `inactive`, `source` removed |
+| No Shopify sub + verified | Admin redirects to `/app/plans` (billing locked); storefront still Free limits |
 
 ---
 

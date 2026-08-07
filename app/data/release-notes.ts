@@ -33,7 +33,7 @@ export const RELEASE_NOTES: ReleaseNoteEntry[] = [
   {
     version: "1.0.2",
     date: "May 2026",
-    summary: "Upload fees apply automatically; dynamic pricing works on every Shopify plan.",
+    summary: "Upload fees apply automatically via Cart Transform on all Shopify store plans (including non-Plus).",
   },
   {
     version: "1.0.0",

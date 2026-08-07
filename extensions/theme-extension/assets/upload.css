@@ -23,6 +23,7 @@
   --pd-card-padding-y: 0.75rem;
   --pd-card-padding-x: 0.75rem;
   --pd-dropzone-padding: 2rem;
+  --pd-drop-icon-size: 32px;
 
   font-family: inherit;
   font-size: 100%;
@@ -37,12 +38,14 @@
   --pd-gap: 0.6rem;
   --pd-card-padding-y: 0.5rem;
   --pd-dropzone-padding: 1.25rem;
+  --pd-drop-icon-size: 28px;
 }
 
 #printdock-upload-root[data-density="roomy"] .printdock-upload {
   --pd-gap: 1.4rem;
   --pd-card-padding-y: 1rem;
   --pd-dropzone-padding: 2.75rem;
+  --pd-drop-icon-size: 36px;
 }
 
 .printdock-dropzone {
@@ -61,6 +64,10 @@
   background-color: color-mix(in srgb, var(--pd-primary) 6%, var(--pd-surface-subdued));
 }
 
+.printdock-dragover .printdock-drop-icon {
+  color: var(--pd-primary);
+}
+
 .printdock-dropzone-disabled {
   opacity: 0.65;
   cursor: not-allowed;
@@ -69,6 +76,36 @@
 .printdock-dropzone-disabled:hover {
   border-color: var(--pd-border-strong);
   background-color: var(--pd-surface-subdued);
+}
+
+.printdock-drop-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.printdock-drop-icon {
+  display: flex;
+  color: var(--pd-text-subdued);
+  margin-bottom: 0.25rem;
+}
+
+/* Explicit so a host theme's `svg { display: inline }` (or block) can't
+   reintroduce baseline gaps or break the centering. */
+.printdock-drop-icon svg {
+  display: block;
+  width: var(--pd-drop-icon-size);
+  height: var(--pd-drop-icon-size);
+}
+
+.printdock-drop-content .printdock-drop-title,
+.printdock-drop-content .printdock-drop-sub {
+  margin: 0;
+}
+
+.printdock-drop-content .printdock-choose-btn {
+  margin-top: 0.5rem;
 }
 
 .printdock-drop-title {

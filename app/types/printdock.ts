@@ -189,14 +189,18 @@ export interface AppSettings {
   updatedAt: string;
 }
 
-export type BillingPlanSource = "shopify" | "dev_override";
+export type BillingPlanSource = "shopify" | "dev_override" | "reviewer_bypass";
 
 export interface BillingPlan {
   planCode: import("../config/plans").PlanCode;
   status: "active" | "inactive" | "trial";
   subscriptionId: string | null;
-  /** How planCode was set: Shopify subscription sync vs dev-only Firestore script. */
+  /** How planCode was set: Shopify subscription sync vs dev-only / reviewer override. */
   source?: BillingPlanSource;
+  /** ISO timestamp of last successful Shopify subscription verification. Null = never verified. */
+  lastVerifiedAt?: string | null;
+  /** ISO timestamp when access remains allowed despite no ACTIVE row (FROZEN / ON_HOLD grace). */
+  graceUntil?: string | null;
   updatedAt: string;
 }
 

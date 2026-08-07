@@ -9,6 +9,7 @@ import {
   migratePlanCode,
   planCodeFromSubscriptionName,
 } from "../config/plans";
+import { computeFrozenGraceUntil } from "./billing-gate.server";
 import type {
   AppSettings,
   BillingPlan,
@@ -44,8 +45,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
 export const DEFAULT_BILLING_PLAN: BillingPlan = {
   planCode: "free",
-  status: "trial",
+  status: "inactive",
   subscriptionId: null,
+  lastVerifiedAt: null,
+  graceUntil: null,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -909,7 +912,7 @@ export async function getBillingPlan(shopDomain: string): Promise<BillingPlan> {
 }
 
 function normalizeBillingPlanSource(raw: unknown): BillingPlan["source"] {
-  if (raw === "shopify" || raw === "dev_override") return raw;
+  if (raw === "shopify" || raw === "dev_override" || raw === "reviewer_bypass") return raw;
   return undefined;
 }
 
@@ -919,6 +922,12 @@ function normalizeBillingPlanDoc(raw: Record<string, unknown>): BillingPlan {
     ...raw,
     planCode: migratePlanCode(String(raw?.planCode ?? "free")),
     source: normalizeBillingPlanSource(raw?.source),
+    lastVerifiedAt:
+      raw?.lastVerifiedAt == null || raw.lastVerifiedAt === ""
+        ? null
+        : String(raw.lastVerifiedAt),
+    graceUntil:
+      raw?.graceUntil == null || raw.graceUntil === "" ? null : String(raw.graceUntil),
   };
 }
 
@@ -936,21 +945,41 @@ function normalizeShopifySubscriptionStatus(status: unknown): string {
     .toUpperCase();
 }
 
+export type ShopifySubscriptionRow = {
+  id?: string;
+  name?: string;
+  status?: string;
+};
+
 /**
- * Align Firestore `shops/{shop}/billing/plan` with Shopify Admin `currentAppInstallation.activeSubscriptions`.
- * Webhooks remain primary; this catches missed/late updates when the merchant opens the embedded app.
+ * Align Firestore `shops/{shop}/billing/plan` with Shopify Admin
+ * `currentAppInstallation.activeSubscriptions` (and equivalent rows from webhooks/cron).
+ *
+ * - ACTIVE/ACCEPTED → status active (including selected Free)
+ * - FROZEN/ON_HOLD → keep prior plan with graceUntil
+ * - none → free + inactive (unless dev_override / reviewer_bypass)
  */
 export async function reconcileBillingPlanFromShopifySubscriptions(
   shopDomain: string,
-  subscriptions: Array<{ id?: string; name?: string; status?: string }> | null | undefined,
-): Promise<void> {
+  subscriptions: Array<ShopifySubscriptionRow> | null | undefined,
+  options?: { source?: "admin_load" | "cron" | "webhook" | "plan_handle" },
+): Promise<BillingPlan> {
+  const reconcileSource = options?.source ?? "admin_load";
+  const nowIso = new Date().toISOString();
   const subs = Array.isArray(subscriptions) ? subscriptions : [];
+  const current = await getEffectiveBillingPlan(shopDomain);
+
+  if (current.source === "dev_override" || current.source === "reviewer_bypass") {
+    await saveBillingPlan(shopDomain, {
+      lastVerifiedAt: nowIso,
+    });
+    return getEffectiveBillingPlan(shopDomain);
+  }
+
   const activeSub = subs.find((s) => {
     const st = normalizeShopifySubscriptionStatus(s?.status);
     return st === "ACTIVE" || st === "ACCEPTED";
   });
-
-  const current = await getEffectiveBillingPlan(shopDomain);
 
   if (activeSub) {
     const subscriptionName = String(activeSub.name ?? "");
@@ -966,7 +995,7 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       log.warn(
         "subscription_name_unrecognized",
         `No plan mapping for subscription name: ${subscriptionName}`,
-        { shopDomain, subscriptionName, source: "admin_reconcile" },
+        { shopDomain, subscriptionName, source: reconcileSource },
       );
     }
 
@@ -974,18 +1003,19 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       current.planCode !== planCode ||
       current.status !== "active" ||
       (current.subscriptionId ?? null) !== subscriptionId ||
-      current.source !== "shopify";
+      current.source !== "shopify" ||
+      (current.graceUntil ?? null) !== null;
 
-    if (!changed) return;
-
-    log.event("billing_plan_reconciled", {
-      shopDomain,
-      source: "admin_load",
-      fromPlanCode: current.planCode,
-      fromStatus: current.status,
-      toPlanCode: planCode,
-      toStatus: "active",
-    });
+    if (changed) {
+      log.event("billing_plan_reconciled", {
+        shopDomain,
+        source: reconcileSource,
+        fromPlanCode: current.planCode,
+        fromStatus: current.status,
+        toPlanCode: planCode,
+        toStatus: "active",
+      });
+    }
 
     await updateShopPlan(shopDomain, planCode);
     await saveBillingPlan(shopDomain, {
@@ -993,34 +1023,80 @@ export async function reconcileBillingPlanFromShopifySubscriptions(
       status: "active",
       subscriptionId,
       source: "shopify",
+      lastVerifiedAt: nowIso,
+      graceUntil: null,
     });
-    return;
+    return getEffectiveBillingPlan(shopDomain);
   }
 
-  if (current.source === "dev_override") return;
+  const frozenSub = subs.find((s) => {
+    const st = normalizeShopifySubscriptionStatus(s?.status);
+    return st === "FROZEN" || st === "ON_HOLD";
+  });
 
-  const shouldFallbackToFreeActive =
+  if (frozenSub) {
+    const existingGrace = current.graceUntil ? Date.parse(current.graceUntil) : NaN;
+    const graceUntil =
+      !Number.isNaN(existingGrace) && existingGrace > Date.now()
+        ? current.graceUntil
+        : computeFrozenGraceUntil();
+    const frozenId =
+      frozenSub.id != null && String(frozenSub.id).trim() !== ""
+        ? String(frozenSub.id)
+        : current.subscriptionId;
+    const planCode =
+      current.planCode !== "free" || current.subscriptionId
+        ? current.planCode
+        : planCodeFromSubscriptionName(String(frozenSub.name ?? "Free"));
+
+    log.event("billing_plan_frozen_grace", {
+      shopDomain,
+      source: reconcileSource,
+      planCode,
+      graceUntil: graceUntil ?? "",
+    });
+
+    await updateShopPlan(shopDomain, planCode);
+    await saveBillingPlan(shopDomain, {
+      planCode,
+      status: "active",
+      subscriptionId: frozenId,
+      source: "shopify",
+      lastVerifiedAt: nowIso,
+      graceUntil,
+    });
+    return getEffectiveBillingPlan(shopDomain);
+  }
+
+  const shouldWriteInactive =
     current.planCode !== "free" ||
-    current.status !== "active" ||
-    (current.subscriptionId ?? null) !== null;
+    current.status !== "inactive" ||
+    (current.subscriptionId ?? null) !== null ||
+    (current.graceUntil ?? null) !== null ||
+    current.source !== "shopify" ||
+    !current.lastVerifiedAt;
 
-  if (shouldFallbackToFreeActive) {
+  if (shouldWriteInactive) {
     log.event("billing_plan_reconciled", {
       shopDomain,
-      source: "admin_load",
+      source: reconcileSource,
       fromPlanCode: current.planCode,
       fromStatus: current.status,
       toPlanCode: "free",
-      toStatus: "active",
-    });
-    await updateShopPlan(shopDomain, "free");
-    await saveBillingPlan(shopDomain, {
-      planCode: "free",
-      status: "active",
-      subscriptionId: null,
-      source: "shopify",
+      toStatus: "inactive",
     });
   }
+
+  await updateShopPlan(shopDomain, "free");
+  await saveBillingPlan(shopDomain, {
+    planCode: "free",
+    status: "inactive",
+    subscriptionId: null,
+    source: "shopify",
+    lastVerifiedAt: nowIso,
+    graceUntil: null,
+  });
+  return getEffectiveBillingPlan(shopDomain);
 }
 
 export async function saveBillingPlan(shopDomain: string, plan: Partial<BillingPlan>): Promise<void> {

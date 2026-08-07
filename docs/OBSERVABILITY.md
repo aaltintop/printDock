@@ -59,15 +59,20 @@ Filter in Cloud Logging: `jsonPayload.event="admin_page_view"`.
 | `admin_page_view` | `{ path }` |
 | `field_created`, `field_updated`, `field_soft_deleted` | field ids / labels as appropriate |
 | `plans_redirect_to_shopify` | `{ url }` — `/app/plans` opens Shopify managed pricing |
-| `billing_plan_reconciled` | `{ source: "admin_load", fromPlanCode, toPlanCode, ... }` — Firestore billing/plan synced from Admin API |
+| `billing_plan_reconciled` | `{ source: "admin_load"\|"cron"\|"webhook"\|"plan_handle", fromPlanCode, toPlanCode, toStatus, ... }` — Firestore billing/plan synced from Shopify |
+| `billing_plan_frozen_grace` | `{ shopDomain, planCode, graceUntil }` — FROZEN/ON_HOLD grace window applied |
+| `billing_plan_handle_received` | `{ shopDomain, planHandle }` — welcome-link return after plan selection |
+| `cron_billing_reconcile_run` | `{ shopCount, okCount, failCount }` |
+| `cron_billing_reconcile_shop_ok` / `cron_billing_reconcile_shop_failed` | per-shop cron reconcile |
 | `upload_session_requested`, `upload_session_failed`, `upload_confirmed`, `upload_blocked`, `upload_failed` | proxy upload flow |
 | `upload_blocked_total_storage` | `{ shopDomain, planCode, currentBytes, maxBytes, requestedBytes, fieldId }` — shop would exceed `maxTotalStorageBytes` |
 | `webhook_received`, `webhook_processed`, `webhook_failed` | webhook topic / shop |
 | `cron_retention_run` | summary counts (`purgedFields`, `deletedStorageObjects`, etc.) |
 | `collection_id_resolve_failed` | `shopDomain`, `productId` (WARN — GraphQL collection resolver) |
-| `subscription_name_unrecognized` | (WARN) Shopify subscription `name` did not map to Starter/Pro/Business |
+| `subscription_name_unrecognized` | (WARN) Shopify subscription `name` did not map to Free/Starter/Pro/Business |
 | `subscription_update_unhandled_status` | (WARN) `APP_SUBSCRIPTIONS_UPDATE` status not handled |
-| `billing_reconcile_failed` | (ERROR) admin-load reconciliation threw |
+| `billing_reconcile_failed` | (ERROR) admin-load reconciliation threw — billing gate fails open |
+| `billing_gate_check_failed` | (ERROR) gate evaluation threw — fails open |
 | `admin_error_boundary` | admin shell SSR errors |
 
 ---

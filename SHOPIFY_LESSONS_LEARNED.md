@@ -135,7 +135,7 @@ Other lessons:
 - **Managed Pricing** (plans defined in Partner Dashboard, merchant picks in Shopify-hosted UI) is simpler and lower review-risk than the Billing API. PrintDock ships zero `appSubscriptionCreate` mutations.
 - **Plan names must match exactly.** In-app plan codes in `config/plans.ts` must map to the exact Partner Dashboard plan names (after frequency-suffix normalization). Mismatches cause silent billing confusion.
 - **Keep the free tier genuinely useful.** App Store requires free-or-trial, and an "empty free plan" increases churn and review friction.
-- **Prefer usage/size caps over feature-matrix complexity** — merchants understand "500 MB / 50 orders" faster than a grid of toggles.
+- **Prefer usage/size caps over feature-matrix complexity** — merchants understand "50 MB per file / 500 MB total storage" faster than a grid of toggles. PrintDock has **no** monthly order cap on any plan.
 - **Dev stores can't approve paid plans.** For tier testing, use $0 private plans with a store allowlist, and/or a Firestore override script to force a tier locally.
 - **Guard against regressions:** a unit test that fails if any Billing API mutation string appears keeps you honest that you're still Managed-Pricing-only.
 
