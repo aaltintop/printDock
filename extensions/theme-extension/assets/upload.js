@@ -811,72 +811,116 @@
   }
 
   // ─── FILE UPLOAD ──────────────────────────────────────────────────────
+  /**
+   * Only in-progress / validated uploads occupy slots. Failed attempts
+   * (`status === "error"`) must not permanently fill maxFiles — otherwise
+   * after N failures the dropzone stays disabled until a full page refresh.
+   */
+  function occupiedUploadSlots() {
+    return uploadedFiles.filter((entry) => entry.status !== "error").length;
+  }
+
+  function clearFileInputValue() {
+    const fileInput = document.getElementById("printdock-file-input");
+    if (fileInput) fileInput.value = "";
+  }
+
+  /** Drop failed cards so a retry can use free slots without a page refresh. */
+  function pruneFailedUploads() {
+    const failed = uploadedFiles.filter((entry) => entry.status === "error");
+    if (failed.length === 0) return;
+    for (const entry of failed) {
+      removeFile(entry.id);
+    }
+  }
+
   async function handleFiles(files) {
     if (files.length === 0) return;
-    const slotsLeft = Math.max(fieldConfig.maxFiles - uploadedFiles.length, 0);
+
+    if (isUploading) {
+      reportShopperError("Please wait until the current upload finishes.");
+      clearFileInputValue();
+      return;
+    }
+
+    // Free slots held by previous failures before accepting a new selection.
+    pruneFailedUploads();
+
+    const slotsLeft = Math.max(fieldConfig.maxFiles - occupiedUploadSlots(), 0);
     if (slotsLeft <= 0) {
       reportShopperError(
         `You've reached the maximum of ${fieldConfig.maxFiles} file(s) for this upload.`,
         { code: "max_files" },
       );
+      clearFileInputValue();
       return;
     }
     const selectedFiles = files.slice(0, slotsLeft);
 
-    if (isUploading) {
-      reportShopperError("Please wait until the current upload finishes.");
-      return;
-    }
-
     isUploading = true;
-    for (const selected of selectedFiles) {
-      if (!isValidExtension(selected.name)) {
-        reportShopperError(
-          `This file type is not allowed. Supported: ${fieldConfig.allowedExtensions.join(", ").toUpperCase()}.`,
-          { fileName: selected.name, code: "extension_not_allowed" },
-        );
-        continue;
-      }
+    try {
+      for (const selected of selectedFiles) {
+        if (!isValidExtension(selected.name)) {
+          const supported = (fieldConfig.allowedExtensions || [])
+            .map((ext) => String(ext).toUpperCase())
+            .join(", ");
+          reportShopperError(
+            supported
+              ? `This file type is not allowed. Supported: ${supported}.`
+              : "This file type is not allowed.",
+            { fileName: selected.name, code: "extension_not_allowed" },
+          );
+          continue;
+        }
 
-      const maxBytes = fieldConfig.maxFileMB * 1024 * 1024;
-      if (selected.size > maxBytes) {
-        reportShopperError(
-          `This file is too large. Maximum allowed: ${fieldConfig.maxFileMB}MB.`,
-          { fileName: selected.name, code: "file_too_large" },
-        );
-        continue;
-      }
-      let preflight = null;
-      try {
-        preflight = await Preflight.preflightImage(selected, fieldConfig);
-      } catch (err) {
-        console.warn("PrintDock preflight failed; falling back to server validation", err);
-      }
+        const maxBytes = fieldConfig.maxFileMB * 1024 * 1024;
+        if (selected.size > maxBytes) {
+          reportShopperError(
+            `This file is too large. Maximum allowed: ${fieldConfig.maxFileMB}MB.`,
+            { fileName: selected.name, code: "file_too_large" },
+          );
+          continue;
+        }
+        let preflight = null;
+        try {
+          preflight = await Preflight.preflightImage(selected, fieldConfig);
+        } catch (err) {
+          console.warn("PrintDock preflight failed; falling back to server validation", err);
+        }
 
-      if (preflight && !preflight.skipped && preflight.blocking.length > 0) {
-        const msg = preflight.blocking
-          .map((result) => result.message)
-          .filter(Boolean)
-          .join(" \u00b7 ");
-        reportShopperError(msg || "This file does not meet the upload requirements.", {
-          fileName: selected.name,
-        });
-        continue;
-      }
+        if (preflight && !preflight.skipped && preflight.blocking.length > 0) {
+          const msg = preflight.blocking
+            .map((result) => result.message)
+            .filter(Boolean)
+            .join(" \u00b7 ");
+          reportShopperError(msg || "This file does not meet the upload requirements.", {
+            fileName: selected.name,
+          });
+          continue;
+        }
 
-      await uploadFile(selected, preflight);
+        await uploadFile(selected, preflight);
+      }
+    } finally {
+      isUploading = false;
+      // Always clear so selecting the same file again fires `change`.
+      clearFileInputValue();
     }
-    isUploading = false;
   }
 
   function isValidExtension(fileName) {
+    const allowed = fieldConfig.allowedExtensions || [];
+    // Empty list = merchant turned off "Restrict allowed file types" → accept all.
+    if (allowed.length === 0) return true;
     const ext = fileName.split(".").pop();
     if (!ext) return false;
-    return fieldConfig.allowedExtensions.includes(ext.toLowerCase());
+    return allowed.includes(ext.toLowerCase());
   }
 
   function inputAccept() {
-    return fieldConfig.allowedExtensions.map((ext) => `.${ext}`).join(",");
+    const allowed = fieldConfig.allowedExtensions || [];
+    // Empty accept attribute lets the browser offer all file types.
+    return allowed.map((ext) => `.${ext}`).join(",");
   }
 
   function maxUploadSlots() {
@@ -885,7 +929,7 @@
   }
 
   function isUploadSelectionDisabled() {
-    return uploadedFiles.length >= maxUploadSlots();
+    return occupiedUploadSlots() >= maxUploadSlots();
   }
 
   async function uploadFile(file, preflight = null) {
@@ -2650,7 +2694,11 @@
   function renderUI() {
     const title = fieldConfig.storefrontTitle || "Upload your artwork";
     const description = fieldConfig.storefrontDescription || "";
-    const supported = fieldConfig.allowedExtensions.map((ext) => ext.toUpperCase()).join(", ");
+    const allowed = fieldConfig.allowedExtensions || [];
+    const supported =
+      allowed.length > 0
+        ? allowed.map((ext) => String(ext).toUpperCase()).join(", ")
+        : "All file types";
 
     root.innerHTML = `
       <div class="printdock-upload">
@@ -2667,7 +2715,7 @@
               </svg>
             </div>
             <p class="printdock-drop-title">${escapeHtml(LABELS.dropHeadline)}</p>
-            <p class="printdock-drop-sub">${supported} — up to ${fieldConfig.maxFileMB}MB · max ${fieldConfig.maxFiles} file(s)</p>
+            <p class="printdock-drop-sub">${escapeHtml(supported)} — up to ${fieldConfig.maxFileMB}MB · max ${fieldConfig.maxFiles} file(s)</p>
             <button type="button" class="printdock-choose-btn" id="printdock-choose-btn">${escapeHtml(LABELS.chooseLabel)}</button>
           </div>
         </div>
