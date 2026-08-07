@@ -32,6 +32,29 @@
     new URLSearchParams(window.location.search).has("printdock_debug") ||
     localStorage.getItem("printdock_debug") === "1";
 
+  // Browser-only decode guard. Never blocks an upload — only skips
+  // createImageBitmap and blob thumbnails so a gigapixel file does not
+  // allocate multi-GB RGBA in the shopper's tab. Merchant maxFileMB +
+  // plan cap + dimension rules are the shopper-facing limits.
+  const MAX_DECODE_PIXELS = 80_000_000;
+  // When dimensions are unknown (WebP/GIF before server validation), skip
+  // createImageBitmap / preview for large compressed files.
+  const MAX_DECODE_FILE_BYTES = 16 * 1024 * 1024;
+
+  function pixelCount(metadata) {
+    const w = Number(metadata?.widthPx);
+    const h = Number(metadata?.heightPx);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+    return w * h;
+  }
+
+  /** Whether it is safe to decode this image in the browser for preview/dims. */
+  function canSafelyDecodeInBrowser(file, metadata) {
+    const px = pixelCount(metadata);
+    if (px != null) return px <= MAX_DECODE_PIXELS;
+    return Number(file?.size) <= MAX_DECODE_FILE_BYTES;
+  }
+
   function debugTruncateUrl(url, maxLen) {
     const max = maxLen ?? 160;
     const s = String(url ?? "");
@@ -224,7 +247,6 @@
   }
 
   const Preflight = (() => {
-    const MAX_PIXELS = 10000 * 10000;
     const HEADER_READ_BYTES = 512 * 1024;
 
     function bytesToString(bytes, start, end) {
@@ -443,6 +465,10 @@
       if (mime === "image/jpeg") {
         return parseJpegDimensions(bytes);
       }
+      // WebP/GIF (and anything else) need a full decode via createImageBitmap.
+      // Skip that when the compressed file is large — defer dimensions to the
+      // server rather than risk blowing the tab. Does not block the upload.
+      if (!canSafelyDecodeInBrowser(file, null)) return null;
       if (typeof createImageBitmap !== "function") return null;
       try {
         const bitmap = await createImageBitmap(file);
@@ -489,25 +515,6 @@
     async function preflightImage(file, config) {
       const mime = await magicMime(file);
       if (!mime.startsWith("image/")) return { skipped: true };
-
-      const dims = await peekImageDimensions(file, mime);
-      const px = Number(dims?.width || 0) * Number(dims?.height || 0);
-      if (px > MAX_PIXELS) {
-        return {
-          skipped: false,
-          metadata: null,
-          blocking: [
-            {
-              ruleId: "max_pixels",
-              severity: "blocking",
-              message: "Image resolution is too large for upload.",
-              actual: px,
-              expected: MAX_PIXELS,
-            },
-          ],
-          warning: [],
-        };
-      }
 
       const metadata = await extractImageMetadataClient(file, mime);
       const results = runRulesClient(metadata, config?.dimensionRules ?? []);
@@ -944,7 +951,12 @@
       id: Math.random().toString(36).slice(2),
       name: file.name,
       size: file.size,
-      previewUrl: file.type && file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+      previewUrl:
+        file.type &&
+        file.type.startsWith("image/") &&
+        canSafelyDecodeInBrowser(file, preflight?.metadata)
+          ? URL.createObjectURL(file)
+          : null,
       status: "uploading",
       progress: 0,
       metadata: preflight?.metadata ?? null,

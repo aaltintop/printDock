@@ -124,6 +124,8 @@ Block uploads when artwork does not meet size or DPI limits. Customers see the e
 
 Failing rules **prevent** (block) the upload.
 
+Uploads are limited by **file size** (the merchant's max file size setting, clamped by the shop's plan) and by these **dimension rules**. There is no separate megapixel / resolution ceiling — large-format print files are accepted as long as they stay within the configured size and dimension rules.
+
 **How dimensions are measured (merchant guidance in the editor):**
 
 - DPI is read from PNG (pHYs) and JPEG (JFIF density). PDFs report a fixed 72 DPI.

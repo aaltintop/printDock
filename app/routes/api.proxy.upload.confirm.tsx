@@ -146,6 +146,14 @@ export async function action({ request }: ActionFunctionArgs) {
       if (errorCode === "file_too_large_global") {
         return publicError("file_too_large_global", { status: 400 });
       }
+      if (errorCode === "file_resolution_too_large") {
+        log.warn("upload_confirm_file_resolution_too_large", "Image exceeds processor pixel limit", {
+          storagePath,
+          mimeType,
+          rawError,
+        });
+        return publicError("file_resolution_too_large", { status: 400 });
+      }
       if (errorCode === "file_unreadable") {
         log.warn("upload_confirm_file_unreadable", "File could not be parsed", {
           storagePath,

@@ -40,6 +40,7 @@ const codes: ApiErrorCode[] = [
   "session_invalid",
   "session_expired",
   "file_unreadable",
+  "file_resolution_too_large",
   "file_too_large",
   "file_too_large_global",
   "extension_not_allowed",

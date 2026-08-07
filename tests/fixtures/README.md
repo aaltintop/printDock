@@ -27,7 +27,8 @@ These fixtures target:
   consolidation, allowed extensions, total-storage cap
 - `extensions/theme-extension/assets/upload.js` — client-side preflight
   (`parsePngDpi`, `parseJpegDpi`, `parseExifDpi`, `peekImageDimensions`,
-  `runRulesClient`, `MAX_PIXELS`)
+  `runRulesClient`, browser `MAX_DECODE_PIXELS` thumbnail/createImageBitmap
+  guard — never blocks the upload)
 
 ## Fixture map
 
@@ -69,13 +70,20 @@ validation/pricing branch the file is meant to trigger.
 | `C2_1200x1800_no_dpi.png` | `dpi=null`, 1200×1800px | Pixel rule PASS at exact bound |
 | `C3_3000x4500_no_dpi.png` | `dpi=null`, 3000×4500px | Pixel rule PASS; pricing in `inch_*` mode FAILS with `missing_dimensions` |
 
-### D. Decompression bomb / hard pixel cap (`MAX_PIXELS = 100_000_000`)
+### D. Large-dimension / decode-guard fixtures
+
+> There is **no** hard megapixel upload cap. Shopper-facing limits are
+> merchant `maxFileMB` (clamped by plan) and the merchant's dimension rules.
+> `extractMetadata` uses `limitInputPixels: false` because metadata is
+> header/attribute-only. Browser `MAX_DECODE_PIXELS` only skips thumbnails /
+> `createImageBitmap` — it never blocks the upload.
 
 | File | Reads as | Triggers |
 |---|---|---|
-| `D1_9999_under_100MP.png` | 9999×9999 = 99.98 MP | Just under the cap — sharp accepts |
-| `D2_10001_over_100MP.png` | 10001×10001 = 100.02 MP | Sharp throws `Input image exceeds pixel limit` → `extractMetadata` returns 400 |
-| `D3_12000_solid_compressed.png` | 12000×12000 = 144 MP | Bomb test: tiny file (~440 KB) but exceeds pixel cap |
+| `D1_9999_under_100MP.png` | 9999×9999 = 99.98 MP | Large solid PNG; `extractMetadata` accepts |
+| `D2_10001_over_100MP.png` | 10001×10001 = 100.02 MP | Formerly blocked by `MAX_PIXELS`; now accepted |
+| `D3_12000_solid_compressed.png` | 12000×12000 = 144 MP | Tiny on disk (~440 KB); metadata accepted; browser skips thumbnail |
+| `D4_50000x30000_header_only.png` | 50000×30000 = 1.5 GP | Hand-written IHDR (~70 B); regression for gigapixel headers |
 
 ### E. Plan size-tier caps (gitignored, regenerated locally)
 

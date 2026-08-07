@@ -28,6 +28,7 @@ export type ApiErrorCode =
   | "session_invalid"
   | "session_expired"
   | "file_unreadable"
+  | "file_resolution_too_large"
   | "file_too_large"
   | "file_too_large_global"
   | "extension_not_allowed"
@@ -64,6 +65,8 @@ export const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
     "Your upload session has expired. Please refresh the page to start a new upload.",
   file_unreadable:
     "We couldn't read this file. It may be corrupt or in an unsupported format. Please re-export and try again.",
+  file_resolution_too_large:
+    "This image's resolution is too large to process. Please re-export at a lower DPI or smaller dimensions.",
   file_too_large:
     "This file is too large to upload. Please try a smaller file.",
   file_too_large_global:

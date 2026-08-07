@@ -19,6 +19,7 @@ import { mkdirSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Buffer } from "node:buffer";
+import { deflateSync, crc32 } from "node:zlib";
 import sharp from "sharp";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
@@ -316,10 +317,18 @@ await makeImage({
 });
 
 // =============================================================================
-// D. Decompression bomb / hard pixel cap (MAX_PIXELS = 100MP)
+// D. Large-dimension / decode-guard fixtures
 // =============================================================================
-// Using 'solid' fill so PNG compresses these into < 1 MB despite the giant
-// dimensions — that's the whole point of the bomb test.
+// These used to exercise a hard MAX_PIXELS = 100MP upload block. That block is
+// gone: merchant maxFileMB (clamped by plan) + dimension rules are the only
+// shopper-facing limits. Metadata extraction uses limitInputPixels: false.
+//
+// Keep generating large solid PNGs (tiny on disk thanks to compression) so we
+// can still verify extractMetadata accepts them, and add a hand-written IHDR
+// "bomb header" that declares gigapixel dimensions in ~70 bytes.
+//
+// Browser decode guards (MAX_DECODE_PIXELS / MAX_DECODE_FILE_BYTES) only skip
+// createImageBitmap and blob thumbnails — they never block the upload.
 await makeImage({
   outPath: join(IMG, "D1_9999_under_100MP.png"),
   widthPx: 9999,
@@ -341,6 +350,32 @@ await makeImage({
   format: "png",
   fill: "solid",
 });
+
+{
+  // Hand-written PNG: IHDR declares 50000×30000 (1.5 GP), no real raster.
+  const u32 = (n) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32BE(n >>> 0, 0);
+    return b;
+  };
+  const chunk = (type, data) => {
+    const typeBuf = Buffer.from(type, "ascii");
+    const crc = u32(crc32(Buffer.concat([typeBuf, data])) >>> 0);
+    return Buffer.concat([u32(data.length), typeBuf, data, crc]);
+  };
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.concat([u32(50000), u32(30000), Buffer.from([8, 2, 0, 0, 0])]);
+  const idat = deflateSync(Buffer.from([0, 0, 0, 0]));
+  const png = Buffer.concat([
+    sig,
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  const outPath = join(IMG, "D4_50000x30000_header_only.png");
+  writeFileSync(outPath, png);
+  record(outPath);
+}
 
 // =============================================================================
 // E. Plan size-tier fixtures (oversize/, gitignored)

@@ -36,7 +36,6 @@ export interface ValidationResult {
 }
 
 const MAX_FILE_SIZE_MB = 500;
-const MAX_PIXELS = 10000 * 10000; // 100 Megapixels max to prevent decompression bombs
 
 /**
  * Stable error codes returned by `extractMetadata`. Endpoints translate
@@ -46,7 +45,8 @@ const MAX_PIXELS = 10000 * 10000; // 100 Megapixels max to prevent decompression
  */
 export type ExtractMetadataErrorCode =
   | "file_too_large_global"
-  | "file_unreadable";
+  | "file_unreadable"
+  | "file_resolution_too_large";
 
 export interface ExtractMetadataResult {
   metadata: FileMetadata;
@@ -77,7 +77,17 @@ export async function extractMetadata(
 
   try {
     if (actualMimeType.startsWith("image/")) {
-      const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
+      // Metadata is header/attribute-only (PNG IHDR, JPEG SOF, SVG width/
+      // height attributes). Measured: sharp(svg).metadata() on a
+      // 500000×500000 SVG returns in ~2ms with no extra RSS. Disable
+      // sharp's default ~268MP limitInputPixels for this call so large-
+      // format print files are not rejected here.
+      //
+      // Shopper-facing limits are merchant maxFileMB (clamped by plan) and
+      // the merchant's own dimension rules. Any future code that rasterizes
+      // pixels (thumbnails, PDF render, etc.) MUST pass an explicit
+      // limitInputPixels — do not copy this `false`.
+      const meta = await sharp(buffer, { limitInputPixels: false }).metadata();
       const dpi = resolveImageDpi(buffer, actualMimeType, meta.density ?? null);
       return {
         metadata: {
@@ -117,7 +127,9 @@ export async function extractMetadata(
     return {
       metadata: createEmptyMetadata(fileSizeMB),
       actualMimeType,
-      errorCode: "file_unreadable",
+      errorCode: isPixelLimitError(rawError)
+        ? "file_resolution_too_large"
+        : "file_unreadable",
       rawError,
     };
   }
@@ -135,6 +147,11 @@ function createEmptyMetadata(fileSizeMB: number): FileMetadata {
     widthInch: null, heightInch: null, pageCount: null,
     fileSizeMB: Math.round(fileSizeMB * 100) / 100,
   };
+}
+
+/** Detect sharp/libvips "Input image exceeds pixel limit" throws. */
+function isPixelLimitError(message: string): boolean {
+  return /pixel limit/i.test(message);
 }
 
 /**
