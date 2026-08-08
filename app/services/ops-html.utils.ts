@@ -79,11 +79,12 @@ function queryString(options: OpsViewOptions, overrides: Partial<OpsViewOptions>
   return `?${params.toString()}`;
 }
 
-function card(label: string, value: string, hint?: string): string {
+function card(label: string, value: string, hint?: string, valueTitle?: string): string {
+  const titleAttr = valueTitle ? ` title="${escapeHtml(valueTitle)}"` : "";
   return `<div class="card">
     <div class="card-label">${escapeHtml(label)}</div>
-    <div class="card-value">${escapeHtml(value)}</div>
-    ${hint ? `<div class="card-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</div>` : ""}
+    <div class="card-value"${titleAttr}>${escapeHtml(value)}</div>
+    ${hint ? `<div class="card-hint">${escapeHtml(hint)}</div>` : ""}
   </div>`;
 }
 
@@ -475,8 +476,9 @@ export function renderOpsShopHtml(
         "Subscription",
         shortSubscriptionId(row.subscriptionId),
         row.subscriptionId
-          ? `${row.subscriptionId} · verified ${formatDate(row.lastVerifiedAt)}`
+          ? `verified ${formatDate(row.lastVerifiedAt)}`
           : "no Shopify subscription",
+        row.subscriptionId ?? undefined,
       )}
       ${card(
         "Storage counter reconciled",

@@ -17,6 +17,7 @@ import {
   completedMonths,
   peakStorageBytes,
   readCount,
+  recentMonthKeys,
   usageMonthKey,
 } from "./ops-usage.utils";
 import type { OpsMonthlyTotalRow, OpsShopRow, OpsTotals } from "./ops-report.utils";
@@ -186,7 +187,7 @@ export async function buildOpsReport(options?: {
   );
 
   const shops = built.map((entry) => entry.row);
-  const monthKeys = built[0]?.monthly.map((row) => row.month) ?? [currentMonth];
+  const monthKeys = recentMonthKeys(months, now);
 
   return {
     generatedAt: now.toISOString(),

@@ -68,6 +68,12 @@ import {
   type VariantDimensionInputs,
 } from "../utils/field-target-product-variants";
 import type { ShopifyVariantRow } from "../utils/field-target-product-variants-ui";
+import {
+  dimensionBoundError,
+  getDimensionNumericLimits,
+  inputToFiniteNumber,
+  type SupportedDimensionType as LimitsSupportedDimensionType,
+} from "../utils/dimension-rule-limits";
 import { useNewValueEffect } from "../hooks/useNewValueEffect";
 import { log, runWithRequestContext, setLogShopDomain } from "../lib/logger.server";
 
@@ -106,7 +112,7 @@ function emptyFieldConfig(fieldId = "new"): UploadFieldConfig {
   };
 }
 
-type SupportedDimensionType = "widthInch" | "heightInch" | "dpi";
+type SupportedDimensionType = LimitsSupportedDimensionType;
 type DimensionRuleMode = "off" | "fixed" | "range";
 
 type DimensionCard = {
@@ -116,6 +122,13 @@ type DimensionCard = {
   fixedValue: string;
   rangeMin: string;
   rangeMax: string;
+};
+
+type DimensionCardFieldErrors = {
+  fixed?: string;
+  min?: string;
+  max?: string;
+  summary?: string;
 };
 
 const SUPPORTED_DIMENSIONS: SupportedDimensionType[] = ["widthInch", "heightInch", "dpi"];
@@ -130,14 +143,17 @@ function dimensionSuffix(dimensionType: SupportedDimensionType): string {
   return dimensionType === "dpi" ? "DPI" : "in";
 }
 
+function dimensionRangeHelpText(dimensionType: SupportedDimensionType): string {
+  const limits = getDimensionNumericLimits(dimensionType);
+  if (dimensionType === "dpi") {
+    return `Files must report exactly this DPI (${limits.min}-${limits.max}).`;
+  }
+  return `Files must measure exactly this value (rounded to 0.01 in; ${limits.min}-${limits.max} in).`;
+}
+
 function numberToInput(value: number | null): string {
   if (value === null || Number.isNaN(value)) return "";
   return String(Number(value.toFixed(4)));
-}
-
-function inputToFiniteNumber(value: string): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function ensureFiniteValue(value: unknown): number {
@@ -416,8 +432,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 const FILE_SIZE_LIMITS = { min: 1, step: 1 } as const;
 const PRICE_LIMITS = { min: 0, max: 9999, step: 0.00000001 } as const;
-const DIMENSION_INCH_LIMITS = { min: 0.01, max: 500, step: 0.01 } as const;
-const DIMENSION_DPI_LIMITS = { min: 1, max: 2400, step: 1 } as const;
 
 type NumericRange = { min: number; max: number };
 
@@ -450,13 +464,6 @@ function parseBoundedNumberInput(
     };
   }
   return { value: parsed, error: null };
-}
-
-function getDimensionNumericLimits(
-  dimensionType: SupportedDimensionType,
-): { min: number; max: number; step: number } {
-  if (dimensionType === "dpi") return DIMENSION_DPI_LIMITS;
-  return DIMENSION_INCH_LIMITS;
 }
 
 function parseBoolean(value: FormDataEntryValue | null): boolean {
@@ -1026,27 +1033,73 @@ export default function FieldEditorPage() {
     [allowedDimensionTypes, dimensionCards, legacyDimensionRules],
   );
   const dimensionCardErrors = useMemo(() => {
-    const errors: Partial<Record<SupportedDimensionType, string>> = {};
+    const errors: Partial<Record<SupportedDimensionType, DimensionCardFieldErrors>> = {};
     for (const dimensionType of allowedDimensionTypes) {
       const card = dimensionCards[dimensionType];
       if (!card || card.mode === "off") continue;
+      const limits = getDimensionNumericLimits(dimensionType);
+      const label = dimensionLabel(dimensionType);
+      const fieldErrors: DimensionCardFieldErrors = {};
+
       if (card.mode === "fixed") {
-        if (inputToFiniteNumber(card.fixedValue) === null) {
-          errors[dimensionType] = "Enter a valid fixed value.";
+        const fixedRaw = card.fixedValue.trim();
+        if (!fixedRaw) {
+          fieldErrors.fixed = "Enter a valid fixed value.";
+        } else {
+          const fixed = inputToFiniteNumber(card.fixedValue);
+          if (fixed === null) {
+            fieldErrors.fixed = "Enter a valid fixed value.";
+          } else {
+            const boundError = dimensionBoundError(label, fixed, limits);
+            if (boundError) fieldErrors.fixed = boundError;
+          }
         }
+        if (fieldErrors.fixed) errors[dimensionType] = fieldErrors;
         continue;
       }
 
-      const minValue = inputToFiniteNumber(card.rangeMin);
-      const maxValue = inputToFiniteNumber(card.rangeMax);
-      if (minValue === null && maxValue === null) {
-        errors[dimensionType] = "Enter at least a min or max value.";
-      } else if (minValue !== null && maxValue !== null && minValue > maxValue) {
-        errors[dimensionType] = "Min must be less than or equal to max.";
+      const minRaw = card.rangeMin.trim();
+      const maxRaw = card.rangeMax.trim();
+      const minValue = minRaw ? inputToFiniteNumber(card.rangeMin) : null;
+      const maxValue = maxRaw ? inputToFiniteNumber(card.rangeMax) : null;
+
+      if (!minRaw && !maxRaw) {
+        fieldErrors.summary = "Enter at least a min or max value.";
+      } else {
+        if (minRaw) {
+          if (minValue === null) {
+            fieldErrors.min = "Enter a valid number.";
+          } else {
+            const boundError = dimensionBoundError(label, minValue, limits);
+            if (boundError) fieldErrors.min = boundError;
+          }
+        }
+        if (maxRaw) {
+          if (maxValue === null) {
+            fieldErrors.max = "Enter a valid number.";
+          } else {
+            const boundError = dimensionBoundError(label, maxValue, limits);
+            if (boundError) fieldErrors.max = boundError;
+          }
+        }
+        if (
+          minValue !== null &&
+          maxValue !== null &&
+          !fieldErrors.min &&
+          !fieldErrors.max &&
+          minValue > maxValue
+        ) {
+          fieldErrors.summary = "Min must be less than or equal to max.";
+        }
+      }
+
+      if (fieldErrors.fixed || fieldErrors.min || fieldErrors.max || fieldErrors.summary) {
+        errors[dimensionType] = fieldErrors;
       }
     }
     return errors;
   }, [allowedDimensionTypes, dimensionCards]);
+  const hasDimensionErrors = Object.keys(dimensionCardErrors).length > 0;
 
   const handleSave = useCallback(() => {
     if (fieldCreationBlocked || isSaving) return;
@@ -1063,9 +1116,12 @@ export default function FieldEditorPage() {
     resetForm();
   }, [isSaving, isNew, navigate, resetForm]);
 
-  if (navigation.state === "loading") {
+  const backAction = { content: "Fields", url: "/app/fields" } as const;
+  const isPageNavigating = navigation.state === "loading" && navigation.formAction == null;
+
+  if (isPageNavigating) {
     return (
-      <Page title={pageTitle}>
+      <Page title={pageTitle} backAction={backAction}>
         <SkeletonPage primaryAction>
           <Card>
             <SkeletonBodyText lines={10} />
@@ -1078,7 +1134,7 @@ export default function FieldEditorPage() {
   return (
     <Page
       title={pageTitle}
-      backAction={{ content: "Fields", url: "/app/fields" }}
+      backAction={backAction}
     >
       <style>
         {`
@@ -1101,7 +1157,14 @@ export default function FieldEditorPage() {
         method="post"
         id="field-editor-form"
         onSubmit={(event) => {
-          if (fieldCreationBlocked) event.preventDefault();
+          if (fieldCreationBlocked || hasDimensionErrors) {
+            event.preventDefault();
+            if (hasDimensionErrors) {
+              appBridge.toast.show("Fix the highlighted dimension rules before saving.", {
+                isError: true,
+              });
+            }
+          }
         }}
       >
         <input type="hidden" name="targetProducts" value={JSON.stringify(targetProductsForSubmit)} />
@@ -1113,6 +1176,11 @@ export default function FieldEditorPage() {
 
         <div className="field-editor-form-content">
           <BlockStack gap="400">
+          {actionData && "error" in actionData && actionData.error ? (
+            <Banner tone="critical" title="Could not save field">
+              {String(actionData.error)}
+            </Banner>
+          ) : null}
           {fieldCreationBlocked ? (
             <Banner
               tone="warning"
@@ -1630,6 +1698,7 @@ export default function FieldEditorPage() {
                     const card = dimensionCards[dimensionType];
                     const cardError = dimensionCardErrors[dimensionType];
                     const modeSelection = [card.mode];
+                    const limits = getDimensionNumericLimits(dimensionType);
 
                     return (
                       <Box
@@ -1679,21 +1748,17 @@ export default function FieldEditorPage() {
                               autoComplete="off"
                               value={card.fixedValue}
                               suffix={dimensionSuffix(dimensionType)}
-                              min={getDimensionNumericLimits(dimensionType).min}
-                              max={getDimensionNumericLimits(dimensionType).max}
-                              step={getDimensionNumericLimits(dimensionType).step}
+                              min={limits.min}
+                              max={limits.max}
+                              step={limits.step}
                               onChange={(value) =>
                                 setDimensionCards((prev) => ({
                                   ...prev,
                                   [dimensionType]: { ...prev[dimensionType], fixedValue: value },
                                 }))
                               }
-                              helpText={
-                                dimensionType === "dpi"
-                                  ? "Files must report exactly this DPI."
-                                  : "Files must measure exactly this value (rounded to 0.01 in)."
-                              }
-                              error={card.mode === "fixed" ? cardError : undefined}
+                              helpText={dimensionRangeHelpText(dimensionType)}
+                              error={cardError?.fixed}
                             />
                           ) : null}
                           {card.mode === "range" ? (
@@ -1706,14 +1771,20 @@ export default function FieldEditorPage() {
                                   autoComplete="off"
                                   value={card.rangeMin}
                                   suffix={dimensionSuffix(dimensionType)}
-                                  min={getDimensionNumericLimits(dimensionType).min}
-                                  max={getDimensionNumericLimits(dimensionType).max}
-                                  step={getDimensionNumericLimits(dimensionType).step}
+                                  min={limits.min}
+                                  max={limits.max}
+                                  step={limits.step}
                                   onChange={(value) =>
                                     setDimensionCards((prev) => ({
                                       ...prev,
                                       [dimensionType]: { ...prev[dimensionType], rangeMin: value },
                                     }))
+                                  }
+                                  error={cardError?.min}
+                                  helpText={
+                                    dimensionType === "dpi"
+                                      ? `${limits.min}-${limits.max} DPI`
+                                      : `${limits.min}-${limits.max} in`
                                   }
                                 />
                               </div>
@@ -1725,22 +1796,28 @@ export default function FieldEditorPage() {
                                   autoComplete="off"
                                   value={card.rangeMax}
                                   suffix={dimensionSuffix(dimensionType)}
-                                  min={getDimensionNumericLimits(dimensionType).min}
-                                  max={getDimensionNumericLimits(dimensionType).max}
-                                  step={getDimensionNumericLimits(dimensionType).step}
+                                  min={limits.min}
+                                  max={limits.max}
+                                  step={limits.step}
                                   onChange={(value) =>
                                     setDimensionCards((prev) => ({
                                       ...prev,
                                       [dimensionType]: { ...prev[dimensionType], rangeMax: value },
                                     }))
                                   }
+                                  error={cardError?.max}
+                                  helpText={
+                                    dimensionType === "dpi"
+                                      ? `${limits.min}-${limits.max} DPI`
+                                      : `${limits.min}-${limits.max} in`
+                                  }
                                 />
                               </div>
                             </InlineStack>
                           ) : null}
-                          {card.mode === "range" && cardError ? (
+                          {card.mode === "range" && cardError?.summary ? (
                             <Text as="p" variant="bodySm" tone="critical">
-                              {cardError}
+                              {cardError.summary}
                             </Text>
                           ) : null}
                           {dimensionType === "dpi" ? (

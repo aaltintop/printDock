@@ -53,8 +53,10 @@ requests. Does not host any code.
 | `FIREBASE_STORAGE_BUCKET` | Firebase Console → Storage bucket name |
 | `NODE_ENV` | Set to `production` |
 | `LOG_LEVEL` | `info` in production (set by deploy script). Use `debug` locally in `.env` for verbose JSON logs. |
-| `STORAGE_RETENTION_CRON_SECRET` | Shared secret for `/cron/storage-retention` (and billing reconcile if dedicated secret unset) |
+| `STORAGE_RETENTION_CRON_SECRET` | Shared secret for `/cron/storage-retention` (and billing reconcile / usage snapshot if their dedicated secrets are unset) |
 | `BILLING_RECONCILE_CRON_SECRET` | Optional dedicated secret for `/cron/billing-reconcile` |
+| `USAGE_SNAPSHOT_CRON_SECRET` | Optional dedicated secret for `/cron/usage-snapshot` (daily storage history for the ops dashboard) |
+| `OPS_DASHBOARD_SECRET` | Required to open `/ops`. Unset means the dashboard is off and returns 401. See [`OPS_DASHBOARD.md`](./OPS_DASHBOARD.md) |
 | `BILLING_GATE_BYPASS_SHOPS` | Optional comma-separated shop domains that skip the mandatory plan gate |
 | `SHOPIFY_APP_HANDLE` | Optional; defaults to `printdock` for Managed Pricing URLs |
 

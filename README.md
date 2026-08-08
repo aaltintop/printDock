@@ -158,6 +158,22 @@ Auth uses `BILLING_RECONCILE_CRON_SECRET` if set, otherwise the same `STORAGE_RE
 
 Optional: `BILLING_GATE_BYPASS_SHOPS` — comma-separated shop domains that skip the mandatory-plan admin gate (App Store review / emergency).
 
+### Usage snapshot cron
+
+`storageUsedBytes` on each shop is a live counter with no history, so schedule a **daily** HTTP `GET` (or `POST`) to record it:
+
+`https://<your-app-host>/cron/usage-snapshot`
+
+Auth uses `USAGE_SNAPSHOT_CRON_SECRET` if set, otherwise the same `STORAGE_RETENTION_CRON_SECRET`. Run it after storage retention so each month's closing figure is post-purge. Without this job the ops dashboard's monthly storage columns stay empty.
+
+### Operator dashboard
+
+`https://<your-app-host>/ops` lists every client with plan, install date, plan start date, storage against the plan cap, download totals, and monthly history. `/ops/<shop-domain>` drills into one client. Both support `?format=json`.
+
+Set `OPS_DASHBOARD_SECRET` to enable it — while unset the page returns 401 for everyone. Send `Authorization: Bearer <secret>` or `X-Ops-Secret: <secret>` from scripts, or just open the URL in a browser and answer the HTTP Basic prompt (any username, the secret as password).
+
+Full reference: [`docs/OPS_DASHBOARD.md`](docs/OPS_DASHBOARD.md).
+
 ## Hosting
 
 When you're ready to set up your app in production, you can follow [our deployment documentation](https://shopify.dev/docs/apps/launch/deployment) to host it externally. From there, you have a few options:

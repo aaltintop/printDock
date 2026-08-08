@@ -10,9 +10,17 @@ Each released version corresponds to a `vX.Y.Z` git tag on `main` and the versio
 
 ### Added
 
+- Operator dashboard at `/ops` (and `/ops/<shop-domain>`) listing every client with plan, install date, plan start date, storage against the plan cap, download totals, and month-over-month history. Gated by `OPS_DASHBOARD_SECRET` via Bearer, `X-Ops-Secret`, or HTTP Basic; returns 401 while the secret is unset. Both pages also serve `?format=json`.
+- Download counters: `shops/{shop}.downloadsTotal` plus per-month, per-surface counts in `shops/{shop}/usageMonthly/{YYYY-MM}`, incremented by the short-link, proxy-token, and admin order download routes. Previously downloads were only logged, never counted.
+- `/cron/usage-snapshot` daily job recording each shop's storage into the monthly bucket (first / last / peak / sample count), giving `storageUsedBytes` a history. Auth: `USAGE_SNAPSHOT_CRON_SECRET`, falling back to `STORAGE_RETENTION_CRON_SECRET`.
+- `planStartedAt` on `shops/{shop}/billing/plan` and an append-only `shops/{shop}/billingHistory` trail, so plan tenure is answerable per client.
+- `docs/OPS_DASHBOARD.md`.
+
 ### Changed
 
 ### Fixed
+
+- Billing reconcile no longer resets a `dev_override` / `reviewer_bypass` shop's plan to free/inactive. `saveBillingPlan` merges `DEFAULT_BILLING_PLAN` on every write, so the override branch's partial update was wiping `planCode` and `status` on each admin load.
 
 ### Removed
 

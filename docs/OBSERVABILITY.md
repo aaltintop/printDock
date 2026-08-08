@@ -68,6 +68,12 @@ Filter in Cloud Logging: `jsonPayload.event="admin_page_view"`.
 | `upload_blocked_total_storage` | `{ shopDomain, planCode, currentBytes, maxBytes, requestedBytes, fieldId }` — shop would exceed `maxTotalStorageBytes` |
 | `webhook_received`, `webhook_processed`, `webhook_failed` | webhook topic / shop |
 | `cron_retention_run` | summary counts (`purgedFields`, `deletedStorageObjects`, etc.) |
+| `cron_usage_snapshot_run` | `{ month, shopCount, okCount, failCount, totalStorageUsedBytes }` — daily storage history write |
+| `cron_usage_snapshot_shop_failed` | (ERROR) per-shop snapshot failure |
+| `ops_dashboard_viewed` / `ops_shop_detail_viewed` | `{ shopCount, months, format }` — operator dashboard access |
+| `ops_dashboard_failed` / `ops_shop_detail_failed` | (ERROR) report build threw |
+| `download_counter_increment_failed` | (ERROR) download served but its counter write failed — the download still succeeded |
+| `billing_history_append_failed` / `billing_history_read_failed` | (ERROR) plan-change trail write/read failed |
 | `collection_id_resolve_failed` | `shopDomain`, `productId` (WARN — GraphQL collection resolver) |
 | `subscription_name_unrecognized` | (WARN) Shopify subscription `name` did not map to Free/Starter/Pro/Business |
 | `subscription_update_unhandled_status` | (WARN) `APP_SUBSCRIPTIONS_UPDATE` status not handled |

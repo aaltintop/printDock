@@ -151,7 +151,7 @@ export interface StorageSampleFields {
  * snapshots need a read-modify-write instead of a plain `FieldValue.increment`.
  */
 export function mergeStorageSample(
-  existing: Record<string, unknown> | undefined,
+  existing: Record<string, unknown> | StorageSampleFields | undefined,
   bytes: number,
   atIso: string,
 ): StorageSampleFields {
