@@ -10,19 +10,28 @@ Each released version corresponds to a `vX.Y.Z` git tag on `main` and the versio
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+---
+
+## [1.1.0] — 2026-08-08
+
+### Added
+
 - Operator dashboard at `/ops` (and `/ops/<shop-domain>`) listing every client with plan, install date, plan start date, storage against the plan cap, download totals, and month-over-month history. Gated by `OPS_DASHBOARD_SECRET` via Bearer, `X-Ops-Secret`, or HTTP Basic; returns 401 while the secret is unset. Both pages also serve `?format=json`.
 - Download counters: `shops/{shop}.downloadsTotal` plus per-month, per-surface counts in `shops/{shop}/usageMonthly/{YYYY-MM}`, incremented by the short-link, proxy-token, and admin order download routes. Previously downloads were only logged, never counted.
 - `/cron/usage-snapshot` daily job recording each shop's storage into the monthly bucket (first / last / peak / sample count), giving `storageUsedBytes` a history. Auth: `USAGE_SNAPSHOT_CRON_SECRET`, falling back to `STORAGE_RETENTION_CRON_SECRET`.
 - `planStartedAt` on `shops/{shop}/billing/plan` and an append-only `shops/{shop}/billingHistory` trail, so plan tenure is answerable per client.
 - `docs/OPS_DASHBOARD.md`.
 
-### Changed
-
 ### Fixed
 
 - Billing reconcile no longer resets a `dev_override` / `reviewer_bypass` shop's plan to free/inactive. `saveBillingPlan` merges `DEFAULT_BILLING_PLAN` on every write, so the override branch's partial update was wiping `planCode` and `status` on each admin load.
-
-### Removed
+- Cloud Run two-phase deploy no longer overwrites Secret Manager env bindings (ops/cron secrets) as string literals; uses `--update-secrets` to preserve existing bindings.
 
 ---
 
@@ -135,7 +144,8 @@ First public release of PrintDock on the Shopify App Store.
 - Marketing landing page and dashboard plan card.
 - Structured request logging across admin and storefront routes.
 
-[Unreleased]: https://github.com/abdurrahmanaltintop/printdock/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/abdurrahmanaltintop/printdock/compare/1.1.0...HEAD
+[1.1.0]: https://github.com/abdurrahmanaltintop/printdock/compare/v1.0.6...1.1.0
 [1.0.6]: https://github.com/abdurrahmanaltintop/printdock/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/abdurrahmanaltintop/printdock/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/abdurrahmanaltintop/printdock/compare/v1.0.3...v1.0.4
