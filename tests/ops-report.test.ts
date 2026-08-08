@@ -15,6 +15,7 @@ import type { UsageMonthRow } from "../app/services/ops-usage.utils";
 
 function row(partial: Partial<OpsShopRow> & { shopDomain: string }): OpsShopRow {
   return {
+    primaryDomain: null,
     planCode: "free",
     planStatus: "inactive",
     planSource: "shopify",

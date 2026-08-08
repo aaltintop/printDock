@@ -480,6 +480,20 @@ deploy_base() {
       # Shopify app package crashes if SHOPIFY_APP_URL is completely empty on boot
       echo "SHOPIFY_APP_URL: \"https://temporary-placeholder.example.com\""
     fi
+    # Optional: --env-vars-file replaces non-secret env vars, so pass these
+    # through when set (e.g. sourced from .env / .cloudrun.env) or they vanish.
+    if [[ -n "${OPS_DASHBOARD_SECRET:-}" ]]; then
+      echo "OPS_DASHBOARD_SECRET: \"$OPS_DASHBOARD_SECRET\""
+    fi
+    if [[ -n "${STORAGE_RETENTION_CRON_SECRET:-}" ]]; then
+      echo "STORAGE_RETENTION_CRON_SECRET: \"$STORAGE_RETENTION_CRON_SECRET\""
+    fi
+    if [[ -n "${USAGE_SNAPSHOT_CRON_SECRET:-}" ]]; then
+      echo "USAGE_SNAPSHOT_CRON_SECRET: \"$USAGE_SNAPSHOT_CRON_SECRET\""
+    fi
+    if [[ -n "${BILLING_RECONCILE_CRON_SECRET:-}" ]]; then
+      echo "BILLING_RECONCILE_CRON_SECRET: \"$BILLING_RECONCILE_CRON_SECRET\""
+    fi
   } >"$env_file"
 
   local cmd=(

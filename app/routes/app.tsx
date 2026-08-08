@@ -23,6 +23,7 @@ import {
   getEffectiveBillingPlan,
   reconcileBillingPlanFromShopifySubscriptions,
 } from "../services/shop-data.server";
+import { normalizeShopPrimaryHost } from "../services/shop-domain.utils";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
@@ -34,10 +35,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     log.event("admin_page_view", { path, ...(planHandle ? { planHandle } : {}) });
 
     // Query currentAppInstallation for scopes and active subscriptions BEFORE gates
-    // so reconcile can update Firestore for the billing check.
+    // so reconcile can update Firestore for the billing check. Also refresh the
+    // merchant's primary storefront domain for the ops dashboard.
     const response = await admin.graphql(`
     #graphql
     query {
+      shop {
+        primaryDomain {
+          host
+          url
+        }
+      }
       currentAppInstallation {
         id
         activeSubscriptions {
@@ -54,6 +62,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const data = await response.json();
     const appInstallation = data.data?.currentAppInstallation;
+    const primaryDomain =
+      normalizeShopPrimaryHost(data.data?.shop?.primaryDomain?.host) ||
+      normalizeShopPrimaryHost(data.data?.shop?.primaryDomain?.url);
 
     let billingVerificationFailed = false;
     if (session.shop) {
@@ -92,6 +103,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           billingStatus,
           scopes:
             appInstallation?.accessScopes?.map((scope: { handle?: string }) => scope.handle) || [],
+          ...(primaryDomain
+            ? {
+                primaryDomain,
+                primaryDomainUpdatedAt: new Date().toISOString(),
+              }
+            : {}),
         },
         { merge: true },
       );

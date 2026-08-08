@@ -9,6 +9,11 @@ import type { UsageMonthRow } from "./ops-usage.utils";
 
 export interface OpsShopRow {
   shopDomain: string;
+  /**
+   * Merchant primary storefront host (e.g. `pineappleapparels.com`), when known.
+   * Null until synced from Shopify Admin `shop.primaryDomain`.
+   */
+  primaryDomain: string | null;
   planCode: PlanCode;
   planStatus: "active" | "inactive" | "trial";
   planSource: string | null;

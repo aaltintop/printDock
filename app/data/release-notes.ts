@@ -11,6 +11,12 @@ export type ReleaseNoteEntry = {
 
 export const RELEASE_NOTES: ReleaseNoteEntry[] = [
   {
+    version: "1.0.15",
+    date: "August 2026",
+    summary:
+      "New stores open Shopify plan selection automatically, and the storefront upload dropzone icon is centered for a cleaner look.",
+  },
+  {
     version: "1.0.14",
     date: "May 2026",
     summary: "Simpler setup and smoother upload pricing at checkout.",

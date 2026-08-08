@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { data, useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import {
@@ -31,6 +32,9 @@ import {
   setLogShopDomain,
 } from "../lib/logger.server";
 
+/** Prevents bounce loops if the merchant returns from Shopify without selecting a plan. */
+const PRICING_AUTO_REDIRECT_KEY = "printdock_pricing_plans_auto_redirect";
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return runWithRequestContext(request, async () => {
     const { admin, session } = await authenticate.admin(request);
@@ -46,18 +50,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const billingLockedParam = url.searchParams.get("billingLocked") === "1";
     const billingLocked =
       billingLockedParam || shouldEnforceBillingGate(billingPlan);
+    const hasSubscription = hasActiveSubscription(billingPlan);
+    // Gate-locked first visits (and any locked visit with no plan) should jump
+    // straight to Shopify Managed Pricing. Client skips repeats via sessionStorage.
+    const autoRedirectToShopify = billingLocked && !hasSubscription;
     log.event("plans_page_view", {
       currentPlanCode: billingPlan.planCode,
       billingStatus: billingPlan.status,
       billingLocked,
       isDevStore,
+      autoRedirectToShopify,
       url: managedPricingUrl,
     });
+    if (autoRedirectToShopify) {
+      log.event("plans_redirect_to_shopify", { url: managedPricingUrl });
+    }
     return data({
       managedPricingUrl,
       isDevStore,
       billingLocked,
-      hasSubscription: hasActiveSubscription(billingPlan),
+      hasSubscription,
+      autoRedirectToShopify,
       currentPlan: {
         planCode: billingPlan.planCode,
         displayName: plan.displayName,
@@ -73,8 +86,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function PlansPage() {
-  const { managedPricingUrl, isDevStore, billingLocked, hasSubscription, currentPlan } =
-    useLoaderData<typeof loader>();
+  const {
+    managedPricingUrl,
+    isDevStore,
+    billingLocked,
+    hasSubscription,
+    autoRedirectToShopify,
+    currentPlan,
+  } = useLoaderData<typeof loader>();
+  const redirectedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasSubscription) {
+      try {
+        sessionStorage.removeItem(PRICING_AUTO_REDIRECT_KEY);
+      } catch {
+        // ignore storage failures
+      }
+    }
+  }, [hasSubscription]);
+
+  useEffect(() => {
+    if (!autoRedirectToShopify || redirectedRef.current) return;
+    try {
+      if (sessionStorage.getItem(PRICING_AUTO_REDIRECT_KEY) === managedPricingUrl) {
+        return;
+      }
+      sessionStorage.setItem(PRICING_AUTO_REDIRECT_KEY, managedPricingUrl);
+    } catch {
+      // Still attempt a one-shot redirect this mount if storage is unavailable.
+    }
+    redirectedRef.current = true;
+    const topWin = window.top ?? window;
+    topWin.location.href = managedPricingUrl;
+  }, [autoRedirectToShopify, managedPricingUrl]);
+
   const planStatusTone =
     !hasSubscription
       ? "critical"
@@ -95,12 +141,18 @@ export default function PlansPage() {
     <Page title="Plans">
       <BlockStack gap="400">
         {billingLocked ? (
-          <Banner tone="warning" title="Select a plan to use PrintDock">
+          <Banner
+            tone="warning"
+            title={
+              autoRedirectToShopify
+                ? "Taking you to Shopify plan selection"
+                : "Select a plan to use PrintDock"
+            }
+          >
             <p>
-              Every store needs an active PrintDock plan — including the Free plan. Open Shopify
-              plan selection, choose a plan, then return here. The rest of the app stays locked
-              until a plan is active. Your storefront upload widget keeps working under Free limits
-              for customers.
+              {autoRedirectToShopify
+                ? "Every store needs an active PrintDock plan — including the Free plan. If Shopify plan selection does not open automatically, use the button below. The rest of the app stays locked until a plan is active. Your storefront upload widget keeps working under Free limits for customers."
+                : "Every store needs an active PrintDock plan — including the Free plan. Open Shopify plan selection, choose a plan, then return here. The rest of the app stays locked until a plan is active. Your storefront upload widget keeps working under Free limits for customers."}
             </p>
           </Banner>
         ) : null}

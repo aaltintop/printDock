@@ -15,6 +15,7 @@ import { emptyUsageMonthRow } from "../app/services/ops-usage.utils";
 
 function row(partial: Partial<OpsShopRow> & { shopDomain: string }): OpsShopRow {
   return {
+    primaryDomain: null,
     planCode: "pro",
     planStatus: "active",
     planSource: "shopify",
@@ -81,8 +82,29 @@ describe("renderOpsIndexHtml", () => {
     expect(html).toContain("alpha.myshopify.com");
     expect(html).toContain("1.50 MB");
     expect(html).toContain("431");
+    expect(html).toContain('href="https://alpha.myshopify.com"');
     expect(html).toContain('href="/ops/alpha.myshopify.com');
     expect(html).toContain("noindex");
+  });
+
+  it("shows the primary website and myshopify domain together", () => {
+    const html = renderOpsIndexHtml(
+      {
+        ...report,
+        shops: [
+          row({
+            shopDomain: "8cm1xx-0j.myshopify.com",
+            primaryDomain: "pineappleapparels.com",
+          }),
+        ],
+      },
+      viewOptions,
+    );
+    expect(html).toContain("pineappleapparels.com");
+    expect(html).toContain("8cm1xx-0j.myshopify.com");
+    expect(html).toContain('href="https://pineappleapparels.com"');
+    expect(html).toContain('href="/ops/8cm1xx-0j.myshopify.com');
+    expect(html).toContain('target="_blank"');
   });
 
   it("escapes a shop domain that contains markup", () => {
@@ -143,6 +165,23 @@ describe("renderOpsShopHtml", () => {
     expect(html).toContain("Storefront short link");
     expect(html).toContain("2026-03-15");
     expect(html).toContain("webhook");
+  });
+
+  it("links the primary website on the shop detail page", () => {
+    const html = renderOpsShopHtml(
+      {
+        ...detail,
+        row: row({
+          shopDomain: "8cm1xx-0j.myshopify.com",
+          primaryDomain: "pineappleapparels.com",
+        }),
+      },
+      viewOptions,
+    );
+    expect(html).toContain("pineappleapparels.com");
+    expect(html).toContain("8cm1xx-0j.myshopify.com");
+    expect(html).toContain('href="https://pineappleapparels.com"');
+    expect(html).toContain("Website");
   });
 
   it("flags a shop with no Firestore document", () => {

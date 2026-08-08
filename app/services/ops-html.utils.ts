@@ -3,6 +3,7 @@ import type { OpsMonthlyTotalRow, OpsShopRow, OpsSortKey, OpsTotals } from "./op
 import { formatBytes, storagePercentOfCap } from "./ops-report.utils";
 import type { UsageMonthRow } from "./ops-usage.utils";
 import { DOWNLOAD_KINDS, downloadKindLabel } from "./ops-usage.utils";
+import { shopStorefrontUrl } from "./shop-domain.utils";
 
 /**
  * Server-rendered HTML for the operator dashboard. Plain strings rather than
@@ -129,7 +130,9 @@ h2 { font-size: 15px; margin: 32px 0 12px; text-transform: uppercase; letter-spa
 .card { background: #171a21; border: 1px solid #23272f; border-radius: 10px; padding: 14px 16px; min-width: 0; overflow: hidden; }
 .card-label { color: #8b95a3; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
 .card-value { font-size: 22px; font-weight: 600; margin-top: 6px; overflow-wrap: anywhere; }
+.card-value a { font-size: inherit; font-weight: inherit; }
 .card-hint { color: #6f7885; font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.ext::after { content: " ↗"; font-size: 0.85em; opacity: .7; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #23272f; vertical-align: top; }
 th { color: #8b95a3; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
@@ -277,6 +280,23 @@ function monthlyTotalsTable(rows: OpsMonthlyTotalRow[]): string {
   </table></div>`;
 }
 
+function shopCell(row: OpsShopRow, options: OpsViewOptions): string {
+  const detailHref = `/ops/${encodeURIComponent(row.shopDomain)}${queryString(options, {})}`;
+  const storefrontHref = shopStorefrontUrl(row.primaryDomain, row.shopDomain);
+  const websiteLabel = row.primaryDomain || row.shopDomain;
+  const websiteLine =
+    row.primaryDomain && row.primaryDomain !== row.shopDomain
+      ? `<div><a class="ext" href="${escapeHtml(storefrontHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+          websiteLabel,
+        )}</a></div>
+         <div class="muted"><a href="${escapeHtml(detailHref)}">${escapeHtml(row.shopDomain)}</a></div>`
+      : `<div><a class="ext" href="${escapeHtml(storefrontHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+          websiteLabel,
+        )}</a></div>
+         <div class="muted"><a href="${escapeHtml(detailHref)}">ops detail</a></div>`;
+  return websiteLine;
+}
+
 function clientsTable(rows: OpsShopRow[], options: OpsViewOptions): string {
   if (rows.length === 0) {
     return `<div class="wrap"><div class="empty">No shops in Firestore yet.</div></div>`;
@@ -284,9 +304,8 @@ function clientsTable(rows: OpsShopRow[], options: OpsViewOptions): string {
 
   const body = rows
     .map((row) => {
-      const detailHref = `/ops/${encodeURIComponent(row.shopDomain)}${queryString(options, {})}`;
       return `<tr>
-        <td><a href="${escapeHtml(detailHref)}">${escapeHtml(row.shopDomain)}</a></td>
+        <td>${shopCell(row, options)}</td>
         <td><span class="plan">${escapeHtml(row.planCode)}</span><br>${statusPill(
           row.planStatus,
           row.planSource,
@@ -441,14 +460,41 @@ export function renderOpsShopHtml(
         row.shopDomain,
       )}</span> document — this shop predates the hierarchy migration or was never installed.</p>`;
 
+  const storefrontHref = shopStorefrontUrl(row.primaryDomain, row.shopDomain);
+  const websiteLabel = row.primaryDomain || row.shopDomain;
+  const titleLabel =
+    row.primaryDomain && row.primaryDomain !== row.shopDomain
+      ? row.primaryDomain
+      : row.shopDomain;
+  const websiteCard = `<div class="card">
+    <div class="card-label">Website</div>
+    <div class="card-value"><a class="ext" href="${escapeHtml(
+      storefrontHref,
+    )}" target="_blank" rel="noopener noreferrer">${escapeHtml(websiteLabel)}</a></div>
+    <div class="card-hint">${escapeHtml(
+      row.primaryDomain && row.primaryDomain !== row.shopDomain
+        ? row.shopDomain
+        : "Shopify primary domain",
+    )}</div>
+  </div>`;
+
   const body = `
     <a class="back" href="${escapeHtml(`/ops${queryString(options, {})}`)}">← All clients</a>
-    <h1>${escapeHtml(row.shopDomain)}</h1>
-    <p class="sub">Generated ${escapeHtml(formatDateTime(detail.generatedAt))} · <a href="${escapeHtml(
-      jsonHref,
-    )}">JSON</a></p>
+    <h1><a class="ext" href="${escapeHtml(
+      storefrontHref,
+    )}" target="_blank" rel="noopener noreferrer">${escapeHtml(titleLabel)}</a></h1>
+    <p class="sub">
+      ${
+        row.primaryDomain && row.primaryDomain !== row.shopDomain
+          ? `<span class="mono">${escapeHtml(row.shopDomain)}</span> · `
+          : ""
+      }generated ${escapeHtml(formatDateTime(detail.generatedAt))} · <a href="${escapeHtml(
+        jsonHref,
+      )}">JSON</a>
+    </p>
     ${missing}
     <div class="cards">
+      ${websiteCard}
       ${card("Plan", row.planCode, `${row.planStatus}${row.planSource ? ` · ${row.planSource}` : ""}`)}
       ${card(
         "On plan since",

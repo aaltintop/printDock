@@ -100,9 +100,15 @@ figure reflects post-purge storage.
 |-------|---------|
 | `downloadsTotal` | Lifetime download count across every surface |
 | `lastDownloadAt` | ISO timestamp of the most recent download |
+| `primaryDomain` | Merchant primary storefront host (e.g. `pineappleapparels.com`), from Shopify Admin `shop.primaryDomain` |
+| `primaryDomainUpdatedAt` | ISO timestamp when `primaryDomain` was last synced |
 
 `installedAt`, `storageUsedBytes`, and `storageUsedBytesReconciledAt` already
 existed and are read as-is.
+
+The clients table and shop detail page show both the primary website (clickable
+storefront link) and the `*.myshopify.com` domain. Missing `primaryDomain`
+values are backfilled on `/ops` load via the shop's offline Admin token.
 
 ### `shops/{shopDomain}/usageMonthly/{YYYY-MM}`
 

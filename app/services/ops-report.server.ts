@@ -22,6 +22,8 @@ import {
 } from "./ops-usage.utils";
 import type { OpsMonthlyTotalRow, OpsShopRow, OpsTotals } from "./ops-report.utils";
 import { computeMonthlyTotals, computeOpsTotals, storageCapBytesForPlan } from "./ops-report.utils";
+import { ensureShopPrimaryDomain } from "./shop-domain.server";
+import { normalizeShopPrimaryHost } from "./shop-domain.utils";
 
 /**
  * Cross-shop reporting for the operator dashboard. Everything here reads a
@@ -106,6 +108,7 @@ type ShopFields = {
   storageReconciledAt: string | null;
   downloadsTotal: number;
   lastDownloadAt: string | null;
+  primaryDomain: string | null;
 };
 
 function readShopFields(raw: Record<string, unknown> | undefined): ShopFields {
@@ -115,6 +118,7 @@ function readShopFields(raw: Record<string, unknown> | undefined): ShopFields {
     storageReconciledAt: readIso(raw?.storageUsedBytesReconciledAt),
     downloadsTotal: readCount(raw?.downloadsTotal),
     lastDownloadAt: readIso(raw?.lastDownloadAt),
+    primaryDomain: normalizeShopPrimaryHost(raw?.primaryDomain),
   };
 }
 
@@ -123,9 +127,10 @@ async function buildShopRow(
   shopFields: ShopFields,
   options: { months: number; currentMonth: string; includeCounts: boolean; now: Date },
 ): Promise<{ row: OpsShopRow; monthly: UsageMonthRow[] }> {
-  const [plan, monthly] = await Promise.all([
+  const [plan, monthly, primaryDomain] = await Promise.all([
     getBillingPlan(shopDomain),
     listShopUsageMonths(shopDomain, options.months, { now: options.now }),
+    ensureShopPrimaryDomain(shopDomain, shopFields.primaryDomain),
   ]);
 
   const [uploadSessionCount, orderJobCount] = options.includeCounts
@@ -143,6 +148,7 @@ async function buildShopRow(
     monthly,
     row: {
       shopDomain,
+      primaryDomain,
       planCode,
       planStatus: plan.status,
       planSource: plan.source ?? null,
