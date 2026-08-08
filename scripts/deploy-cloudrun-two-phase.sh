@@ -480,26 +480,19 @@ deploy_base() {
       # Shopify app package crashes if SHOPIFY_APP_URL is completely empty on boot
       echo "SHOPIFY_APP_URL: \"https://temporary-placeholder.example.com\""
     fi
-    # Optional: --env-vars-file replaces non-secret env vars, so pass these
-    # through when set (e.g. sourced from .env / .cloudrun.env) or they vanish.
-    if [[ -n "${OPS_DASHBOARD_SECRET:-}" ]]; then
-      echo "OPS_DASHBOARD_SECRET: \"$OPS_DASHBOARD_SECRET\""
-    fi
-    if [[ -n "${STORAGE_RETENTION_CRON_SECRET:-}" ]]; then
-      echo "STORAGE_RETENTION_CRON_SECRET: \"$STORAGE_RETENTION_CRON_SECRET\""
-    fi
-    if [[ -n "${USAGE_SNAPSHOT_CRON_SECRET:-}" ]]; then
-      echo "USAGE_SNAPSHOT_CRON_SECRET: \"$USAGE_SNAPSHOT_CRON_SECRET\""
-    fi
-    if [[ -n "${BILLING_RECONCILE_CRON_SECRET:-}" ]]; then
-      echo "BILLING_RECONCILE_CRON_SECRET: \"$BILLING_RECONCILE_CRON_SECRET\""
-    fi
+    # Do NOT put OPS_DASHBOARD_SECRET / cron secrets in this file. On Cloud Run they
+    # are Secret Manager bindings (valueFrom.secretKeyRef). Passing them here as
+    # string literals fails with: "Cannot update environment variable [...] to
+    # string literal because it has already been set with a different type."
+    # --update-secrets below preserves those bindings across deploys.
   } >"$env_file"
 
   local cmd=(
     gcloud run deploy "$SERVICE_NAME"
     --region "$SERVICE_REGION"
-    --set-secrets "SHOPIFY_API_KEY=${SECRET_API_KEY_NAME}:latest,SHOPIFY_API_SECRET=${SECRET_API_SECRET_NAME}:latest"
+    # update-secrets (not set-secrets): keep existing secret env bindings such as
+    # OPS_DASHBOARD_SECRET → ops-dashboard-secret.
+    --update-secrets "SHOPIFY_API_KEY=${SECRET_API_KEY_NAME}:latest,SHOPIFY_API_SECRET=${SECRET_API_SECRET_NAME}:latest"
     --env-vars-file "$env_file"
     --port "$PORT"
     --min-instances "$MIN_INSTANCES"
